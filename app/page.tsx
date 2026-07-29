@@ -66,7 +66,20 @@ export default async function Home() {
 
       {programmeParJour.size > 0 && (
         <section className="section">
-          <h2>Programme</h2>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <h2>Programme</h2>
+            <a className="btn btn-sm" href="/api/ics/programme">
+              Ajouter à mon agenda (.ics)
+            </a>
+          </div>
           <div className="card-list section" style={{ marginTop: 12 }}>
             {[...programmeParJour.entries()].map(([key, items]) => (
               <div className="card" key={key}>
@@ -111,7 +124,9 @@ export default async function Home() {
                     >
                       {placesRestantes > 0
                         ? `${placesRestantes} place(s) restante(s)`
-                        : "Complet"}
+                        : jeu.waitlist.length > 0
+                          ? `Complet · ${jeu.waitlist.length} en liste d'attente`
+                          : "Complet"}
                     </span>
                   </div>
                   <p className="muted" style={{ marginTop: 4 }}>

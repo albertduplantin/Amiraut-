@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
 import "./globals.css";
 import { getCurrentUser } from "@/lib/auth";
-import { logoutAction } from "@/lib/actions/auth";
+import { SiteNav } from "@/components/site-nav";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,28 +30,7 @@ export default async function RootLayout({
     <html lang="fr" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body>
         <header className="site-header">
-          <nav className="site-nav">
-            <Link href="/" className="brand">
-              Les Semaines de l&apos;Hexagone
-            </Link>
-            <div className="nav-links">
-              <Link href="/">Accueil</Link>
-              {user && user.role === "ADMIN" && <Link href="/admin">Admin</Link>}
-              {user && user.role === "PARTICIPANT" && (
-                <Link href="/mon-espace">Mon espace</Link>
-              )}
-              {user ? (
-                <form action={logoutAction}>
-                  <button type="submit">Se déconnecter</button>
-                </form>
-              ) : (
-                <>
-                  <Link href="/connexion">Connexion</Link>
-                  <Link href="/creer-compte">Créer un compte</Link>
-                </>
-              )}
-            </div>
-          </nav>
+          <SiteNav role={user?.role ?? null} />
         </header>
         <main>{children}</main>
         <footer className="site-footer">

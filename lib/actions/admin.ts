@@ -70,7 +70,7 @@ export async function upsertSejourAction(
 
   revalidatePath("/");
   revalidatePath("/admin/sejour");
-  return { error: undefined };
+  return { error: undefined, success: true };
 }
 
 // --- Editos ---

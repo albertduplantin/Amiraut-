@@ -119,7 +119,12 @@ export function InscriptionForm({
         </div>
       </div>
 
-      {state?.error && <p className="error-text">{state.error}</p>}
+      <div role="status" aria-live="polite">
+        {state?.error && <p className="error-text">{state.error}</p>}
+        {!state?.error && state?.success && (
+          <p className="success-text">Enregistré !</p>
+        )}
+      </div>
       <button className="btn btn-primary" type="submit" disabled={pending}>
         {pending ? "Enregistrement..." : "Enregistrer mon hébergement / repas"}
       </button>

@@ -25,7 +25,9 @@ export default function ConnexionPage() {
               autoComplete="current-password"
             />
           </label>
-          {state?.error && <p className="error-text">{state.error}</p>}
+          <div role="status" aria-live="polite">
+            {state?.error && <p className="error-text">{state.error}</p>}
+          </div>
           <button className="btn btn-primary" type="submit" disabled={pending}>
             {pending ? "Connexion..." : "Se connecter"}
           </button>

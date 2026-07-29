@@ -65,7 +65,7 @@ export async function saveReservationsAction(
   ]);
 
   revalidatePath("/mon-espace");
-  return { error: undefined };
+  return { error: undefined, success: true };
 }
 
 export async function inscrireJeuAction(formData: FormData) {
@@ -79,26 +79,55 @@ export async function inscrireJeuAction(formData: FormData) {
       include: { _count: { select: { inscriptions: true } } },
     });
     if (!jeu) return;
-    if (jeu._count.inscriptions >= jeu.placesMax) return;
 
-    await tx.inscriptionJeu.upsert({
+    const dejaInscrit = await tx.inscriptionJeu.findUnique({
       where: { jeuId_userId: { jeuId, userId: session.userId } },
-      create: { jeuId, userId: session.userId },
-      update: {},
     });
+    if (dejaInscrit) return;
+
+    if (jeu._count.inscriptions < jeu.placesMax) {
+      await tx.inscriptionJeu.create({ data: { jeuId, userId: session.userId } });
+      await tx.jeuWaitlist.deleteMany({ where: { jeuId, userId: session.userId } });
+    } else {
+      await tx.jeuWaitlist.upsert({
+        where: { jeuId_userId: { jeuId, userId: session.userId } },
+        create: { jeuId, userId: session.userId },
+        update: {},
+      });
+    }
   });
 
   revalidatePath("/mon-espace");
   revalidatePath("/");
 }
 
-export async function desinscrireJeuAction(formData: FormData) {
+export async function quitterJeuAction(formData: FormData) {
   const session = await requireParticipant();
   const jeuId = formData.get("jeuId");
   if (typeof jeuId !== "string" || !jeuId) return;
 
-  await prisma.inscriptionJeu.deleteMany({
-    where: { jeuId, userId: session.userId },
+  await prisma.$transaction(async (tx) => {
+    const confirmee = await tx.inscriptionJeu.findUnique({
+      where: { jeuId_userId: { jeuId, userId: session.userId } },
+    });
+
+    if (confirmee) {
+      await tx.inscriptionJeu.delete({ where: { id: confirmee.id } });
+
+      // Promotion automatique du premier de la liste d'attente
+      const suivant = await tx.jeuWaitlist.findFirst({
+        where: { jeuId },
+        orderBy: { createdAt: "asc" },
+      });
+      if (suivant) {
+        await tx.jeuWaitlist.delete({ where: { id: suivant.id } });
+        await tx.inscriptionJeu.create({
+          data: { jeuId, userId: suivant.userId },
+        });
+      }
+    } else {
+      await tx.jeuWaitlist.deleteMany({ where: { jeuId, userId: session.userId } });
+    }
   });
 
   revalidatePath("/mon-espace");

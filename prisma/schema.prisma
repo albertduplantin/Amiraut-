@@ -29,6 +29,7 @@ model User {
   reservationsNuit  ReservationNuit[]
   reservationsRepas ReservationRepas[]
   inscriptionsJeu   InscriptionJeu[]
+  jeuxWaitlist      JeuWaitlist[]
 }
 
 model Sejour {
@@ -80,9 +81,21 @@ model Jeu {
   placesMax    Int      @default(4)
 
   inscriptions InscriptionJeu[]
+  waitlist     JeuWaitlist[]
 }
 
 model InscriptionJeu {
+  id        String   @id @default(cuid())
+  jeuId     String
+  jeu       Jeu      @relation(fields: [jeuId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([jeuId, userId])
+}
+
+model JeuWaitlist {
   id        String   @id @default(cuid())
   jeuId     String
   jeu       Jeu      @relation(fields: [jeuId], references: [id], onDelete: Cascade)

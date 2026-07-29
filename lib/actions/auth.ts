@@ -12,7 +12,7 @@ const registerSchema = z.object({
   password: z.string().min(8, "8 caractères minimum"),
 });
 
-export type ActionResult = { error?: string } | undefined;
+export type ActionResult = { error?: string; success?: boolean } | undefined;
 
 export async function registerAction(
   _prev: ActionResult,

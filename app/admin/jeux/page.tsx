@@ -58,6 +58,7 @@ export default async function AdminJeuxPage() {
           </div>
           <p className="muted">
             {jeu.inscriptions.length} / {jeu.placesMax} inscrit(s)
+            {jeu.waitlist.length > 0 && ` · ${jeu.waitlist.length} en liste d'attente`}
           </p>
           <div className="btn-row">
             <button className="btn btn-primary" type="submit">
