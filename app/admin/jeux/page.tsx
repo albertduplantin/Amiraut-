@@ -27,6 +27,11 @@ export default async function AdminJeuxPage() {
             Nom du jeu
             <input type="text" name="nom" required defaultValue={jeu.nom} />
           </label>
+          {jeu.proposePar && (
+            <p className="muted">
+              Apporté par {jeu.proposePar.prenom} {jeu.proposePar.nom}
+            </p>
+          )}
           <label>
             Description
             <textarea name="description" defaultValue={jeu.description ?? ""} />

@@ -4,7 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { getActiveSejour } from "@/lib/sejour";
 import { daysBetween, dateKey, formatDateLong, formatDateShort } from "@/lib/format";
 import { InscriptionForm } from "./inscription-form";
-import { inscrireJeuAction, quitterJeuAction } from "@/lib/actions/inscription";
+import { ProfilForm } from "./profil-form";
+import { inscrireJeuAction, quitterJeuAction, proposerJeuAction } from "@/lib/actions/inscription";
+import {
+  creerAnnonceCovoiturageAction,
+  supprimerAnnonceCovoiturageAction,
+} from "@/lib/actions/covoiturage";
 
 const jeuHeureFormatter = new Intl.DateTimeFormat("fr-FR", {
   weekday: "long",
@@ -38,12 +43,18 @@ export default async function MonEspacePage() {
     );
   }
 
-  const [reservationsNuit, reservationsRepas] = await Promise.all([
+  const [reservationsNuit, reservationsRepas, moi, annoncesCovoiturage] = await Promise.all([
     prisma.reservationNuit.findMany({
       where: { sejourId: sejour.id, userId: session.userId },
     }),
     prisma.reservationRepas.findMany({
       where: { sejourId: sejour.id, userId: session.userId },
+    }),
+    prisma.user.findUniqueOrThrow({ where: { id: session.userId } }),
+    prisma.covoiturageAnnonce.findMany({
+      where: { sejourId: sejour.id },
+      include: { user: { select: { prenom: true, nom: true } } },
+      orderBy: { createdAt: "desc" },
     }),
   ]);
 
@@ -152,6 +163,21 @@ export default async function MonEspacePage() {
       )}
 
       <section className="section">
+        <h2>Mes informations</h2>
+        <p className="muted">
+          Utile pour l&apos;organisation des repas et en cas d&apos;urgence.
+        </p>
+        <div className="section">
+          <ProfilForm
+            regimeAlimentaire={moi.regimeAlimentaire ?? ""}
+            contactUrgenceNom={moi.contactUrgenceNom ?? ""}
+            contactUrgenceTelephone={moi.contactUrgenceTelephone ?? ""}
+            colocataireSouhaite={moi.colocataireSouhaite ?? ""}
+          />
+        </div>
+      </section>
+
+      <section className="section">
         <h2>Hébergement et repas</h2>
         <p className="muted">
           Coche les nuits et les repas auxquels tu participes — pas besoin d&apos;être là
@@ -170,9 +196,9 @@ export default async function MonEspacePage() {
         </div>
       </section>
 
-      {sejour.jeux.length > 0 && (
-        <section className="section">
-          <h2>Jeux proposés</h2>
+      <section className="section">
+        <h2>Jeux proposés</h2>
+        {sejour.jeux.length > 0 && (
           <div className="card-list section">
             {sejour.jeux.map((jeu) => {
               const inscrit = jeu.inscriptions.some((i) => i.userId === session.userId);
@@ -218,7 +244,14 @@ export default async function MonEspacePage() {
                     }}
                   >
                     <div>
-                      <h3>{jeu.nom}</h3>
+                      <h3>
+                        {jeu.nom}
+                        {jeu.proposePar && (
+                          <span className="badge badge-muted" style={{ marginLeft: 8 }}>
+                            apporté par {jeu.proposePar.prenom}
+                          </span>
+                        )}
+                      </h3>
                       <p className="muted">
                         {jeuHeureFormatter.format(jeu.debut)} · {jeu.dureeMinutes} min ·{" "}
                         {badgeText}
@@ -236,8 +269,107 @@ export default async function MonEspacePage() {
               );
             })}
           </div>
-        </section>
-      )}
+        )}
+
+        <details className="section">
+          <summary className="btn btn-sm" style={{ display: "inline-flex" }}>
+            Proposer un jeu que j&apos;apporte
+          </summary>
+          <form action={proposerJeuAction} className="card" style={{ marginTop: 12 }}>
+            <input type="hidden" name="sejourId" value={sejour.id} />
+            <label>
+              Nom du jeu
+              <input type="text" name="nom" required />
+            </label>
+            <label>
+              Description
+              <textarea name="description" />
+            </label>
+            <div className="form-row">
+              <label>
+                Début
+                <input type="datetime-local" name="debut" required />
+              </label>
+              <label>
+                Durée (minutes)
+                <input type="number" name="dureeMinutes" min="15" step="15" defaultValue={60} />
+              </label>
+              <label>
+                Places max
+                <input type="number" name="placesMax" min="1" defaultValue={4} />
+              </label>
+            </div>
+            <button className="btn btn-primary" type="submit">
+              Proposer ce jeu
+            </button>
+          </form>
+        </details>
+      </section>
+
+      <section className="section">
+        <h2>Covoiturage</h2>
+        <p className="muted">Propose un trajet ou indique que tu en cherches un.</p>
+
+        {annoncesCovoiturage.length > 0 && (
+          <div className="card-list section">
+            {annoncesCovoiturage.map((annonce) => (
+              <div className="card" key={annonce.id}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
+                  <div>
+                    <span className={`badge ${annonce.type === "RECHERCHE" ? "badge-muted" : ""}`}>
+                      {annonce.type === "PROPOSE" ? "Propose un trajet" : "Cherche un trajet"}
+                    </span>
+                    <p style={{ marginTop: 6 }}>
+                      <strong>{annonce.lieu}</strong> — {annonce.user.prenom} {annonce.user.nom}
+                    </p>
+                    {annonce.message && <p className="muted">{annonce.message}</p>}
+                  </div>
+                  {annonce.userId === session.userId && (
+                    <form action={supprimerAnnonceCovoiturageAction}>
+                      <input type="hidden" name="id" value={annonce.id} />
+                      <button className="btn btn-danger btn-sm" type="submit">
+                        Supprimer
+                      </button>
+                    </form>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <form action={creerAnnonceCovoiturageAction} className="card section">
+          <input type="hidden" name="sejourId" value={sejour.id} />
+          <div className="form-row">
+            <label>
+              Type
+              <select name="type" defaultValue="PROPOSE">
+                <option value="PROPOSE">Je propose un trajet</option>
+                <option value="RECHERCHE">Je cherche un trajet</option>
+              </select>
+            </label>
+            <label>
+              Lieu de départ
+              <input type="text" name="lieu" required placeholder="Ville de départ" />
+            </label>
+          </div>
+          <label>
+            Message (horaires, places disponibles...)
+            <textarea name="message" />
+          </label>
+          <button className="btn btn-primary" type="submit">
+            Publier l&apos;annonce
+          </button>
+        </form>
+      </section>
     </div>
   );
 }

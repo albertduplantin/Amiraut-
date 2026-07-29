@@ -118,7 +118,14 @@ export default async function Home() {
                       flexWrap: "wrap",
                     }}
                   >
-                    <h3>{jeu.nom}</h3>
+                    <h3>
+                      {jeu.nom}
+                      {jeu.proposePar && (
+                        <span className="badge badge-muted" style={{ marginLeft: 8 }}>
+                          apporté par {jeu.proposePar.prenom}
+                        </span>
+                      )}
+                    </h3>
                     <span
                       className={`badge ${placesRestantes <= 0 ? "badge-muted" : ""}`}
                     >

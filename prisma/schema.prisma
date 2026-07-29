@@ -17,19 +17,30 @@ enum TypeRepas {
   DINER
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  password  String
-  prenom    String
-  nom       String
-  role      Role     @default(PARTICIPANT)
-  createdAt DateTime @default(now())
+enum TypeCovoiturage {
+  PROPOSE
+  RECHERCHE
+}
 
-  reservationsNuit  ReservationNuit[]
-  reservationsRepas ReservationRepas[]
-  inscriptionsJeu   InscriptionJeu[]
-  jeuxWaitlist      JeuWaitlist[]
+model User {
+  id                      String   @id @default(cuid())
+  email                   String   @unique
+  password                String
+  prenom                  String
+  nom                     String
+  role                    Role     @default(PARTICIPANT)
+  regimeAlimentaire       String?
+  contactUrgenceNom       String?
+  contactUrgenceTelephone String?
+  colocataireSouhaite     String?
+  createdAt               DateTime @default(now())
+
+  reservationsNuit    ReservationNuit[]
+  reservationsRepas   ReservationRepas[]
+  inscriptionsJeu     InscriptionJeu[]
+  jeuxWaitlist        JeuWaitlist[]
+  jeuxProposes        Jeu[]                @relation("JeuProposePar")
+  annoncesCovoiturage CovoiturageAnnonce[]
 }
 
 model Sejour {
@@ -43,11 +54,12 @@ model Sejour {
   infosPratiques String?  @db.Text
   updatedAt      DateTime @updatedAt
 
-  editos            Edito[]
-  programme         ProgrammeItem[]
-  jeux              Jeu[]
-  reservationsNuit  ReservationNuit[]
-  reservationsRepas ReservationRepas[]
+  editos              Edito[]
+  programme           ProgrammeItem[]
+  jeux                Jeu[]
+  reservationsNuit    ReservationNuit[]
+  reservationsRepas   ReservationRepas[]
+  annoncesCovoiturage CovoiturageAnnonce[]
 }
 
 model Edito {
@@ -71,14 +83,16 @@ model ProgrammeItem {
 }
 
 model Jeu {
-  id           String   @id @default(cuid())
-  sejourId     String
-  sejour       Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
-  nom          String
-  description  String?  @db.Text
-  debut        DateTime
-  dureeMinutes Int      @default(60)
-  placesMax    Int      @default(4)
+  id            String   @id @default(cuid())
+  sejourId      String
+  sejour        Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  nom           String
+  description   String?  @db.Text
+  debut         DateTime
+  dureeMinutes  Int      @default(60)
+  placesMax     Int      @default(4)
+  proposeParId  String?
+  proposePar    User?    @relation("JeuProposePar", fields: [proposeParId], references: [id], onDelete: SetNull)
 
   inscriptions InscriptionJeu[]
   waitlist     JeuWaitlist[]
@@ -115,6 +129,18 @@ model ReservationNuit {
   date     DateTime
 
   @@unique([sejourId, userId, date])
+}
+
+model CovoiturageAnnonce {
+  id         String           @id @default(cuid())
+  sejourId   String
+  sejour     Sejour           @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       TypeCovoiturage
+  lieu       String
+  message    String?          @db.Text
+  createdAt  DateTime         @default(now())
 }
 
 model ReservationRepas {

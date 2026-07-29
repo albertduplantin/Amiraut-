@@ -39,6 +39,12 @@ export default async function AdminInscriptionsPage() {
       repas,
       jeux: user.inscriptionsJeu.map((i) => i.jeu.nom),
       totalCts,
+      regimeAlimentaire: user.regimeAlimentaire,
+      contactUrgence:
+        user.contactUrgenceNom || user.contactUrgenceTelephone
+          ? `${user.contactUrgenceNom ?? ""} ${user.contactUrgenceTelephone ?? ""}`.trim()
+          : null,
+      colocataireSouhaite: user.colocataireSouhaite,
     };
   });
 
@@ -77,6 +83,9 @@ export default async function AdminInscriptionsPage() {
               <th>Nuitées</th>
               <th>Repas</th>
               <th>Jeux</th>
+              <th>Régime / allergies</th>
+              <th>Contact urgence</th>
+              <th>Colocataire souhaité</th>
               <th>Total</th>
             </tr>
           </thead>
@@ -88,6 +97,9 @@ export default async function AdminInscriptionsPage() {
                 <td>{row.nuits}</td>
                 <td>{row.repas}</td>
                 <td>{row.jeux.length ? row.jeux.join(", ") : "—"}</td>
+                <td>{row.regimeAlimentaire || "—"}</td>
+                <td>{row.contactUrgence || "—"}</td>
+                <td>{row.colocataireSouhaite || "—"}</td>
                 <td>{centsToEuros(row.totalCts)}</td>
               </tr>
             ))}

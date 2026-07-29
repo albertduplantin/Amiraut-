@@ -8,7 +8,11 @@ export async function getActiveSejour() {
       programme: { orderBy: [{ date: "asc" }, { ordre: "asc" }] },
       jeux: {
         orderBy: { debut: "asc" },
-        include: { inscriptions: true, waitlist: { orderBy: { createdAt: "asc" } } },
+        include: {
+          inscriptions: true,
+          waitlist: { orderBy: { createdAt: "asc" } },
+          proposePar: { select: { prenom: true, nom: true } },
+        },
       },
     },
   });

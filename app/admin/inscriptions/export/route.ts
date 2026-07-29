@@ -35,7 +35,18 @@ export async function GET() {
     orderBy: [{ nom: "asc" }, { prenom: "asc" }],
   });
 
-  const header = ["Prénom", "Nom", "Email", "Nuitées", "Repas", "Jeux", "Total"];
+  const header = [
+    "Prénom",
+    "Nom",
+    "Email",
+    "Nuitées",
+    "Repas",
+    "Jeux",
+    "Régime / allergies",
+    "Contact urgence",
+    "Colocataire souhaité",
+    "Total",
+  ];
   const lines = [header.join(";")];
 
   for (const user of users) {
@@ -43,6 +54,9 @@ export async function GET() {
     const repas = user.reservationsRepas.length;
     const totalCts = nuits * sejour.prixNuitCts + repas * sejour.prixRepasCts;
     const jeux = user.inscriptionsJeu.map((i) => i.jeu.nom).join(", ");
+    const contactUrgence = `${user.contactUrgenceNom ?? ""} ${
+      user.contactUrgenceTelephone ?? ""
+    }`.trim();
 
     lines.push(
       [
@@ -52,6 +66,9 @@ export async function GET() {
         String(nuits),
         String(repas),
         csvEscape(jeux),
+        csvEscape(user.regimeAlimentaire ?? ""),
+        csvEscape(contactUrgence),
+        csvEscape(user.colocataireSouhaite ?? ""),
         csvEscape(centsToEuros(totalCts)),
       ].join(";")
     );

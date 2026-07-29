@@ -101,6 +101,38 @@ export async function inscrireJeuAction(formData: FormData) {
   revalidatePath("/");
 }
 
+export async function proposerJeuAction(formData: FormData) {
+  const session = await requireParticipant();
+  const sejourId = String(formData.get("sejourId") ?? "");
+  const nom = String(formData.get("nom") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim();
+  const debut = String(formData.get("debut") ?? "");
+  const dureeMinutes = Number(formData.get("dureeMinutes") ?? 60);
+  const placesMax = Number(formData.get("placesMax") ?? 4);
+
+  if (!sejourId || !nom || !debut) return;
+
+  const jeu = await prisma.jeu.create({
+    data: {
+      sejourId,
+      nom,
+      description: description || null,
+      debut: new Date(debut),
+      dureeMinutes: Number.isFinite(dureeMinutes) ? dureeMinutes : 60,
+      placesMax: Number.isFinite(placesMax) && placesMax > 0 ? placesMax : 4,
+      proposeParId: session.userId,
+    },
+  });
+
+  // Le proposant réserve automatiquement sa place
+  await prisma.inscriptionJeu.create({
+    data: { jeuId: jeu.id, userId: session.userId },
+  });
+
+  revalidatePath("/mon-espace");
+  revalidatePath("/");
+}
+
 export async function quitterJeuAction(formData: FormData) {
   const session = await requireParticipant();
   const jeuId = formData.get("jeuId");
