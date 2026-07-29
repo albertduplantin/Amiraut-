@@ -1,0 +1,41 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  min-height: 100vh;
+  font-family: var(--font-geist-sans);
+  background-color: #f4f4f4;
+}
+
+.button {
+  font-size: 1.5rem;
+  padding: 16px 32px;
+  border: none;
+  border-radius: 12px;
+  background: #6b4f2a;
+  color: white;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: #543d20;
+}
+
+.resultat {
+  font-size: 3rem;
+  font-weight: bold;
+  min-height: 4rem;
+  color: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  .page {
+    background-color: #0a0a0a;
+  }
+
+  .resultat {
+    color: #ededed;
+  }
+}
