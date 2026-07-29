@@ -2,11 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { logoutAction } from "@/lib/actions/auth";
 
 export function SiteNav({ role }: { role: "ADMIN" | "PARTICIPANT" | null }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
   const close = () => setOpen(false);
+  const current = (href: string) => (pathname === href ? "page" : undefined);
 
   return (
     <nav className="site-nav">
@@ -27,16 +30,16 @@ export function SiteNav({ role }: { role: "ADMIN" | "PARTICIPANT" | null }) {
         </button>
       </div>
       <div className={`nav-links${open ? " nav-links-open" : ""}`}>
-        <Link href="/" onClick={close}>
+        <Link href="/" onClick={close} aria-current={current("/")}>
           Accueil
         </Link>
         {role === "ADMIN" && (
-          <Link href="/admin" onClick={close}>
+          <Link href="/admin" onClick={close} aria-current={current("/admin")}>
             Admin
           </Link>
         )}
         {role === "PARTICIPANT" && (
-          <Link href="/mon-espace" onClick={close}>
+          <Link href="/mon-espace" onClick={close} aria-current={current("/mon-espace")}>
             Mon espace
           </Link>
         )}

@@ -214,3 +214,31 @@ export async function resetPasswordAction(
 
   return { tempPassword };
 }
+
+// --- Galerie photo ---
+
+export async function ajouterPhotoAction(formData: FormData) {
+  await requireAdmin();
+  const sejourId = String(formData.get("sejourId") ?? "");
+  const url = String(formData.get("url") ?? "").trim();
+  const legende = String(formData.get("legende") ?? "").trim();
+
+  if (!sejourId || !url) return;
+
+  const count = await prisma.photo.count({ where: { sejourId } });
+  await prisma.photo.create({
+    data: { sejourId, url, legende: legende || null, ordre: count },
+  });
+
+  revalidatePath("/");
+  revalidatePath("/admin/galerie");
+}
+
+export async function supprimerPhotoAction(formData: FormData) {
+  await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+  await prisma.photo.delete({ where: { id } });
+  revalidatePath("/");
+  revalidatePath("/admin/galerie");
+}

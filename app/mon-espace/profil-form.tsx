@@ -8,11 +8,13 @@ export function ProfilForm({
   contactUrgenceNom,
   contactUrgenceTelephone,
   colocataireSouhaite,
+  afficherDansListeParticipants,
 }: {
   regimeAlimentaire: string;
   contactUrgenceNom: string;
   contactUrgenceTelephone: string;
   colocataireSouhaite: string;
+  afficherDansListeParticipants: boolean;
 }) {
   const [state, formAction, pending] = useActionState(updateProfilAction, undefined);
 
@@ -48,6 +50,14 @@ export function ProfilForm({
           placeholder="Nom de la personne avec qui tu veux partager une chambre"
           defaultValue={colocataireSouhaite}
         />
+      </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          name="afficherDansListeParticipants"
+          defaultChecked={afficherDansListeParticipants}
+        />
+        Afficher mon prénom dans la liste « Qui vient ? » (visible des autres inscrits)
       </label>
       <div role="status" aria-live="polite">
         {state?.success && <p className="success-text">Enregistré !</p>}

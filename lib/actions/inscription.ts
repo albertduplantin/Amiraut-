@@ -39,6 +39,10 @@ export async function saveReservationsAction(
     }
   }
 
+  const avaitDejaDesReservations =
+    (await prisma.reservationNuit.count({ where: { sejourId, userId: session.userId } })) > 0 ||
+    (await prisma.reservationRepas.count({ where: { sejourId, userId: session.userId } })) > 0;
+
   await prisma.$transaction([
     prisma.reservationNuit.deleteMany({
       where: { sejourId, userId: session.userId },
@@ -73,6 +77,18 @@ export async function saveReservationsAction(
     prisma.user.findUnique({ where: { id: session.userId } }),
     prisma.sejour.findUnique({ where: { id: sejourId } }),
   ]);
+
+  if (user && avaitDejaDesReservations && nuitDates.length === 0 && repas.length === 0) {
+    await prisma.evenement.create({
+      data: {
+        sejourId,
+        userId: user.id,
+        type: "DESINSCRIPTION_SEJOUR",
+        message: `${user.prenom} ${user.nom} a annulé son hébergement et ses repas.`,
+      },
+    });
+  }
+
   if (user && sejour) {
     const totalCts = nuitDates.length * sejour.prixNuitCts + repas.length * sejour.prixRepasCts;
     await sendEmail({
@@ -162,12 +178,15 @@ export async function quitterJeuAction(formData: FormData) {
   const jeuId = formData.get("jeuId");
   if (typeof jeuId !== "string" || !jeuId) return;
 
+  let quittaitInscriptionConfirmee = false;
+
   const promu = await prisma.$transaction(async (tx) => {
     const confirmee = await tx.inscriptionJeu.findUnique({
       where: { jeuId_userId: { jeuId, userId: session.userId } },
     });
 
     if (confirmee) {
+      quittaitInscriptionConfirmee = true;
       await tx.inscriptionJeu.delete({ where: { id: confirmee.id } });
 
       // Promotion automatique du premier de la liste d'attente
@@ -187,6 +206,23 @@ export async function quitterJeuAction(formData: FormData) {
     }
     return null;
   });
+
+  if (quittaitInscriptionConfirmee) {
+    const [user, jeu] = await Promise.all([
+      prisma.user.findUnique({ where: { id: session.userId } }),
+      prisma.jeu.findUnique({ where: { id: jeuId } }),
+    ]);
+    if (user && jeu) {
+      await prisma.evenement.create({
+        data: {
+          sejourId: jeu.sejourId,
+          userId: user.id,
+          type: "DESINSCRIPTION_JEU",
+          message: `${user.prenom} ${user.nom} s'est désinscrit·e de « ${jeu.nom} ».`,
+        },
+      });
+    }
+  }
 
   if (promu) {
     const jeu = await prisma.jeu.findUnique({ where: { id: jeuId } });

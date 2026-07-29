@@ -11,6 +11,7 @@ import {
   creerAnnonceCovoiturageAction,
   supprimerAnnonceCovoiturageAction,
 } from "@/lib/actions/covoiturage";
+import { laisserAvisAction } from "@/lib/actions/avis";
 
 const jeuHeureFormatter = new Intl.DateTimeFormat("fr-FR", {
   weekday: "long",
@@ -45,20 +46,34 @@ export default async function MonEspacePage() {
     );
   }
 
-  const [reservationsNuit, reservationsRepas, moi, annoncesCovoiturage] = await Promise.all([
-    prisma.reservationNuit.findMany({
-      where: { sejourId: sejour.id, userId: session.userId },
-    }),
-    prisma.reservationRepas.findMany({
-      where: { sejourId: sejour.id, userId: session.userId },
-    }),
-    prisma.user.findUniqueOrThrow({ where: { id: session.userId } }),
-    prisma.covoiturageAnnonce.findMany({
-      where: { sejourId: sejour.id },
-      include: { user: { select: { prenom: true, nom: true } } },
-      orderBy: { createdAt: "desc" },
-    }),
-  ]);
+  const [reservationsNuit, reservationsRepas, moi, annoncesCovoiturage, participantsVisibles] =
+    await Promise.all([
+      prisma.reservationNuit.findMany({
+        where: { sejourId: sejour.id, userId: session.userId },
+      }),
+      prisma.reservationRepas.findMany({
+        where: { sejourId: sejour.id, userId: session.userId },
+      }),
+      prisma.user.findUniqueOrThrow({ where: { id: session.userId } }),
+      prisma.covoiturageAnnonce.findMany({
+        where: { sejourId: sejour.id },
+        include: { user: { select: { prenom: true, nom: true } } },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.user.findMany({
+        where: {
+          role: "PARTICIPANT",
+          afficherDansListeParticipants: true,
+          OR: [
+            { reservationsNuit: { some: { sejourId: sejour.id } } },
+            { reservationsRepas: { some: { sejourId: sejour.id } } },
+            { inscriptionsJeu: { some: { jeu: { sejourId: sejour.id } } } },
+          ],
+        },
+        select: { id: true, prenom: true },
+        orderBy: { prenom: "asc" },
+      }),
+    ]);
 
   const days = daysBetween(sejour.dateDebut, sejour.dateFin);
   const dayRows = days.map((day, idx) => {
@@ -197,6 +212,7 @@ export default async function MonEspacePage() {
             contactUrgenceNom={moi.contactUrgenceNom ?? ""}
             contactUrgenceTelephone={moi.contactUrgenceTelephone ?? ""}
             colocataireSouhaite={moi.colocataireSouhaite ?? ""}
+            afficherDansListeParticipants={moi.afficherDansListeParticipants}
           />
         </div>
       </section>
@@ -394,6 +410,61 @@ export default async function MonEspacePage() {
           </button>
         </form>
       </section>
+
+      {jeuxInscrits.some((j) => j.debut < new Date()) && (
+        <section className="section">
+          <h2>Avis sur les jeux joués</h2>
+          <div className="card-list section">
+            {jeuxInscrits
+              .filter((jeu) => jeu.debut < new Date())
+              .map((jeu) => {
+                const monAvis = jeu.avis.find((a) => a.userId === session.userId);
+                return (
+                  <div className="card" key={jeu.id}>
+                    <h3>{jeu.nom}</h3>
+                    {monAvis ? (
+                      <p className="muted">
+                        Ton avis : {"⭐".repeat(monAvis.note)} {monAvis.commentaire}
+                      </p>
+                    ) : (
+                      <form action={laisserAvisAction}>
+                        <input type="hidden" name="jeuId" value={jeu.id} />
+                        <div className="form-row">
+                          <label>
+                            Note
+                            <select name="note" defaultValue="5">
+                              <option value="1">1 — bof</option>
+                              <option value="2">2</option>
+                              <option value="3">3</option>
+                              <option value="4">4</option>
+                              <option value="5">5 — excellent</option>
+                            </select>
+                          </label>
+                        </div>
+                        <label>
+                          Commentaire (optionnel)
+                          <textarea name="commentaire" />
+                        </label>
+                        <button className="btn btn-sm" type="submit">
+                          Envoyer mon avis
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </section>
+      )}
+
+      {participantsVisibles.length > 0 && (
+        <section className="section">
+          <h2>Qui vient ?</h2>
+          <p className="muted">
+            {participantsVisibles.map((p) => p.prenom).join(", ")}
+          </p>
+        </section>
+      )}
 
       <section className="section">
         <h2>Mon compte</h2>

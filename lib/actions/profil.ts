@@ -21,6 +21,7 @@ export async function updateProfilAction(
       contactUrgenceTelephone:
         String(formData.get("contactUrgenceTelephone") ?? "").trim() || null,
       colocataireSouhaite: String(formData.get("colocataireSouhaite") ?? "").trim() || null,
+      afficherDansListeParticipants: formData.get("afficherDansListeParticipants") === "on",
     },
   });
 

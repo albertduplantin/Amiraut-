@@ -147,9 +147,38 @@ export default async function Home() {
                     · {jeu.dureeMinutes} min
                   </p>
                   {jeu.description && <p style={{ marginTop: 8 }}>{jeu.description}</p>}
+                  {jeu.avis.length > 0 && (
+                    <p className="muted" style={{ marginTop: 8 }}>
+                      ⭐{" "}
+                      {(
+                        jeu.avis.reduce((sum, a) => sum + a.note, 0) / jeu.avis.length
+                      ).toFixed(1)}
+                      /5 ({jeu.avis.length} avis)
+                    </p>
+                  )}
                 </div>
               );
             })}
+          </div>
+        </section>
+      )}
+
+      {sejour.photos.length > 0 && (
+        <section className="section">
+          <h2>Galerie</h2>
+          <div
+            className="section"
+            style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}
+          >
+            {sejour.photos.map((photo) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={photo.id}
+                src={photo.url}
+                alt={photo.legende ?? ""}
+                style={{ width: "100%", height: 140, objectFit: "cover", borderRadius: 8 }}
+              />
+            ))}
           </div>
         </section>
       )}

@@ -65,6 +65,22 @@ export default async function AdminJeuxPage() {
             {jeu.inscriptions.length} / {jeu.placesMax} inscrit(s)
             {jeu.waitlist.length > 0 && ` · ${jeu.waitlist.length} en liste d'attente`}
           </p>
+          {jeu.avis.length > 0 && (
+            <div className="muted">
+              <p>
+                Note moyenne :{" "}
+                {(jeu.avis.reduce((s, a) => s + a.note, 0) / jeu.avis.length).toFixed(1)}/5 (
+                {jeu.avis.length} avis)
+              </p>
+              {jeu.avis
+                .filter((a) => a.commentaire)
+                .map((a) => (
+                  <p key={a.id}>
+                    {"⭐".repeat(a.note)} — {a.commentaire}
+                  </p>
+                ))}
+            </div>
+          )}
           <div className="btn-row">
             <button className="btn btn-primary" type="submit">
               Enregistrer

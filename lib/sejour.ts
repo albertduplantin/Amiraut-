@@ -12,8 +12,10 @@ export async function getActiveSejour() {
           inscriptions: true,
           waitlist: { orderBy: { createdAt: "asc" } },
           proposePar: { select: { prenom: true, nom: true } },
+          avis: true,
         },
       },
+      photos: { orderBy: { ordre: "asc" } },
     },
   });
 }

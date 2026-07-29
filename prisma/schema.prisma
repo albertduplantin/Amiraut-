@@ -22,6 +22,11 @@ enum TypeCovoiturage {
   RECHERCHE
 }
 
+enum TypeEvenement {
+  DESINSCRIPTION_SEJOUR
+  DESINSCRIPTION_JEU
+}
+
 model User {
   id                      String   @id @default(cuid())
   email                   String   @unique
@@ -35,6 +40,7 @@ model User {
   colocataireSouhaite     String?
   failedLoginAttempts     Int      @default(0)
   lockedUntil             DateTime?
+  afficherDansListeParticipants Boolean @default(false)
   createdAt               DateTime @default(now())
 
   reservationsNuit    ReservationNuit[]
@@ -44,6 +50,8 @@ model User {
   jeuxProposes         Jeu[]                @relation("JeuProposePar")
   annoncesCovoiturage  CovoiturageAnnonce[]
   passwordResetTokens  PasswordResetToken[]
+  evenements           Evenement[]
+  avisJeux             AvisJeu[]
 }
 
 model PasswordResetToken {
@@ -73,6 +81,8 @@ model Sejour {
   reservationsNuit    ReservationNuit[]
   reservationsRepas   ReservationRepas[]
   annoncesCovoiturage CovoiturageAnnonce[]
+  evenements          Evenement[]
+  photos              Photo[]
 }
 
 model Edito {
@@ -109,6 +119,7 @@ model Jeu {
 
   inscriptions InscriptionJeu[]
   waitlist     JeuWaitlist[]
+  avis         AvisJeu[]
 }
 
 model InscriptionJeu {
@@ -166,4 +177,38 @@ model ReservationRepas {
   type     TypeRepas
 
   @@unique([sejourId, userId, date, type])
+}
+
+model Evenement {
+  id        String        @id @default(cuid())
+  sejourId  String
+  sejour    Sejour        @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  type      TypeEvenement
+  message   String
+  createdAt DateTime      @default(now())
+}
+
+model Photo {
+  id        String   @id @default(cuid())
+  sejourId  String
+  sejour    Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  url       String
+  legende   String?
+  ordre     Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model AvisJeu {
+  id          String   @id @default(cuid())
+  jeuId       String
+  jeu         Jeu      @relation(fields: [jeuId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note        Int
+  commentaire String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@unique([jeuId, userId])
 }
