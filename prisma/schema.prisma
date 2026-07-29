@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  PARTICIPANT
+}
+
+enum TypeRepas {
+  DEJEUNER
+  DINER
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  prenom    String
+  nom       String
+  role      Role     @default(PARTICIPANT)
+  createdAt DateTime @default(now())
+
+  reservationsNuit  ReservationNuit[]
+  reservationsRepas ReservationRepas[]
+  inscriptionsJeu   InscriptionJeu[]
+}
+
+model Sejour {
+  id             String   @id @default(cuid())
+  nom            String
+  description    String   @db.Text
+  dateDebut      DateTime
+  dateFin        DateTime
+  prixNuitCts    Int      @default(0)
+  prixRepasCts   Int      @default(0)
+  infosPratiques String?  @db.Text
+  updatedAt      DateTime @updatedAt
+
+  editos            Edito[]
+  programme         ProgrammeItem[]
+  jeux              Jeu[]
+  reservationsNuit  ReservationNuit[]
+  reservationsRepas ReservationRepas[]
+}
+
+model Edito {
+  id       String @id @default(cuid())
+  sejourId String
+  sejour   Sejour @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  titre    String
+  contenu  String @db.Text
+  ordre    Int    @default(0)
+}
+
+model ProgrammeItem {
+  id          String   @id @default(cuid())
+  sejourId    String
+  sejour      Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  date        DateTime
+  heure       String?
+  titre       String
+  description String?  @db.Text
+  ordre       Int      @default(0)
+}
+
+model Jeu {
+  id           String   @id @default(cuid())
+  sejourId     String
+  sejour       Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  nom          String
+  description  String?  @db.Text
+  debut        DateTime
+  dureeMinutes Int      @default(60)
+  placesMax    Int      @default(4)
+
+  inscriptions InscriptionJeu[]
+}
+
+model InscriptionJeu {
+  id        String   @id @default(cuid())
+  jeuId     String
+  jeu       Jeu      @relation(fields: [jeuId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([jeuId, userId])
+}
+
+model ReservationNuit {
+  id       String   @id @default(cuid())
+  sejourId String
+  sejour   Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date     DateTime
+
+  @@unique([sejourId, userId, date])
+}
+
+model ReservationRepas {
+  id       String    @id @default(cuid())
+  sejourId String
+  sejour   Sejour    @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date     DateTime
+  type     TypeRepas
+
+  @@unique([sejourId, userId, date, type])
+}
