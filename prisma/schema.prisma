@@ -1,0 +1,214 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  PARTICIPANT
+}
+
+enum TypeRepas {
+  DEJEUNER
+  DINER
+}
+
+enum TypeCovoiturage {
+  PROPOSE
+  RECHERCHE
+}
+
+enum TypeEvenement {
+  DESINSCRIPTION_SEJOUR
+  DESINSCRIPTION_JEU
+}
+
+model User {
+  id                      String   @id @default(cuid())
+  email                   String   @unique
+  password                String
+  prenom                  String
+  nom                     String
+  role                    Role     @default(PARTICIPANT)
+  regimeAlimentaire       String?
+  contactUrgenceNom       String?
+  contactUrgenceTelephone String?
+  colocataireSouhaite     String?
+  failedLoginAttempts     Int      @default(0)
+  lockedUntil             DateTime?
+  afficherDansListeParticipants Boolean @default(false)
+  createdAt               DateTime @default(now())
+
+  reservationsNuit    ReservationNuit[]
+  reservationsRepas   ReservationRepas[]
+  inscriptionsJeu     InscriptionJeu[]
+  jeuxWaitlist        JeuWaitlist[]
+  jeuxProposes         Jeu[]                @relation("JeuProposePar")
+  annoncesCovoiturage  CovoiturageAnnonce[]
+  passwordResetTokens  PasswordResetToken[]
+  evenements           Evenement[]
+  avisJeux             AvisJeu[]
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+model Sejour {
+  id             String   @id @default(cuid())
+  nom            String
+  description    String   @db.Text
+  dateDebut      DateTime
+  dateFin        DateTime
+  prixNuitCts    Int      @default(0)
+  prixRepasCts   Int      @default(0)
+  infosPratiques String?  @db.Text
+  updatedAt      DateTime @updatedAt
+
+  editos              Edito[]
+  programme           ProgrammeItem[]
+  jeux                Jeu[]
+  reservationsNuit    ReservationNuit[]
+  reservationsRepas   ReservationRepas[]
+  annoncesCovoiturage CovoiturageAnnonce[]
+  evenements          Evenement[]
+  photos              Photo[]
+}
+
+model Edito {
+  id       String @id @default(cuid())
+  sejourId String
+  sejour   Sejour @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  titre    String
+  contenu  String @db.Text
+  ordre    Int    @default(0)
+}
+
+model ProgrammeItem {
+  id          String   @id @default(cuid())
+  sejourId    String
+  sejour      Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  date        DateTime
+  heure       String?
+  titre       String
+  description String?  @db.Text
+  ordre       Int      @default(0)
+}
+
+model Jeu {
+  id            String   @id @default(cuid())
+  sejourId      String
+  sejour        Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  nom           String
+  description   String?  @db.Text
+  debut         DateTime
+  dureeMinutes  Int      @default(60)
+  placesMax     Int      @default(4)
+  proposeParId  String?
+  proposePar    User?    @relation("JeuProposePar", fields: [proposeParId], references: [id], onDelete: SetNull)
+
+  inscriptions InscriptionJeu[]
+  waitlist     JeuWaitlist[]
+  avis         AvisJeu[]
+}
+
+model InscriptionJeu {
+  id        String   @id @default(cuid())
+  jeuId     String
+  jeu       Jeu      @relation(fields: [jeuId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([jeuId, userId])
+}
+
+model JeuWaitlist {
+  id        String   @id @default(cuid())
+  jeuId     String
+  jeu       Jeu      @relation(fields: [jeuId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([jeuId, userId])
+}
+
+model ReservationNuit {
+  id       String   @id @default(cuid())
+  sejourId String
+  sejour   Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date     DateTime
+
+  @@unique([sejourId, userId, date])
+}
+
+model CovoiturageAnnonce {
+  id         String           @id @default(cuid())
+  sejourId   String
+  sejour     Sejour           @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       TypeCovoiturage
+  lieu       String
+  message    String?          @db.Text
+  createdAt  DateTime         @default(now())
+}
+
+model ReservationRepas {
+  id       String    @id @default(cuid())
+  sejourId String
+  sejour   Sejour    @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date     DateTime
+  type     TypeRepas
+
+  @@unique([sejourId, userId, date, type])
+}
+
+model Evenement {
+  id        String        @id @default(cuid())
+  sejourId  String
+  sejour    Sejour        @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  type      TypeEvenement
+  message   String
+  createdAt DateTime      @default(now())
+}
+
+model Photo {
+  id        String   @id @default(cuid())
+  sejourId  String
+  sejour    Sejour   @relation(fields: [sejourId], references: [id], onDelete: Cascade)
+  url       String
+  legende   String?
+  ordre     Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model AvisJeu {
+  id          String   @id @default(cuid())
+  jeuId       String
+  jeu         Jeu      @relation(fields: [jeuId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note        Int
+  commentaire String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@unique([jeuId, userId])
+}
