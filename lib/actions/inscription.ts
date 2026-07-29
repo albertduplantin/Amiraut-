@@ -5,6 +5,9 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import type { ActionResult } from "@/lib/actions/auth";
+import { sendEmail, confirmationReservationEmail, promotionListeAttenteEmail } from "@/lib/email";
+import { centsToEuros } from "@/lib/format";
+import { getBaseUrl } from "@/lib/url";
 
 async function requireParticipant() {
   const session = await getSession();
@@ -65,6 +68,27 @@ export async function saveReservationsAction(
   ]);
 
   revalidatePath("/mon-espace");
+
+  const [user, sejour] = await Promise.all([
+    prisma.user.findUnique({ where: { id: session.userId } }),
+    prisma.sejour.findUnique({ where: { id: sejourId } }),
+  ]);
+  if (user && sejour) {
+    const totalCts = nuitDates.length * sejour.prixNuitCts + repas.length * sejour.prixRepasCts;
+    await sendEmail({
+      to: user.email,
+      subject: `Confirmation — ${sejour.nom}`,
+      html: confirmationReservationEmail({
+        prenom: user.prenom,
+        sejourNom: sejour.nom,
+        nuits: nuitDates.length,
+        repas: repas.length,
+        totalFormatted: centsToEuros(totalCts),
+        lienEspace: `${getBaseUrl()}/mon-espace`,
+      }),
+    });
+  }
+
   return { error: undefined, success: true };
 }
 
@@ -138,7 +162,7 @@ export async function quitterJeuAction(formData: FormData) {
   const jeuId = formData.get("jeuId");
   if (typeof jeuId !== "string" || !jeuId) return;
 
-  await prisma.$transaction(async (tx) => {
+  const promu = await prisma.$transaction(async (tx) => {
     const confirmee = await tx.inscriptionJeu.findUnique({
       where: { jeuId_userId: { jeuId, userId: session.userId } },
     });
@@ -156,11 +180,28 @@ export async function quitterJeuAction(formData: FormData) {
         await tx.inscriptionJeu.create({
           data: { jeuId, userId: suivant.userId },
         });
+        return tx.user.findUnique({ where: { id: suivant.userId } });
       }
     } else {
       await tx.jeuWaitlist.deleteMany({ where: { jeuId, userId: session.userId } });
     }
+    return null;
   });
+
+  if (promu) {
+    const jeu = await prisma.jeu.findUnique({ where: { id: jeuId } });
+    if (jeu) {
+      await sendEmail({
+        to: promu.email,
+        subject: `Une place s'est libérée — ${jeu.nom}`,
+        html: promotionListeAttenteEmail({
+          prenom: promu.prenom,
+          jeuNom: jeu.nom,
+          lienEspace: `${getBaseUrl()}/mon-espace`,
+        }),
+      });
+    }
+  }
 
   revalidatePath("/mon-espace");
   revalidatePath("/");

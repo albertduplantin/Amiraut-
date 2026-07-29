@@ -36,6 +36,9 @@ export default function ConnexionPage() {
       <p className="muted section">
         Pas encore de compte ? <Link href="/creer-compte">Créer un compte</Link>
       </p>
+      <p className="muted">
+        <Link href="/mot-de-passe-oublie">Mot de passe oublié ?</Link>
+      </p>
     </div>
   );
 }
