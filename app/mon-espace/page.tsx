@@ -5,6 +5,7 @@ import { getActiveSejour } from "@/lib/sejour";
 import { daysBetween, dateKey, formatDateLong, formatDateShort } from "@/lib/format";
 import { InscriptionForm } from "./inscription-form";
 import { ProfilForm } from "./profil-form";
+import { DeleteAccountForm } from "./delete-account-form";
 import { inscrireJeuAction, quitterJeuAction, proposerJeuAction } from "@/lib/actions/inscription";
 import {
   creerAnnonceCovoiturageAction,
@@ -25,6 +26,7 @@ type PlanningEntry = {
   sortMinutes: number;
   label: string;
   detail?: string;
+  warning?: string;
 };
 
 export default async function MonEspacePage() {
@@ -107,13 +109,32 @@ export default async function MonEspacePage() {
     });
   }
 
+  const conflitsParJeu = new Map<string, string[]>();
+  for (let i = 0; i < jeuxInscrits.length; i++) {
+    for (let j = i + 1; j < jeuxInscrits.length; j++) {
+      const a = jeuxInscrits[i];
+      const b = jeuxInscrits[j];
+      const finA = new Date(a.debut.getTime() + a.dureeMinutes * 60 * 1000);
+      const finB = new Date(b.debut.getTime() + b.dureeMinutes * 60 * 1000);
+      const seChevauchent = a.debut < finB && b.debut < finA;
+      if (seChevauchent) {
+        if (!conflitsParJeu.has(a.id)) conflitsParJeu.set(a.id, []);
+        if (!conflitsParJeu.has(b.id)) conflitsParJeu.set(b.id, []);
+        conflitsParJeu.get(a.id)!.push(b.nom);
+        conflitsParJeu.get(b.id)!.push(a.nom);
+      }
+    }
+  }
+
   for (const jeu of jeuxInscrits) {
+    const conflits = conflitsParJeu.get(jeu.id);
     planning.push({
       key: `jeu-${jeu.id}`,
       date: jeu.debut,
       sortMinutes: jeu.debut.getUTCHours() * 60 + jeu.debut.getUTCMinutes(),
       label: jeu.nom,
       detail: jeuHeureFormatter.format(jeu.debut),
+      warning: conflits ? `Chevauche avec ${conflits.join(", ")}` : undefined,
     });
   }
 
@@ -154,6 +175,9 @@ export default async function MonEspacePage() {
                   <span>
                     <strong>{entry.label}</strong>
                     {entry.detail && <span className="muted"> — {entry.detail}</span>}
+                    {entry.warning && (
+                      <span className="error-text"> · ⚠️ {entry.warning}</span>
+                    )}
                   </span>
                 </div>
               ))}
@@ -369,6 +393,13 @@ export default async function MonEspacePage() {
             Publier l&apos;annonce
           </button>
         </form>
+      </section>
+
+      <section className="section">
+        <h2>Mon compte</h2>
+        <div className="section">
+          <DeleteAccountForm />
+        </div>
       </section>
     </div>
   );

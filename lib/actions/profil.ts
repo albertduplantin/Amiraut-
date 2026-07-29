@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { getSession } from "@/lib/auth";
+import { getSession, clearSession } from "@/lib/auth";
 import type { ActionResult } from "@/lib/actions/auth";
 
 export async function updateProfilAction(
@@ -26,4 +26,16 @@ export async function updateProfilAction(
 
   revalidatePath("/mon-espace");
   return { error: undefined, success: true };
+}
+
+export async function deleteMyAccountAction(formData: FormData) {
+  const session = await getSession();
+  if (!session) redirect("/connexion");
+
+  const confirmation = String(formData.get("confirmation") ?? "");
+  if (confirmation !== "SUPPRIMER") return;
+
+  await prisma.user.delete({ where: { id: session.userId } });
+  await clearSession();
+  redirect("/");
 }

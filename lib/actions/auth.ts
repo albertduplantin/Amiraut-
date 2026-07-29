@@ -54,6 +54,9 @@ const loginSchema = z.object({
   password: z.string().min(1, "Mot de passe requis"),
 });
 
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCK_DURATION_MINUTES = 15;
+
 export async function loginAction(
   _prev: ActionResult,
   formData: FormData
@@ -70,9 +73,36 @@ export async function loginAction(
   const email = parsed.data.email.toLowerCase();
   const user = await prisma.user.findUnique({ where: { email } });
 
-  if (!user || !(await verifyPassword(parsed.data.password, user.password))) {
+  if (user?.lockedUntil && user.lockedUntil > new Date()) {
+    const minutesLeft = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
+    return {
+      error: `Trop de tentatives échouées. Réessaie dans ${minutesLeft} minute(s).`,
+    };
+  }
+
+  const valid = user ? await verifyPassword(parsed.data.password, user.password) : false;
+
+  if (!user || !valid) {
+    if (user) {
+      const attempts = user.failedLoginAttempts + 1;
+      const shouldLock = attempts >= MAX_LOGIN_ATTEMPTS;
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedLoginAttempts: shouldLock ? 0 : attempts,
+          lockedUntil: shouldLock
+            ? new Date(Date.now() + LOCK_DURATION_MINUTES * 60 * 1000)
+            : null,
+        },
+      });
+    }
     return { error: "Email ou mot de passe incorrect" };
   }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { failedLoginAttempts: 0, lockedUntil: null },
+  });
 
   await createSession({ userId: user.id, role: user.role });
   redirect(user.role === "ADMIN" ? "/admin" : "/mon-espace");

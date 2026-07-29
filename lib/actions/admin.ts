@@ -1,10 +1,11 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { getSession } from "@/lib/auth";
+import { getSession, hashPassword } from "@/lib/auth";
 import type { ActionResult } from "@/lib/actions/auth";
 
 async function requireAdmin() {
@@ -186,4 +187,30 @@ export async function deleteJeuAction(formData: FormData) {
   revalidatePath("/");
   revalidatePath("/admin/jeux");
   revalidatePath("/mon-espace");
+}
+
+// --- Réinitialisation de mot de passe (sans email) ---
+
+export type ResetPasswordResult = { tempPassword?: string; error?: string } | undefined;
+
+export async function resetPasswordAction(
+  _prev: ResetPasswordResult,
+  formData: FormData
+): Promise<ResetPasswordResult> {
+  await requireAdmin();
+  const userId = String(formData.get("userId") ?? "");
+  if (!userId) return { error: "Utilisateur introuvable" };
+
+  const tempPassword = randomBytes(6).toString("base64url");
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      password: await hashPassword(tempPassword),
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+    },
+  });
+
+  return { tempPassword };
 }

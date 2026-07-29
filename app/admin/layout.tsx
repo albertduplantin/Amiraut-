@@ -8,6 +8,7 @@ const TABS = [
   { href: "/admin/editos", label: "Editos" },
   { href: "/admin/jeux", label: "Jeux" },
   { href: "/admin/inscriptions", label: "Inscriptions" },
+  { href: "/admin/statistiques", label: "Statistiques" },
 ];
 
 export default async function AdminLayout({

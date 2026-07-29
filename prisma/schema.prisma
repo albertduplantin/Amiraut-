@@ -33,6 +33,8 @@ model User {
   contactUrgenceNom       String?
   contactUrgenceTelephone String?
   colocataireSouhaite     String?
+  failedLoginAttempts     Int      @default(0)
+  lockedUntil             DateTime?
   createdAt               DateTime @default(now())
 
   reservationsNuit    ReservationNuit[]

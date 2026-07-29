@@ -2,6 +2,8 @@ import Link from "next/link";
 import { getActiveSejour } from "@/lib/sejour";
 import { prisma } from "@/lib/prisma";
 import { centsToEuros } from "@/lib/format";
+import { CopyEmailsButton } from "./copy-emails-button";
+import { ResetPasswordButton } from "./reset-password-button";
 
 export default async function AdminInscriptionsPage() {
   const sejour = await getActiveSejour();
@@ -50,6 +52,8 @@ export default async function AdminInscriptionsPage() {
 
   const inscrits = rows.filter((r) => r.nuits > 0 || r.repas > 0 || r.jeux.length > 0);
   const totalRevenuCts = rows.reduce((sum, r) => sum + r.totalCts, 0);
+  const emails = rows.map((r) => r.email);
+  const mailtoHref = `mailto:?bcc=${encodeURIComponent(emails.join(","))}`;
 
   return (
     <div className="section">
@@ -72,6 +76,10 @@ export default async function AdminInscriptionsPage() {
         <a className="btn" href="/admin/inscriptions/export">
           Exporter en CSV
         </a>
+        <CopyEmailsButton emails={emails} />
+        <a className="btn" href={mailtoHref}>
+          Ouvrir un email groupé (bcc)
+        </a>
       </div>
 
       <div className="table-wrap section">
@@ -87,6 +95,7 @@ export default async function AdminInscriptionsPage() {
               <th>Contact urgence</th>
               <th>Colocataire souhaité</th>
               <th>Total</th>
+              <th>Compte</th>
             </tr>
           </thead>
           <tbody>
@@ -101,6 +110,9 @@ export default async function AdminInscriptionsPage() {
                 <td>{row.contactUrgence || "—"}</td>
                 <td>{row.colocataireSouhaite || "—"}</td>
                 <td>{centsToEuros(row.totalCts)}</td>
+                <td>
+                  <ResetPasswordButton userId={row.id} />
+                </td>
               </tr>
             ))}
           </tbody>
