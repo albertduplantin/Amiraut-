@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate && node scripts/copy-maplibre-worker.js"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

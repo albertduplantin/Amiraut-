@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Map as MapLibreMap, LngLatBounds, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
+import { Map as MapLibreMap, LngLatBounds, setWorkerUrl, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { LatLng } from "@/lib/geo";
 
@@ -65,6 +65,11 @@ export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPo
 
   useEffect(() => {
     if (!containerRef.current) return;
+
+    // Turbopack ne résout pas le chunk worker de maplibre-gl automatiquement ;
+    // sans ceci, aucune couche vectorielle (tuiles de base ET nos propres
+    // sources GeoJSON) ne se construit, seul le fond raster s'affiche.
+    setWorkerUrl("/maplibre-gl-worker.mjs");
 
     const map = new MapLibreMap({
       container: containerRef.current,
