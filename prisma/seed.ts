@@ -1,8 +1,15 @@
 /**
  * Seed V1 : convoi JW55B / RA55A (décembre 1943), qui a débouché sur la
- * bataille du cap Nord (26 déc. 1943, coulage du Scharnhorst). Stats de
- * UnitClass plausibles pour la période, à affiner avec une recherche
- * historique plus poussée avant un usage "sérieux" du scénario.
+ * bataille du cap Nord (26 déc. 1943, coulage du Scharnhorst).
+ *
+ * Caractéristiques des UnitClass (tonnage, blindage, armement, DCA, valeur
+ * en points) tirées du fichier "Avions et Navires Amirauté.pdf" — la base de
+ * données de navires du jeu de plateau original Amirauté de Paul Bois.
+ * Stockées dans `weaponSystems` (réservé phase 2 / moteur de combat) ; seule
+ * `maxSpeedKnots` (vitesse maxi du tableau) est utilisée par le moteur de
+ * tour V1. Les portées de capteurs (radar/visuel/hydrophone) et la
+ * détectabilité restent des heuristiques V1, le jeu original gérant la
+ * détection via un système séparé (règles principales, non encore digérées).
  *
  * JW55B a quitté Loch Ewe le 22/12/1943 ; la force de couverture lourde
  * (Duke of York) a appareillé d'Akureyri (Islande) le 23/12 — positions de
@@ -14,6 +21,8 @@ import { PrismaPg } from "@prisma/adapter-pg";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
+
+const SOURCE = "Amirauté (Paul Bois) — Avions et Navires";
 
 const LOCH_EWE = { lat: 57.87, lng: -5.6 };
 const AKUREYRI = { lat: 65.68, lng: -18.09 };
@@ -74,6 +83,8 @@ async function main() {
     data: { teamId: germany.id, name: "Ligne de patrouille U-Boot « Eisenbart »" },
   });
 
+  // ── Royaume-Uni ──────────────────────────────────────────────
+
   const classBattleshipKGV = await prisma.unitClass.create({
     data: {
       name: "Cuirassé classe King George V",
@@ -88,13 +99,23 @@ async function main() {
       iconKey: "battleship",
       profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-201/img/oni201-8.PNG",
       historicalNote:
-        "Cuirassé rapide entré en service en 1940-41, armé de 10 canons de 356mm (calibre réduit imposé par les traités navals) mais doté d'un radar performant. Pilier de la Home Fleet en 1943.",
+        "Cuirassé rapide entré en service en 1940-41, 36 730t, armé de 10 canons de 356mm (calibre réduit imposé par les traités navals) et 16 canons secondaires de 133mm. Doté d'un radar performant. Pilier de la Home Fleet en 1943.",
+      weaponSystems: {
+        displacementTons: 36730,
+        armorMm: { vertical: 381, horizontal: 152 },
+        mainGuns: "10 x 356mm (portée 37 000m)",
+        secondaryGuns: "16 x 133mm (portée 23 400m)",
+        antiAircraft1943: "16 x 133mm, 96 x 40mm, 57 x 20mm",
+        aircraft: "2 hydravions",
+        originalGamePoints: 99.03,
+        source: SOURCE,
+      },
     },
   });
 
-  const classLightCruiser = await prisma.unitClass.create({
+  const classCruiserTown = await prisma.unitClass.create({
     data: {
-      name: "Croiseur léger (classe Town / Crown Colony)",
+      name: "Croiseur léger classe Town (sous-classe Southampton)",
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 32,
@@ -106,7 +127,69 @@ async function main() {
       iconKey: "cruiser",
       profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-201/img/oni201-46.PNG",
       historicalNote:
-        "Croiseurs légers armés de canons de 152mm, rapides et bien équipés en radar de veille — le radar de HMS Belfast fut le premier à détecter le Scharnhorst lors de la bataille du cap Nord.",
+        "HMS Sheffield, 11 730t, armé de 12 canons de 152mm. Croiseur léger rapide et bien équipé en radar de veille.",
+      weaponSystems: {
+        displacementTons: 11730,
+        armorMm: { vertical: 114, horizontal: 38 },
+        mainGuns: "12 x 152mm (portée 22 500m)",
+        torpedoes: "6 x 533mm",
+        antiAircraft1943: "8 x 102mm, 8 x 40mm, 8 mitrailleuses",
+        originalGamePoints: 29.62,
+        source: SOURCE,
+      },
+    },
+  });
+
+  const classCruiserEdinburgh = await prisma.unitClass.create({
+    data: {
+      name: "Croiseur léger classe Town (sous-classe Edinburgh)",
+      nation: "Royaume-Uni",
+      category: "SURFACE_SHIP",
+      maxSpeedKnots: 30,
+      sensors: [
+        { type: "RADAR", rangeNm: 19 },
+        { type: "VISUAL", rangeNm: 13 },
+      ],
+      detectability: 1.15,
+      iconKey: "cruiser",
+      historicalNote:
+        "HMS Belfast, 11 500t, un peu plus lourdement blindé que la sous-classe Southampton. Son radar fut le premier à détecter le Scharnhorst lors de la bataille du cap Nord.",
+      weaponSystems: {
+        displacementTons: 11500,
+        armorMm: { vertical: 114, horizontal: 76 },
+        mainGuns: "12 x 152mm (portée 22 600m)",
+        torpedoes: "6 x 533mm",
+        antiAircraft1943: "12 x 102mm, 16 x 40mm, 22 x 20mm",
+        aircraft: "2 hydravions",
+        originalGamePoints: 33.55,
+        source: SOURCE,
+      },
+    },
+  });
+
+  const classCruiserCrownColony = await prisma.unitClass.create({
+    data: {
+      name: "Croiseur léger classe Crown Colony (Fiji)",
+      nation: "Royaume-Uni",
+      category: "SURFACE_SHIP",
+      maxSpeedKnots: 31,
+      sensors: [
+        { type: "RADAR", rangeNm: 17 },
+        { type: "VISUAL", rangeNm: 12 },
+      ],
+      detectability: 1.0,
+      iconKey: "cruiser",
+      historicalNote: "HMS Jamaica, 8 530t, plus petit et plus récent que les Town, armé de 12 canons de 152mm.",
+      weaponSystems: {
+        displacementTons: 8530,
+        armorMm: { vertical: 89, horizontal: 51 },
+        mainGuns: "12 x 152mm (portée 22 600m)",
+        torpedoes: "6 x 533mm",
+        antiAircraft1943: "8 x 102mm, 8 x 40mm, 22 x 20mm",
+        aircraft: "2 hydravions",
+        originalGamePoints: 24.78,
+        source: SOURCE,
+      },
     },
   });
 
@@ -115,7 +198,7 @@ async function main() {
       name: "Croiseur lourd classe County",
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
-      maxSpeedKnots: 30,
+      maxSpeedKnots: 32,
       sensors: [
         { type: "RADAR", rangeNm: 18 },
         { type: "VISUAL", rangeNm: 13 },
@@ -124,13 +207,49 @@ async function main() {
       iconKey: "cruiser",
       profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-201/img/oni201-36.PNG",
       historicalNote:
-        "Croiseur lourd armé de canons de 203mm, plus puissant mais un peu plus lent que les croiseurs légers. HMS Norfolk échangea les premiers coups de canon avec le Scharnhorst et fut endommagé lors de la bataille du cap Nord.",
+        "HMS Norfolk, 10 900t, armé de 8 canons de 203mm. Échangea les premiers coups de canon avec le Scharnhorst et fut endommagé lors de la bataille du cap Nord.",
+      weaponSystems: {
+        displacementTons: 10900,
+        armorMm: { vertical: 25, horizontal: 38 },
+        mainGuns: "8 x 203mm (portée 19 200m)",
+        torpedoes: "8 x 533mm",
+        antiAircraft1943: "8 x 102mm, 28 x 40mm, 32 x 20mm",
+        aircraft: "1 hydravion",
+        originalGamePoints: 17.2,
+        source: SOURCE,
+      },
     },
   });
 
-  const classFleetDestroyer = await prisma.unitClass.create({
+  const classDestroyerM = await prisma.unitClass.create({
     data: {
-      name: "Destroyer de flotte (Home Fleet)",
+      name: "Destroyer classe M (Home Fleet, 1941-42)",
+      nation: "Royaume-Uni",
+      category: "SURFACE_SHIP",
+      maxSpeedKnots: 36,
+      sensors: [
+        { type: "RADAR", rangeNm: 15 },
+        { type: "VISUAL", rangeNm: 10 },
+        { type: "SONAR", rangeNm: 3 },
+      ],
+      detectability: 0.85,
+      iconKey: "destroyer",
+      historicalNote:
+        "HMS Milne, Matchless, Meteor, Musketeer : 1 925t, armés de 6 canons de 120mm et 4 tubes lance-torpilles de 533mm.",
+      weaponSystems: {
+        displacementTons: 1925,
+        mainGuns: "6 x 120mm (portée 18 200m)",
+        torpedoes: "4 x 533mm",
+        antiAircraft: "6 x 120mm, 1 x 102mm, 4 x 40mm, 2 x 20mm, 12 mitrailleuses",
+        originalGamePoints: 2.12,
+        source: SOURCE,
+      },
+    },
+  });
+
+  const classDestroyerTribal = await prisma.unitClass.create({
+    data: {
+      name: "Destroyer classe Tribal (1938-39)",
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 36,
@@ -142,13 +261,47 @@ async function main() {
       detectability: 0.9,
       iconKey: "destroyer",
       historicalNote:
-        "Destroyers rapides et maniables des flottilles de la Home Fleet, chargés d'écranter les gros bâtiments et de mener des attaques à la torpille. Leurs torpilles ont contribué à ralentir le Scharnhorst avant l'engagement final.",
+        "HMS Ashanti : 1 960t, fortement armé pour un destroyer (8 canons de 120mm), moins de tubes lance-torpilles que la moyenne (4 x 533mm).",
+      weaponSystems: {
+        displacementTons: 1960,
+        mainGuns: "8 x 120mm (portée 18 200m)",
+        torpedoes: "4 x 533mm",
+        antiAircraft: "8 x 120mm, 4 x 40mm, 8 mitrailleuses",
+        originalGamePoints: 2.16,
+        source: SOURCE,
+      },
+    },
+  });
+
+  const classDestroyerS = await prisma.unitClass.create({
+    data: {
+      name: "Destroyer classe S (1943-44)",
+      nation: "Royaume-Uni",
+      category: "SURFACE_SHIP",
+      maxSpeedKnots: 37,
+      sensors: [
+        { type: "RADAR", rangeNm: 16 },
+        { type: "VISUAL", rangeNm: 10 },
+        { type: "SONAR", rangeNm: 3 },
+      ],
+      detectability: 0.85,
+      iconKey: "destroyer",
+      historicalNote:
+        "HMS Saumarez, Savage, Scorpion, HNoMS Stord : 1 800t, les plus récents et rapides destroyers de la force de couverture, 8 tubes lance-torpilles de 533mm.",
+      weaponSystems: {
+        displacementTons: 1800,
+        mainGuns: "4 x 120mm (portée 18 200m)",
+        torpedoes: "8 x 533mm",
+        antiAircraft: "4 x 120mm, 10 x 20mm",
+        originalGamePoints: 1.98,
+        source: SOURCE,
+      },
     },
   });
 
   const classEscort = await prisma.unitClass.create({
     data: {
-      name: "Escorte rapprochée (destroyer ancien / corvette / dragueur)",
+      name: "Destroyer ancien classe W (escorte rapprochée)",
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 18,
@@ -156,12 +309,21 @@ async function main() {
         { type: "SONAR", rangeNm: 3 },
         { type: "VISUAL", rangeNm: 9 },
       ],
-      detectability: 0.8,
+      detectability: 0.75,
       iconKey: "escort",
       profileImageUrl:
         "https://ia800801.us.archive.org/BookReader/BookReaderImages.php?zip=/26/items/FM30-51/FM30-51_jp2.zip&file=FM30-51_jp2/FM30-51_0166.jp2&id=FM30-51&scale=2&rotate=0",
       historicalNote:
-        "Destroyers de la Première Guerre mondiale et corvettes/dragueurs de mines convertis à l'escorte rapprochée des convois : moins rapides, mais essentiels contre la menace sous-marine au plus près des cargos.",
+        "HMS Westcott (classe W, 1919), 1 325t : destroyer de la Première Guerre mondiale reconverti à l'escorte de convoi. HMS Speedwell (dragueur de mines) et HMS Acanthus (corvette classe Flower) ne figurent pas dans la base de données du jeu original ; leurs caractéristiques restent approximées.",
+      weaponSystems: {
+        displacementTons: 1325,
+        mainGuns: "4 x 102mm (portée 12 500m)",
+        torpedoes: "6 x 533mm",
+        antiAircraft: "4 x 102mm, 1 x 76mm, 2 x 40mm",
+        originalGamePoints: 1.19,
+        source: SOURCE,
+        note: "Vitesse en jeu volontairement réduite à 18 nds pour représenter la vitesse d'escorte de convoi, pas la vitesse maxi réelle du navire (34 nds).",
+      },
     },
   });
 
@@ -175,16 +337,18 @@ async function main() {
       detectability: 1.6,
       iconKey: "merchant",
       historicalNote:
-        "Cargos marchands transportant le matériel de guerre prêté-bail vers l'URSS — non armés ou à peine, lents et très détectables. Toute l'opération existe pour les amener à bon port.",
+        "Cargos marchands transportant le matériel de guerre prêté-bail vers l'URSS — non armés ou à peine, lents et très détectables. Toute l'opération existe pour les amener à bon port. Absents de la base de données de navires de guerre du jeu original.",
     },
   });
 
+  // ── Allemagne ────────────────────────────────────────────────
+
   const classScharnhorst = await prisma.unitClass.create({
     data: {
-      name: "Cuirassé de bataille Scharnhorst",
+      name: "Cuirassé de bataille classe Scharnhorst",
       nation: "Allemagne",
       category: "SURFACE_SHIP",
-      maxSpeedKnots: 31,
+      maxSpeedKnots: 32,
       sensors: [
         { type: "RADAR", rangeNm: 12 },
         { type: "VISUAL", rangeNm: 14 },
@@ -193,7 +357,17 @@ async function main() {
       iconKey: "battleship_de",
       profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-204/img/ONI-204-26.JPG",
       historicalNote:
-        "Cuirassé rapide (officiellement classé Schlachtschiff) armé de 9 canons de 283mm, plus rapide mais moins bien protégé et moins bien équipé en radar que son adversaire britannique. Coulé le 26 décembre 1943 lors de la bataille du cap Nord après un combat acharné ; sur environ 1968 hommes d'équipage, seuls 36 survécurent.",
+        "31 850t, armé de 9 canons de 283mm (portée 41 000m, supérieure à celle du Duke of York) mais moins bien blindé et moins bien équipé en radar que son adversaire britannique. Coulé le 26 décembre 1943 lors de la bataille du cap Nord après un combat acharné ; sur environ 1 968 hommes d'équipage, seuls 36 survécurent.",
+      weaponSystems: {
+        displacementTons: 31850,
+        armorMm: { vertical: 350, horizontal: 80 },
+        mainGuns: "9 x 283mm (portée 41 000m)",
+        secondaryGuns: "12 x 149mm (portée 22 000m), 14 x 105mm (portée 17 700m)",
+        antiAircraft: "14 x 105mm, 16 x 37mm, 40 x 20mm",
+        aircraft: "4 hydravions",
+        originalGamePoints: 82.34,
+        source: SOURCE,
+      },
     },
   });
 
@@ -211,7 +385,16 @@ async function main() {
       iconKey: "destroyer_de",
       profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-204/img/ONI-204-98.JPG",
       historicalNote:
-        "Grands destroyers armés de canons de 150mm, plus puissants que leurs homologues alliés mais réputés peu marins par gros temps. Lors de l'opération Ostfront, l'amiral Bey les renvoya vers l'Altenfjord avant l'engagement final en raison du mauvais temps : ils ne combattirent pas aux côtés du Scharnhorst.",
+        "Z29, Z30, Z33, Z34, Z38 : 2 600t, armés de 5 canons de 149mm (plus puissants que leurs homologues alliés) mais réputés peu marins par gros temps. Lors de l'opération Ostfront, l'amiral Bey les renvoya vers l'Altenfjord avant l'engagement final en raison du mauvais temps : ils ne combattirent pas aux côtés du Scharnhorst.",
+      weaponSystems: {
+        displacementTons: 2600,
+        mainGuns: "5 x 149mm (portée 22 000m)",
+        torpedoes: "8 x 533mm",
+        antiAircraft: "4 x 37mm, 15 x 20mm",
+        mines: "60",
+        originalGamePoints: 2.86,
+        source: SOURCE,
+      },
     },
   });
 
@@ -220,7 +403,7 @@ async function main() {
       name: "Sous-marin type VIIC (patrouille)",
       nation: "Allemagne",
       category: "SUBMARINE",
-      maxSpeedKnots: 10,
+      maxSpeedKnots: 18,
       sensors: [
         { type: "HYDROPHONE", rangeNm: 4 },
         { type: "VISUAL", rangeNm: 6 },
@@ -229,7 +412,16 @@ async function main() {
       iconKey: "uboat",
       profileImageUrl: "https://upload.wikimedia.org/wikipedia/commons/a/a8/VIIC_uboat_line.svg",
       historicalNote:
-        "Sous-marin standard de la Kriegsmarine, déployé en lignes de patrouille (ici « Eisenbart ») pour repérer les convois arctiques et alerter le commandement. Très discret en plongée, mais doit faire surface pour se déplacer vite ou transmettre un rapport.",
+        "770t, le sous-marin le plus construit de la guerre (554 unités). Déployé en lignes de patrouille (ici « Eisenbart ») pour repérer les convois arctiques et alerter le commandement. Vitesse : 18 nds en surface, 8 nds en plongée — très discret immergé, mais doit faire surface pour se déplacer vite ou transmettre un rapport.",
+      weaponSystems: {
+        displacementTons: 770,
+        surfaceSpeedKnots: 18,
+        submergedSpeedKnots: 8,
+        torpedoes: "5 x 533mm (4 tubes avant, 1 arrière), 14 tonnes de torpilles",
+        antiAircraft: "6 x 20mm",
+        originalGamePoints: 0.85,
+        source: SOURCE,
+      },
     },
   });
 
@@ -249,14 +441,15 @@ async function main() {
   for (const name of closeEscortNames) {
     await createUnit(scenario.id, fleetCloseEscort.id, classEscort.id, name, LOCH_EWE);
   }
-  const oceanEscortNames = ["HMS Milne", "HMS Matchless", "HMS Meteor", "HMS Musketeer", "HMS Ashanti"];
-  for (const name of oceanEscortNames) {
-    await createUnit(scenario.id, fleetCloseEscort.id, classFleetDestroyer.id, name, LOCH_EWE);
+  const mClassNames = ["HMS Milne", "HMS Matchless", "HMS Meteor", "HMS Musketeer"];
+  for (const name of mClassNames) {
+    await createUnit(scenario.id, fleetCloseEscort.id, classDestroyerM.id, name, LOCH_EWE);
   }
+  await createUnit(scenario.id, fleetCloseEscort.id, classDestroyerTribal.id, "HMS Ashanti", LOCH_EWE);
 
-  await createUnit(scenario.id, fleetCruisers.id, classLightCruiser.id, "HMS Belfast", AKUREYRI);
+  await createUnit(scenario.id, fleetCruisers.id, classCruiserEdinburgh.id, "HMS Belfast", AKUREYRI);
   await createUnit(scenario.id, fleetCruisers.id, classHeavyCruiser.id, "HMS Norfolk", AKUREYRI);
-  await createUnit(scenario.id, fleetCruisers.id, classLightCruiser.id, "HMS Sheffield", AKUREYRI);
+  await createUnit(scenario.id, fleetCruisers.id, classCruiserTown.id, "HMS Sheffield", AKUREYRI);
 
   await createUnit(
     scenario.id,
@@ -266,9 +459,9 @@ async function main() {
     AKUREYRI,
     "Navire amiral de la Home Fleet (amiral Bruce Fraser) lors de l'opération. C'est elle qui porta le coup de grâce au Scharnhorst à courte distance dans la soirée du 26 décembre 1943."
   );
-  await createUnit(scenario.id, fleetCoveringForce.id, classLightCruiser.id, "HMS Jamaica", AKUREYRI);
+  await createUnit(scenario.id, fleetCoveringForce.id, classCruiserCrownColony.id, "HMS Jamaica", AKUREYRI);
   for (const name of ["HMS Saumarez", "HMS Savage", "HMS Scorpion", "HNoMS Stord"]) {
-    await createUnit(scenario.id, fleetCoveringForce.id, classFleetDestroyer.id, name, AKUREYRI);
+    await createUnit(scenario.id, fleetCoveringForce.id, classDestroyerS.id, name, AKUREYRI);
   }
 
   await createUnit(

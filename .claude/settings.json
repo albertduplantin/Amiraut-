@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npx vercel ls*)",
+      "Bash(npx vercel inspect*)",
+      "Bash(npx vercel project inspect*)",
+      "Bash(npx vercel whoami)",
+      "Bash(npx prisma generate)",
+      "Bash(pdftoppm *)",
+      "Bash(pdftotext *)",
+      "Bash(pdfinfo *)"
+    ]
+  }
+}
