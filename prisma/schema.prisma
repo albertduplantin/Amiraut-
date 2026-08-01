@@ -70,6 +70,9 @@ model UnitClass {
   sensors          Json // [{ type: "RADAR", rangeNm: 20 }, ...]
   detectability    Float        @default(1)
   iconKey          String
+  profileImageUrl  String? // silhouette de profil (vue latérale)
+  planImageUrl     String? // silhouette vue de dessus, si disponible
+  historicalNote   String? // contexte historique du type de navire
   enduranceMinutes Int? // réservé phase 2 (autonomie/carburant), inutilisé en V1
   weaponSystems    Json? // réservé phase 2 (armement), inutilisé en V1
 
@@ -94,6 +97,7 @@ model Unit {
   unitClass         UnitClass  @relation(fields: [unitClassId], references: [id])
   name              String
   pennant           String?
+  historicalNote    String? // contexte historique propre à ce navire (rôle dans la bataille, etc.)
   status            UnitStatus @default(ACTIVE) // DAMAGED/SUNK réservés phase 2 (moteur de combat)
   healthMax         Int? // réservé phase 2
   healthCurrent     Int? // réservé phase 2

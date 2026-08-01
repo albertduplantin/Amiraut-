@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Map as MapLibreMap, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
+import { Map as MapLibreMap, LngLatBounds, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import type { LatLng } from "@/lib/geo";
 
 export type MapSourceConfig = {
   id: string;
@@ -21,18 +22,27 @@ type GameMapProps = {
   sources: MapSourceConfig[];
   onClick?: (pos: { lat: number; lng: number }) => void;
   className?: string;
+  /** Cadre la vue sur ces points une fois, au premier chargement du style. */
+  fitToPoints?: LatLng[];
+  /** Recentre la carte en douceur sur ce point à chaque changement (ex: sélection d'unité). */
+  flyToPoint?: LatLng | null;
 };
 
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
-export function GameMap({ center, zoom = 5, sources, onClick, className }: GameMapProps) {
+export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint }: GameMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const onClickRef = useRef(onClick);
+  const fitToPointsRef = useRef(fitToPoints);
 
   useEffect(() => {
     onClickRef.current = onClick;
   }, [onClick]);
+
+  useEffect(() => {
+    fitToPointsRef.current = fitToPoints;
+  }, [fitToPoints]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -47,6 +57,13 @@ export function GameMap({ center, zoom = 5, sources, onClick, className }: GameM
 
     map.on("click", (e: MapMouseEvent) => {
       onClickRef.current?.({ lat: e.lngLat.lat, lng: e.lngLat.lng });
+    });
+
+    map.once("load", () => {
+      const points = fitToPointsRef.current;
+      if (points && points.length > 0) {
+        fitMapToPoints(map, points);
+      }
     });
 
     return () => {
@@ -68,7 +85,24 @@ export function GameMap({ center, zoom = 5, sources, onClick, className }: GameM
     else map.once("load", apply);
   }, [sources]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !flyToPoint) return;
+
+    const fly = () => map.flyTo({ center: [flyToPoint.lng, flyToPoint.lat], zoom: Math.max(map.getZoom(), 6), speed: 1.4 });
+    if (map.isStyleLoaded()) fly();
+    else map.once("load", fly);
+  }, [flyToPoint]);
+
   return <div ref={containerRef} className={className ?? "h-full w-full"} />;
+}
+
+function fitMapToPoints(map: MapLibreMap, points: LatLng[]) {
+  const bounds = points.reduce(
+    (acc, p) => acc.extend([p.lng, p.lat]),
+    new LngLatBounds([points[0].lng, points[0].lat], [points[0].lng, points[0].lat])
+  );
+  map.fitBounds(bounds, { padding: 60, maxZoom: 8, duration: 0 });
 }
 
 function applyLayer(map: MapLibreMap, config: MapSourceConfig) {

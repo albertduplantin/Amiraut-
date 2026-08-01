@@ -115,7 +115,13 @@ export function ReviewClient(props: {
 
       <div className="flex flex-1 overflow-hidden">
         <main className="relative flex-1">
-          <GameMap center={props.mapCenter} zoom={props.mapZoom} sources={sources} className="h-full w-full" />
+          <GameMap
+            center={props.mapCenter}
+            zoom={props.mapZoom}
+            sources={sources}
+            fitToPoints={units.map((u) => ({ lat: u.currentLat, lng: u.currentLng }))}
+            className="h-full w-full"
+          />
         </main>
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-800 p-4">

@@ -31,7 +31,18 @@ export default async function OrdersPage() {
       },
     },
     include: {
-      unitClass: { select: { name: true, maxSpeedKnots: true, iconKey: true, category: true } },
+      unitClass: {
+        select: {
+          name: true,
+          nation: true,
+          maxSpeedKnots: true,
+          iconKey: true,
+          category: true,
+          sensors: true,
+          detectability: true,
+          historicalNote: true,
+        },
+      },
       fleet: { select: { name: true } },
       orders: {
         where: { turnId: turn.id },
@@ -73,10 +84,16 @@ export default async function OrdersPage() {
         id: u.id,
         name: u.name,
         pennant: u.pennant,
+        fleetId: u.fleetId,
         fleetName: u.fleet.name,
         className: u.unitClass.name,
+        nation: u.unitClass.nation,
         category: u.unitClass.category,
         maxSpeedKnots: u.unitClass.maxSpeedKnots,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        sensors: u.unitClass.sensors as any,
+        detectability: u.unitClass.detectability,
+        historicalNote: u.historicalNote ?? u.unitClass.historicalNote,
         currentLat: u.currentLat,
         currentLng: u.currentLng,
         existingOrder:

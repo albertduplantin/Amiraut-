@@ -86,6 +86,8 @@ async function main() {
       ],
       detectability: 1.4,
       iconKey: "battleship",
+      historicalNote:
+        "Cuirassé rapide entré en service en 1940-41, armé de 10 canons de 356mm (calibre réduit imposé par les traités navals) mais doté d'un radar performant. Pilier de la Home Fleet en 1943.",
     },
   });
 
@@ -101,6 +103,8 @@ async function main() {
       ],
       detectability: 1.1,
       iconKey: "cruiser",
+      historicalNote:
+        "Croiseurs légers armés de canons de 152mm, rapides et bien équipés en radar de veille — le radar de HMS Belfast fut le premier à détecter le Scharnhorst lors de la bataille du cap Nord.",
     },
   });
 
@@ -116,6 +120,8 @@ async function main() {
       ],
       detectability: 1.15,
       iconKey: "cruiser",
+      historicalNote:
+        "Croiseur lourd armé de canons de 203mm, plus puissant mais un peu plus lent que les croiseurs légers. HMS Norfolk échangea les premiers coups de canon avec le Scharnhorst et fut endommagé lors de la bataille du cap Nord.",
     },
   });
 
@@ -132,6 +138,8 @@ async function main() {
       ],
       detectability: 0.9,
       iconKey: "destroyer",
+      historicalNote:
+        "Destroyers rapides et maniables des flottilles de la Home Fleet, chargés d'écranter les gros bâtiments et de mener des attaques à la torpille. Leurs torpilles ont contribué à ralentir le Scharnhorst avant l'engagement final.",
     },
   });
 
@@ -147,6 +155,8 @@ async function main() {
       ],
       detectability: 0.8,
       iconKey: "escort",
+      historicalNote:
+        "Destroyers de la Première Guerre mondiale et corvettes/dragueurs de mines convertis à l'escorte rapprochée des convois : moins rapides, mais essentiels contre la menace sous-marine au plus près des cargos.",
     },
   });
 
@@ -159,6 +169,8 @@ async function main() {
       sensors: [{ type: "VISUAL", rangeNm: 8 }],
       detectability: 1.6,
       iconKey: "merchant",
+      historicalNote:
+        "Cargos marchands transportant le matériel de guerre prêté-bail vers l'URSS — non armés ou à peine, lents et très détectables. Toute l'opération existe pour les amener à bon port.",
     },
   });
 
@@ -174,6 +186,8 @@ async function main() {
       ],
       detectability: 1.3,
       iconKey: "battleship_de",
+      historicalNote:
+        "Cuirassé rapide (officiellement classé Schlachtschiff) armé de 9 canons de 283mm, plus rapide mais moins bien protégé et moins bien équipé en radar que son adversaire britannique. Coulé le 26 décembre 1943 lors de la bataille du cap Nord après un combat acharné ; sur environ 1968 hommes d'équipage, seuls 36 survécurent.",
     },
   });
 
@@ -189,6 +203,8 @@ async function main() {
       ],
       detectability: 0.9,
       iconKey: "destroyer_de",
+      historicalNote:
+        "Grands destroyers armés de canons de 150mm, plus puissants que leurs homologues alliés mais réputés peu marins par gros temps. Lors de l'opération Ostfront, l'amiral Bey les renvoya vers l'Altenfjord avant l'engagement final en raison du mauvais temps : ils ne combattirent pas aux côtés du Scharnhorst.",
     },
   });
 
@@ -204,6 +220,8 @@ async function main() {
       ],
       detectability: 0.5,
       iconKey: "uboat",
+      historicalNote:
+        "Sous-marin standard de la Kriegsmarine, déployé en lignes de patrouille (ici « Eisenbart ») pour repérer les convois arctiques et alerter le commandement. Très discret en plongée, mais doit faire surface pour se déplacer vite ou transmettre un rapport.",
     },
   });
 
@@ -232,13 +250,27 @@ async function main() {
   await createUnit(scenario.id, fleetCruisers.id, classHeavyCruiser.id, "HMS Norfolk", AKUREYRI);
   await createUnit(scenario.id, fleetCruisers.id, classLightCruiser.id, "HMS Sheffield", AKUREYRI);
 
-  await createUnit(scenario.id, fleetCoveringForce.id, classBattleshipKGV.id, "HMS Duke of York", AKUREYRI);
+  await createUnit(
+    scenario.id,
+    fleetCoveringForce.id,
+    classBattleshipKGV.id,
+    "HMS Duke of York",
+    AKUREYRI,
+    "Navire amiral de la Home Fleet (amiral Bruce Fraser) lors de l'opération. C'est elle qui porta le coup de grâce au Scharnhorst à courte distance dans la soirée du 26 décembre 1943."
+  );
   await createUnit(scenario.id, fleetCoveringForce.id, classLightCruiser.id, "HMS Jamaica", AKUREYRI);
   for (const name of ["HMS Saumarez", "HMS Savage", "HMS Scorpion", "HNoMS Stord"]) {
     await createUnit(scenario.id, fleetCoveringForce.id, classFleetDestroyer.id, name, AKUREYRI);
   }
 
-  await createUnit(scenario.id, fleetScharnhorst.id, classScharnhorst.id, "Scharnhorst", ALTENFJORD);
+  await createUnit(
+    scenario.id,
+    fleetScharnhorst.id,
+    classScharnhorst.id,
+    "Scharnhorst",
+    ALTENFJORD,
+    "Appareille de l'Altenfjord le 25 décembre 1943 sous le commandement du contre-amiral Erich Bey pour l'opération Ostfront, avec l'intention d'intercepter le convoi JW55B."
+  );
   for (const name of ["Z29", "Z30", "Z33", "Z34", "Z38"]) {
     await createUnit(scenario.id, fleetScharnhorst.id, classNarvikDestroyer.id, name, ALTENFJORD);
   }
@@ -307,7 +339,8 @@ async function createUnit(
   fleetId: string,
   unitClassId: string,
   name: string,
-  position: { lat: number; lng: number }
+  position: { lat: number; lng: number },
+  historicalNote?: string
 ) {
   return prisma.unit.create({
     data: {
@@ -318,6 +351,7 @@ async function createUnit(
       currentLat: position.lat,
       currentLng: position.lng,
       status: "ACTIVE",
+      historicalNote,
     },
   });
 }

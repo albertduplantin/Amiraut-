@@ -32,3 +32,15 @@ export async function assertCanOrderUnit(session: Session & { teamId: string }, 
     throw new AccessDeniedError("Cette flotte n'est pas dans votre périmètre.");
   }
 }
+
+/** Vérifie que le joueur en session a le droit de donner des ordres à toute cette flotte. */
+export async function assertCanOrderFleet(session: Session & { teamId: string }, fleetId: string) {
+  const fleet = await prisma.fleet.findUnique({ where: { id: fleetId }, select: { teamId: true } });
+  if (!fleet) throw new AccessDeniedError("Flotte introuvable.");
+  if (fleet.teamId !== session.teamId) {
+    throw new AccessDeniedError("Cette flotte n'appartient pas à votre équipe.");
+  }
+  if (session.fleetIds && !session.fleetIds.includes(fleetId)) {
+    throw new AccessDeniedError("Cette flotte n'est pas dans votre périmètre.");
+  }
+}
