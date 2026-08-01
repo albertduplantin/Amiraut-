@@ -41,6 +41,7 @@ export default async function OrdersPage() {
           sensors: true,
           detectability: true,
           historicalNote: true,
+          profileImageUrl: true,
         },
       },
       fleet: { select: { name: true } },
@@ -94,6 +95,7 @@ export default async function OrdersPage() {
         sensors: u.unitClass.sensors as any,
         detectability: u.unitClass.detectability,
         historicalNote: u.historicalNote ?? u.unitClass.historicalNote,
+        profileImageUrl: u.unitClass.profileImageUrl,
         currentLat: u.currentLat,
         currentLng: u.currentLng,
         existingOrder:

@@ -26,6 +26,7 @@ type UnitDto = {
   sensors: SensorSpec[];
   detectability: number;
   historicalNote: string | null;
+  profileImageUrl: string | null;
   currentLat: number;
   currentLng: number;
   existingOrder: { speedKnots: number; waypoints: LatLng[] } | null;
@@ -504,6 +505,14 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
   return (
     <div className="space-y-2 border-t border-slate-800 pt-4">
       <h3 className="text-sm font-semibold text-slate-400">Caractéristiques</h3>
+      {unit.profileImageUrl && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={unit.profileImageUrl}
+          alt={`Silhouette de ${unit.className}`}
+          className="max-h-40 w-full rounded-md border border-slate-800 bg-white object-contain p-1"
+        />
+      )}
       <table className="w-full text-xs">
         <tbody>
           <tr>

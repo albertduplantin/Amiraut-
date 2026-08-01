@@ -30,11 +30,30 @@ type GameMapProps = {
 
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
+/**
+ * `map.isStyleLoaded()`/l'événement `load` attendent le rendu complet des
+ * tuiles visibles, ce qui peut ne jamais se produire dans certains contextes
+ * de rendu (GPU logiciel/headless). `style.load` (déclenché dès que le style
+ * et ses sources/couches de base sont enregistrés) est le signal fiable dont
+ * on a besoin pour pouvoir ajouter nos propres sources/couches par-dessus.
+ */
+function onceStyleReady(map: MapLibreMap, callback: () => void): () => void {
+  const style = map.getStyle();
+  if (style && style.layers && style.layers.length > 0) {
+    callback();
+    return () => {};
+  }
+  const handler = () => callback();
+  map.once("style.load", handler);
+  return () => map.off("style.load", handler);
+}
+
 export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint }: GameMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const onClickRef = useRef(onClick);
   const fitToPointsRef = useRef(fitToPoints);
+  const isFirstFlyRef = useRef(true);
 
   useEffect(() => {
     onClickRef.current = onClick;
@@ -59,7 +78,7 @@ export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPo
       onClickRef.current?.({ lat: e.lngLat.lat, lng: e.lngLat.lng });
     });
 
-    map.once("load", () => {
+    const cancel = onceStyleReady(map, () => {
       const points = fitToPointsRef.current;
       if (points && points.length > 0) {
         fitMapToPoints(map, points);
@@ -67,6 +86,7 @@ export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPo
     });
 
     return () => {
+      cancel();
       map.remove();
       mapRef.current = null;
     };
@@ -76,22 +96,23 @@ export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPo
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-
-    const apply = () => {
+    return onceStyleReady(map, () => {
       for (const source of sources) applyLayer(map, source);
-    };
-
-    if (map.isStyleLoaded()) apply();
-    else map.once("load", apply);
+    });
   }, [sources]);
 
   useEffect(() => {
+    // Ne pas voler vers la sélection par défaut au montage : ça écraserait fitToPoints.
+    // Seuls les changements de sélection ultérieurs déclenchent le survol.
+    if (isFirstFlyRef.current) {
+      isFirstFlyRef.current = false;
+      return;
+    }
     const map = mapRef.current;
     if (!map || !flyToPoint) return;
-
-    const fly = () => map.flyTo({ center: [flyToPoint.lng, flyToPoint.lat], zoom: Math.max(map.getZoom(), 6), speed: 1.4 });
-    if (map.isStyleLoaded()) fly();
-    else map.once("load", fly);
+    return onceStyleReady(map, () => {
+      map.flyTo({ center: [flyToPoint.lng, flyToPoint.lat], zoom: Math.max(map.getZoom(), 6), speed: 1.4 });
+    });
   }, [flyToPoint]);
 
   return <div ref={containerRef} className={className ?? "h-full w-full"} />;

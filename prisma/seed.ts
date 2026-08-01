@@ -86,6 +86,7 @@ async function main() {
       ],
       detectability: 1.4,
       iconKey: "battleship",
+      profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-201/img/oni201-8.PNG",
       historicalNote:
         "Cuirassé rapide entré en service en 1940-41, armé de 10 canons de 356mm (calibre réduit imposé par les traités navals) mais doté d'un radar performant. Pilier de la Home Fleet en 1943.",
     },
@@ -103,6 +104,7 @@ async function main() {
       ],
       detectability: 1.1,
       iconKey: "cruiser",
+      profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-201/img/oni201-46.PNG",
       historicalNote:
         "Croiseurs légers armés de canons de 152mm, rapides et bien équipés en radar de veille — le radar de HMS Belfast fut le premier à détecter le Scharnhorst lors de la bataille du cap Nord.",
     },
@@ -120,6 +122,7 @@ async function main() {
       ],
       detectability: 1.15,
       iconKey: "cruiser",
+      profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-201/img/oni201-36.PNG",
       historicalNote:
         "Croiseur lourd armé de canons de 203mm, plus puissant mais un peu plus lent que les croiseurs légers. HMS Norfolk échangea les premiers coups de canon avec le Scharnhorst et fut endommagé lors de la bataille du cap Nord.",
     },
@@ -155,6 +158,8 @@ async function main() {
       ],
       detectability: 0.8,
       iconKey: "escort",
+      profileImageUrl:
+        "https://ia800801.us.archive.org/BookReader/BookReaderImages.php?zip=/26/items/FM30-51/FM30-51_jp2.zip&file=FM30-51_jp2/FM30-51_0166.jp2&id=FM30-51&scale=2&rotate=0",
       historicalNote:
         "Destroyers de la Première Guerre mondiale et corvettes/dragueurs de mines convertis à l'escorte rapprochée des convois : moins rapides, mais essentiels contre la menace sous-marine au plus près des cargos.",
     },
@@ -186,6 +191,7 @@ async function main() {
       ],
       detectability: 1.3,
       iconKey: "battleship_de",
+      profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-204/img/ONI-204-26.JPG",
       historicalNote:
         "Cuirassé rapide (officiellement classé Schlachtschiff) armé de 9 canons de 283mm, plus rapide mais moins bien protégé et moins bien équipé en radar que son adversaire britannique. Coulé le 26 décembre 1943 lors de la bataille du cap Nord après un combat acharné ; sur environ 1968 hommes d'équipage, seuls 36 survécurent.",
     },
@@ -203,6 +209,7 @@ async function main() {
       ],
       detectability: 0.9,
       iconKey: "destroyer_de",
+      profileImageUrl: "http://www.ibiblio.org/hyperwar/USN/ref/ONI/ONI-204/img/ONI-204-98.JPG",
       historicalNote:
         "Grands destroyers armés de canons de 150mm, plus puissants que leurs homologues alliés mais réputés peu marins par gros temps. Lors de l'opération Ostfront, l'amiral Bey les renvoya vers l'Altenfjord avant l'engagement final en raison du mauvais temps : ils ne combattirent pas aux côtés du Scharnhorst.",
     },
@@ -220,6 +227,7 @@ async function main() {
       ],
       detectability: 0.5,
       iconKey: "uboat",
+      profileImageUrl: "https://upload.wikimedia.org/wikipedia/commons/a/a8/VIIC_uboat_line.svg",
       historicalNote:
         "Sous-marin standard de la Kriegsmarine, déployé en lignes de patrouille (ici « Eisenbart ») pour repérer les convois arctiques et alerter le commandement. Très discret en plongée, mais doit faire surface pour se déplacer vite ou transmettre un rapport.",
     },
