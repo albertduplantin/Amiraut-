@@ -1,0 +1,293 @@
+// Amirauté en ligne — schéma V1 (mouvement + détection, sans combat)
+// Voir C:\Users\topinambour\.claude\plans\robust-mapping-summit.md pour le contexte complet.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Scénario / équipes / flottes ──────────────────────────
+
+model Scenario {
+  id                 String         @id @default(cuid())
+  name               String
+  description        String?
+  mapCenterLat       Float
+  mapCenterLng       Float
+  mapDefaultZoom     Float          @default(5)
+  defaultTurnMinutes Int
+  status             ScenarioStatus @default(DRAFT)
+  createdAt          DateTime       @default(now())
+
+  teams        Team[]
+  units        Unit[]
+  turns        Turn[]
+  participants Participant[]
+}
+
+enum ScenarioStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+}
+
+model Team {
+  id         String   @id @default(cuid())
+  scenarioId String
+  scenario   Scenario @relation(fields: [scenarioId], references: [id])
+  name       String
+  colorHex   String   @default("#3388ff")
+
+  fleets       Fleet[]
+  participants Participant[]
+  reports      Report[]
+
+  @@unique([scenarioId, name])
+}
+
+model Fleet {
+  id     String @id @default(cuid())
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id])
+  name   String
+
+  units        Unit[]
+  scopedTokens ParticipantFleetScope[]
+}
+
+// ── Bibliothèque d'unités (gabarits réutilisables) ────────
+
+model UnitClass {
+  id               String       @id @default(cuid())
+  name             String
+  nation           String
+  category         UnitCategory
+  maxSpeedKnots    Float
+  sensors          Json // [{ type: "RADAR", rangeNm: 20 }, ...]
+  detectability    Float        @default(1)
+  iconKey          String
+  enduranceMinutes Int? // réservé phase 2 (autonomie/carburant), inutilisé en V1
+  weaponSystems    Json? // réservé phase 2 (armement), inutilisé en V1
+
+  units Unit[]
+}
+
+enum UnitCategory {
+  SURFACE_SHIP
+  SUBMARINE
+  AIRCRAFT
+}
+
+// ── Instances d'unités dans un scénario ───────────────────
+
+model Unit {
+  id                String     @id @default(cuid())
+  scenarioId        String
+  scenario          Scenario   @relation(fields: [scenarioId], references: [id])
+  fleetId           String
+  fleet             Fleet      @relation(fields: [fleetId], references: [id])
+  unitClassId       String
+  unitClass         UnitClass  @relation(fields: [unitClassId], references: [id])
+  name              String
+  pennant           String?
+  status            UnitStatus @default(ACTIVE) // DAMAGED/SUNK réservés phase 2 (moteur de combat)
+  healthMax         Int? // réservé phase 2
+  healthCurrent     Int? // réservé phase 2
+  currentLat        Float
+  currentLng        Float
+  currentHeadingDeg Float?
+  lastResolvedTurn  Int        @default(0)
+
+  orders       UnitOrder[]
+  detectedAs   DetectionEvent[] @relation("TargetUnit")
+  observedFrom DetectionEvent[] @relation("ObserverUnit")
+
+  @@index([scenarioId, fleetId])
+}
+
+enum UnitStatus {
+  ACTIVE
+  DAMAGED
+  SUNK
+  WITHDRAWN
+}
+
+// ── Accès (pas de comptes — token d'invitation opaque) ────
+
+model Participant {
+  id                   String          @id @default(cuid())
+  scenarioId           String
+  scenario             Scenario        @relation(fields: [scenarioId], references: [id])
+  token                String          @unique @default(cuid())
+  role                 ParticipantRole
+  teamId               String?
+  team                 Team?           @relation(fields: [teamId], references: [id])
+  scopeAllFleetsInTeam Boolean         @default(true)
+  displayName          String
+  lastSeenAt           DateTime?
+  createdAt            DateTime        @default(now())
+
+  fleetScopes     ParticipantFleetScope[]
+  ordersSubmitted UnitOrder[]
+
+  @@index([scenarioId])
+}
+
+enum ParticipantRole {
+  ARBITER
+  PLAYER
+}
+
+model ParticipantFleetScope {
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id])
+  fleetId       String
+  fleet         Fleet       @relation(fields: [fleetId], references: [id])
+
+  @@id([participantId, fleetId])
+}
+
+// ── Tours / météo ──────────────────────────────────────────
+
+model Turn {
+  id              String     @id @default(cuid())
+  scenarioId      String
+  scenario        Scenario   @relation(fields: [scenarioId], references: [id])
+  number          Int
+  status          TurnStatus @default(PENDING_ORDERS)
+  gameStartAt     DateTime
+  durationMinutes Int
+  weatherId       String?    @unique
+  weather         Weather?   @relation(fields: [weatherId], references: [id])
+  resolvedAt      DateTime?
+  publishedAt     DateTime?
+
+  orders          UnitOrder[]
+  detectionEvents DetectionEvent[]
+  reports         Report[]
+
+  @@unique([scenarioId, number])
+}
+
+enum TurnStatus {
+  PENDING_ORDERS
+  RESOLVING
+  PENDING_ARBITER_REVIEW
+  PUBLISHED
+}
+
+model Weather {
+  id            String        @id @default(cuid())
+  visibilityNm  Float
+  seaState      Int
+  daylight      Daylight
+  precipitation Precipitation @default(NONE)
+  windKnots     Float?
+  notes         String?
+
+  turn Turn?
+}
+
+enum Daylight {
+  DAY
+  TWILIGHT
+  NIGHT
+  POLAR_NIGHT
+  POLAR_DAY
+}
+
+enum Precipitation {
+  NONE
+  RAIN
+  SNOW
+  FOG
+}
+
+// ── Ordres / trajets ────────────────────────────────────────
+
+model UnitOrder {
+  id            String      @id @default(cuid())
+  turnId        String
+  turn          Turn        @relation(fields: [turnId], references: [id])
+  unitId        String
+  unit          Unit        @relation(fields: [unitId], references: [id])
+  submittedById String
+  submittedBy   Participant @relation(fields: [submittedById], references: [id])
+  speedKnots    Float
+  submittedAt   DateTime    @default(now())
+
+  waypoints Waypoint[]
+
+  @@unique([turnId, unitId])
+}
+
+model Waypoint {
+  id       String    @id @default(cuid())
+  orderId  String
+  order    UnitOrder @relation(fields: [orderId], references: [id])
+  sequence Int
+  lat      Float
+  lng      Float
+
+  @@unique([orderId, sequence])
+}
+
+// ── Détection / revue arbitre ───────────────────────────────
+
+model DetectionEvent {
+  id                 String        @id @default(cuid())
+  turnId             String
+  turn               Turn          @relation(fields: [turnId], references: [id])
+  observerUnitId     String
+  observerUnit       Unit          @relation("ObserverUnit", fields: [observerUnitId], references: [id])
+  targetUnitId       String
+  targetUnit         Unit          @relation("TargetUnit", fields: [targetUnitId], references: [id])
+  method             SensorType
+  cpaDistanceNm      Float
+  cpaMinutesIntoTurn Float
+  observerLatAtCpa   Float
+  observerLngAtCpa   Float
+  targetLatAtCpa     Float
+  targetLngAtCpa     Float
+  systemProposed     Boolean       @default(true)
+  arbiterStatus      ArbiterStatus @default(PROPOSED)
+  arbiterNote        String?
+  decidedById        String?
+
+  @@unique([turnId, observerUnitId, targetUnitId])
+}
+
+enum SensorType {
+  RADAR
+  VISUAL
+  HYDROPHONE
+  SONAR
+  OTHER
+}
+
+enum ArbiterStatus {
+  PROPOSED
+  CONFIRMED
+  REJECTED
+  ADDED_MANUALLY
+}
+
+// ── Rapport publié, filtré par équipe ────────────────────────
+
+model Report {
+  id          String   @id @default(cuid())
+  turnId      String
+  turn        Turn     @relation(fields: [turnId], references: [id])
+  teamId      String
+  team        Team     @relation(fields: [teamId], references: [id])
+  publishedAt DateTime @default(now())
+  ownUnits    Json
+  contacts    Json
+  narrative   String?
+
+  @@unique([turnId, teamId])
+}
