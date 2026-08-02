@@ -1,9 +1,10 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { Map as MapLibreMap, LngLatBounds, setWorkerUrl, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
+import { Map as MapLibreMap, Marker, LngLatBounds, setWorkerUrl, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { LatLng } from "@/lib/geo";
+import { buildSilhouetteElement, type SilhouetteKey } from "@/lib/shipSilhouettes";
 
 export type MapSourceConfig = {
   id: string;
@@ -25,6 +26,16 @@ export type GameMapHandle = {
   isWaterSegment: (a: LatLng, b: LatLng, steps?: number) => boolean;
 };
 
+export type ShipMarkerConfig = {
+  id: string;
+  lat: number;
+  lng: number;
+  headingDeg: number;
+  color: string;
+  silhouette: SilhouetteKey;
+  label?: string;
+};
+
 type GameMapProps = {
   center: { lat: number; lng: number };
   zoom?: number;
@@ -35,6 +46,14 @@ type GameMapProps = {
   fitToPoints?: LatLng[];
   /** Recentre la carte en douceur sur ce point à chaque changement (ex: sélection d'unité). */
   flyToPoint?: LatLng | null;
+  /**
+   * Silhouettes vues de dessus, affichées à la place des points simples une
+   * fois zoomé suffisamment (voir `shipMarkersMinZoom`). Orientées selon
+   * `headingDeg` (0 = nord).
+   */
+  shipMarkers?: ShipMarkerConfig[];
+  /** Niveau de zoom à partir duquel les silhouettes remplacent les points. */
+  shipMarkersMinZoom?: number;
 };
 
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
@@ -80,7 +99,7 @@ function onceStyleReady(map: MapLibreMap, callback: () => void): () => void {
 }
 
 export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
-  { center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint },
+  { center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint, shipMarkers, shipMarkersMinZoom = 7 },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -89,6 +108,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   const fitToPointsRef = useRef(fitToPoints);
   const isFirstFlyRef = useRef(true);
   const lastFlownToRef = useRef<LatLng | null>(null);
+  const shipMarkersRef = useRef(new Map<string, { marker: Marker; el: HTMLDivElement; signature: string }>());
 
   useEffect(() => {
     onClickRef.current = onClick;
@@ -97,6 +117,12 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   useEffect(() => {
     fitToPointsRef.current = fitToPoints;
   }, [fitToPoints]);
+
+  const shipMarkersMinZoomRef = useRef(shipMarkersMinZoom);
+  useEffect(() => {
+    shipMarkersMinZoomRef.current = shipMarkersMinZoom;
+    applyShipMarkerVisibility(mapRef.current, shipMarkersRef.current, shipMarkersMinZoom);
+  }, [shipMarkersMinZoom]);
 
   useImperativeHandle(
     ref,
@@ -126,6 +152,10 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
 
   useEffect(() => {
     if (!containerRef.current) return;
+    // Référence stable (jamais réassignée, seulement mutée) : la capturer ici
+    // évite l'avertissement react-hooks sur la lecture de `.current` dans le
+    // nettoyage, tout en reflétant correctement son contenu au démontage.
+    const markers = shipMarkersRef.current;
 
     // Turbopack ne résout pas le chunk worker de maplibre-gl automatiquement ;
     // sans ceci, aucune couche vectorielle (tuiles de base ET nos propres
@@ -144,6 +174,10 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
       onClickRef.current?.({ lat: e.lngLat.lat, lng: e.lngLat.lng });
     });
 
+    map.on("zoom", () => {
+      applyShipMarkerVisibility(map, shipMarkersRef.current, shipMarkersMinZoomRef.current);
+    });
+
     const cancel = onceStyleReady(map, () => {
       const points = fitToPointsRef.current;
       if (points && points.length > 0) {
@@ -153,6 +187,8 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
 
     return () => {
       cancel();
+      for (const { marker } of markers.values()) marker.remove();
+      markers.clear();
       map.remove();
       mapRef.current = null;
     };
@@ -166,6 +202,48 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
       for (const source of sources) applyLayer(map, source);
     });
   }, [sources]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const existing = shipMarkersRef.current;
+    const incoming = shipMarkers ?? [];
+    const incomingIds = new Set(incoming.map((m) => m.id));
+
+    for (const [id, entry] of existing) {
+      if (!incomingIds.has(id)) {
+        entry.marker.remove();
+        existing.delete(id);
+      }
+    }
+
+    for (const config of incoming) {
+      const signature = `${config.silhouette}|${config.color}|${config.label ?? ""}`;
+      const current = existing.get(config.id);
+      if (!current) {
+        const el = buildSilhouetteElement(config);
+        const marker = new Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" })
+          .setLngLat([config.lng, config.lat])
+          .setRotation(config.headingDeg)
+          .addTo(map);
+        existing.set(config.id, { marker, el, signature });
+        continue;
+      }
+      if (current.signature !== signature) {
+        current.marker.remove();
+        const el = buildSilhouetteElement(config);
+        const marker = new Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" })
+          .setLngLat([config.lng, config.lat])
+          .setRotation(config.headingDeg)
+          .addTo(map);
+        existing.set(config.id, { marker, el, signature });
+      } else {
+        current.marker.setLngLat([config.lng, config.lat]).setRotation(config.headingDeg);
+      }
+    }
+
+    applyShipMarkerVisibility(map, existing, shipMarkersMinZoomRef.current);
+  }, [shipMarkers]);
 
   useEffect(() => {
     // Ne pas voler vers la sélection par défaut au montage : ça écraserait fitToPoints.
@@ -197,6 +275,18 @@ function fitMapToPoints(map: MapLibreMap, points: LatLng[]) {
     new LngLatBounds([points[0].lng, points[0].lat], [points[0].lng, points[0].lat])
   );
   map.fitBounds(bounds, { padding: 60, maxZoom: 8, duration: 0 });
+}
+
+function applyShipMarkerVisibility(
+  map: MapLibreMap | null,
+  markers: Map<string, { marker: Marker; el: HTMLDivElement; signature: string }>,
+  minZoom: number
+) {
+  if (!map) return;
+  const visible = map.getZoom() >= minZoom;
+  for (const { el } of markers.values()) {
+    el.style.display = visible ? "flex" : "none";
+  }
 }
 
 function applyLayer(map: MapLibreMap, config: MapSourceConfig) {

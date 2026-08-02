@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, useTransition } from "react";
-import { GameMap, type GameMapHandle, type MapSourceConfig } from "@/components/GameMap";
+import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import {
   budgetCircleFeatureCollection,
   colorForId,
@@ -11,6 +11,7 @@ import {
   pointsFeatureCollection,
 } from "@/lib/mapData";
 import { clampPathToBudget, pathLengthNm, speedBudgetNm, type LatLng } from "@/lib/geo";
+import { classifySilhouette } from "@/lib/shipSilhouettes";
 import { submitOrderAction, submitFleetOrderAction, requestFleetTransferAction, cancelFleetTransferAction } from "./actions";
 
 type SensorSpec = { type: string; rangeNm: number };
@@ -32,6 +33,7 @@ type UnitDto = {
   profileImageUrl: string | null;
   currentLat: number;
   currentLng: number;
+  currentHeadingDeg: number | null;
   existingOrder: { speedKnots: number; waypoints: LatLng[] } | null;
 };
 
@@ -370,10 +372,23 @@ export function OrdersClient(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [units, unitDrafts, mode, selectedUnitId, selectedUnitDraft, unitRemainingNm, selectedFleetId, selectedFleetDraft, fleetRemainingNm]);
 
+  const shipMarkers = useMemo<ShipMarkerConfig[]>(
+    () =>
+      units.map((u) => ({
+        id: u.id,
+        lat: u.currentLat,
+        lng: u.currentLng,
+        headingDeg: u.currentHeadingDeg ?? 0,
+        color: "#38bdf8",
+        silhouette: classifySilhouette(u.category, u.className),
+      })),
+    [units]
+  );
+
   return (
-    <div className="flex h-screen w-full flex-col bg-slate-950 text-slate-100">
+    <div className="chart-room-bg flex h-screen w-full flex-col text-slate-100">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
-        <h1 className="text-lg font-semibold">
+        <h1 className="font-display text-lg tracking-wide text-brass-300">
           Tour {turnNumber} — Ordres de mouvement ({turnDurationMinutes / 60} h)
         </h1>
         <div className="flex gap-4 text-sm text-slate-400">
@@ -398,13 +413,13 @@ export function OrdersClient(props: {
           <div className="mb-3 flex rounded-md border border-slate-800 text-sm">
             <button
               onClick={() => setMode("unit")}
-              className={`flex-1 rounded-l-md px-2 py-1.5 ${mode === "unit" ? "bg-sky-900/60" : "hover:bg-slate-900"}`}
+              className={`flex-1 rounded-l-md px-2 py-1.5 ${mode === "unit" ? "bg-brass-900/50" : "hover:bg-slate-900"}`}
             >
               Par navire
             </button>
             <button
               onClick={() => setMode("fleet")}
-              className={`flex-1 rounded-r-md px-2 py-1.5 ${mode === "fleet" ? "bg-sky-900/60" : "hover:bg-slate-900"}`}
+              className={`flex-1 rounded-r-md px-2 py-1.5 ${mode === "fleet" ? "bg-brass-900/50" : "hover:bg-slate-900"}`}
             >
               Par flotte
             </button>
@@ -432,7 +447,7 @@ export function OrdersClient(props: {
                     <button
                       onClick={() => setSelectedUnitId(unit.id)}
                       className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
-                        unit.id === selectedUnitId ? "bg-sky-900/60 ring-1 ring-sky-600" : "hover:bg-slate-900"
+                        unit.id === selectedUnitId ? "bg-brass-900/50 ring-1 ring-brass-500" : "hover:bg-slate-900"
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -472,7 +487,7 @@ export function OrdersClient(props: {
                     <button
                       onClick={() => setSelectedFleetId(fleet.fleetId)}
                       className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
-                        fleet.fleetId === selectedFleetId ? "bg-sky-900/60 ring-1 ring-sky-600" : "hover:bg-slate-900"
+                        fleet.fleetId === selectedFleetId ? "bg-brass-900/50 ring-1 ring-brass-500" : "hover:bg-slate-900"
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -503,6 +518,7 @@ export function OrdersClient(props: {
             onClick={handleMapClick}
             fitToPoints={allUnitPositions}
             flyToPoint={flyToPoint}
+            shipMarkers={shipMarkers}
             className="h-full w-full"
           />
         </main>
@@ -542,7 +558,7 @@ export function OrdersClient(props: {
                 <button
                   onClick={saveUnitOrderClick}
                   disabled={isPending}
-                  className="flex-1 rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
+                  className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 text-sm font-medium hover:bg-brass-500 disabled:opacity-50"
                 >
                   {isPending ? "Enregistrement…" : "Enregistrer l'ordre"}
                 </button>
@@ -638,7 +654,7 @@ export function OrdersClient(props: {
                 <button
                   onClick={saveFleetOrderClick}
                   disabled={isPending}
-                  className="flex-1 rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
+                  className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 text-sm font-medium hover:bg-brass-500 disabled:opacity-50"
                 >
                   {isPending ? "Enregistrement…" : fleetAllSaved ? "Ordre enregistré ✓" : "Enregistrer l'ordre de flotte"}
                 </button>

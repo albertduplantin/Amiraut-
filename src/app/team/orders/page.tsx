@@ -107,6 +107,7 @@ export default async function OrdersPage() {
         profileImageUrl: u.unitClass.profileImageUrl,
         currentLat: u.currentLat,
         currentLng: u.currentLng,
+        currentHeadingDeg: u.currentHeadingDeg,
         existingOrder:
           u.orders.length > 0
             ? {

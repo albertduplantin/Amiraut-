@@ -28,8 +28,8 @@ export default async function ArbiterDashboardPage() {
   const orderCount = await prisma.unitOrder.count({ where: { turnId: turn.id } });
 
   return (
-    <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
-      <h1 className="text-xl font-semibold">{scenario.name}</h1>
+    <div className="chart-room-bg min-h-screen p-6 text-slate-100">
+      <h1 className="font-display text-xl tracking-wide text-brass-300">{scenario.name}</h1>
       <p className="mt-1 text-sm text-slate-400">Tour {turn.number} — statut : {formatStatus(turn.status)}</p>
 
       <Link
@@ -40,8 +40,8 @@ export default async function ArbiterDashboardPage() {
       </Link>
 
       {turn.status === "PENDING_ORDERS" && orderCount === 0 && (
-        <section className="mt-6 max-w-lg rounded-md border border-slate-800 bg-slate-900 p-4">
-          <h2 className="mb-3 font-medium">
+        <section className="panel-brass mt-6 max-w-lg rounded-md bg-slate-900 p-4">
+          <h2 className="font-display mb-3 tracking-wide text-brass-300">
             {turn.weatherId ? `Modifier les paramètres du tour ${turn.number}` : `Définir la météo du tour ${turn.number}`}
           </h2>
           {turn.weatherId && (

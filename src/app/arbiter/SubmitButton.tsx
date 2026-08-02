@@ -8,7 +8,7 @@ export function SubmitButton({ pendingLabel, idleLabel }: { pendingLabel: string
     <button
       type="submit"
       disabled={pending}
-      className="rounded-md bg-sky-600 px-4 py-1.5 font-medium hover:bg-sky-500 disabled:opacity-60"
+      className="rounded-md bg-brass-600 px-4 py-1.5 font-medium hover:bg-brass-500 disabled:opacity-60"
     >
       {pending ? pendingLabel : idleLabel}
     </button>

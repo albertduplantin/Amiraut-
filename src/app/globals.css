@@ -10,6 +10,17 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-display);
+
+  /* Laiton d'instruments de bord — remplace l'accent bleu vif par défaut
+     sur les boutons/surlignages, pour une ambiance passerelle années 40. */
+  --color-brass-100: #f3e6c4;
+  --color-brass-300: #e2c675;
+  --color-brass-400: #cfa94a;
+  --color-brass-500: #b28d33;
+  --color-brass-600: #8f6f26;
+  --color-brass-700: #705620;
+  --color-brass-900: #3d2e13;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -23,4 +34,48 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-display), "Courier New", monospace;
+  letter-spacing: 0.04em;
+}
+
+/* Fond "salle des cartes" : vignette sombre + grain léger, pour les écrans
+   plein cadre (tableaux de bord, revue arbitre, ordres). */
+.chart-room-bg {
+  background-color: #0a0f1a;
+  background-image:
+    radial-gradient(ellipse at 50% -10%, rgba(178, 141, 51, 0.08), transparent 60%),
+    radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+/* Panneau "instrument riveté" : double liseré laiton + point à chaque coin. */
+.panel-brass {
+  position: relative;
+  border: 1px solid rgba(178, 141, 51, 0.45);
+  outline: 1px solid rgba(178, 141, 51, 0.15);
+  outline-offset: 3px;
+}
+
+.panel-brass::before,
+.panel-brass::after {
+  content: "";
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: rgba(226, 198, 117, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+.panel-brass::before {
+  top: 5px;
+  left: 5px;
+}
+
+.panel-brass::after {
+  bottom: 5px;
+  right: 5px;
 }

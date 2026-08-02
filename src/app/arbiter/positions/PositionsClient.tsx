@@ -1,20 +1,23 @@
 "use client";
 
 import { useMemo, useRef, useState, useTransition } from "react";
-import { GameMap, type GameMapHandle, type MapSourceConfig } from "@/components/GameMap";
+import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { pointsFeatureCollection } from "@/lib/mapData";
 import type { LatLng } from "@/lib/geo";
+import { classifySilhouette } from "@/lib/shipSilhouettes";
 import { updateUnitPositionAction } from "../actions";
 
 type UnitDto = {
   id: string;
   name: string;
   className: string;
+  category: string;
   teamName: string;
   teamColor: string;
   fleetName: string;
   currentLat: number;
   currentLng: number;
+  currentHeadingDeg: number | null;
 };
 
 export function PositionsClient(props: { mapCenter: LatLng; mapZoom: number; units: UnitDto[] }) {
@@ -108,10 +111,23 @@ export function PositionsClient(props: { mapCenter: LatLng; mapZoom: number; uni
     return list;
   }, [units, selectedUnit, draftPosition]);
 
+  const shipMarkers = useMemo<ShipMarkerConfig[]>(
+    () =>
+      units.map((u) => ({
+        id: u.id,
+        lat: u.currentLat,
+        lng: u.currentLng,
+        headingDeg: u.currentHeadingDeg ?? 0,
+        color: u.teamColor,
+        silhouette: classifySilhouette(u.category, u.className),
+      })),
+    [units]
+  );
+
   return (
-    <div className="flex h-screen w-full flex-col bg-slate-950 text-slate-100">
+    <div className="chart-room-bg flex h-screen w-full flex-col text-slate-100">
       <header className="border-b border-slate-800 px-4 py-2">
-        <h1 className="text-lg font-semibold">Repositionner des unités</h1>
+        <h1 className="font-display text-lg tracking-wide text-brass-300">Repositionner des unités</h1>
         <p className="text-xs text-slate-500">
           Sélectionne une unité, clique sa nouvelle position sur la carte, puis enregistre. Utile pour corriger une
           position de départ mal placée.
@@ -129,7 +145,7 @@ export function PositionsClient(props: { mapCenter: LatLng; mapZoom: number; uni
                     <button
                       onClick={() => selectUnit(unit.id)}
                       className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
-                        unit.id === selectedUnitId ? "bg-sky-900/60 ring-1 ring-sky-600" : "hover:bg-slate-900"
+                        unit.id === selectedUnitId ? "bg-brass-900/50 ring-1 ring-brass-500" : "hover:bg-slate-900"
                       }`}
                     >
                       <div className="font-medium">{unit.name}</div>
@@ -152,6 +168,7 @@ export function PositionsClient(props: { mapCenter: LatLng; mapZoom: number; uni
             sources={sources}
             onClick={handleMapClick}
             fitToPoints={allUnitPositions}
+            shipMarkers={shipMarkers}
             className="h-full w-full"
           />
         </main>
@@ -180,7 +197,7 @@ export function PositionsClient(props: { mapCenter: LatLng; mapZoom: number; uni
               <button
                 onClick={save}
                 disabled={!draftPosition || isPending}
-                className="w-full rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
+                className="w-full rounded-md bg-brass-600 px-3 py-1.5 text-sm font-medium hover:bg-brass-500 disabled:opacity-50"
               >
                 {isPending ? "Enregistrement…" : "Enregistrer la nouvelle position"}
               </button>

@@ -2,9 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { GameMap, type MapSourceConfig } from "@/components/GameMap";
+import { GameMap, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { multiLineFeatureCollection, pointsFeatureCollection } from "@/lib/mapData";
 import type { LatLng } from "@/lib/geo";
+import { classifySilhouette } from "@/lib/shipSilhouettes";
 import { confirmDetectionAction, rejectDetectionAction, addManualDetectionAction, publishTurnAction } from "../actions";
 
 function PublishButton() {
@@ -52,7 +53,7 @@ function AddManualButton() {
     <button
       type="submit"
       disabled={pending}
-      className="rounded-md bg-sky-700 px-3 py-1.5 text-xs font-medium hover:bg-sky-600 disabled:opacity-60"
+      className="rounded-md bg-brass-700 px-3 py-1.5 text-xs font-medium hover:bg-brass-600 disabled:opacity-60"
     >
       {pending ? "Ajout…" : "Ajouter"}
     </button>
@@ -63,10 +64,12 @@ type UnitDto = {
   id: string;
   name: string;
   className: string;
+  category: string;
   teamId: string;
   teamName: string;
   currentLat: number;
   currentLng: number;
+  currentHeadingDeg: number | null;
   path: LatLng[];
 };
 
@@ -152,12 +155,24 @@ export function ReviewClient(props: {
     return list;
   }, [units, detections, teams]);
 
+  const shipMarkers = useMemo<ShipMarkerConfig[]>(() => {
+    const colorByTeam = new Map(teams.map((t) => [t.id, t.colorHex]));
+    return units.map((u) => ({
+      id: u.id,
+      lat: u.currentLat,
+      lng: u.currentLng,
+      headingDeg: u.currentHeadingDeg ?? 0,
+      color: colorByTeam.get(u.teamId) ?? "#38bdf8",
+      silhouette: classifySilhouette(u.category, u.className),
+    }));
+  }, [units, teams]);
+
   const [manualObserver, setManualObserver] = useState(units[0]?.id ?? "");
 
   return (
-    <div className="flex h-screen w-full flex-col bg-slate-950 text-slate-100">
+    <div className="chart-room-bg flex h-screen w-full flex-col text-slate-100">
       <header className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
-        <h1 className="text-lg font-semibold">Revue arbitre — Tour {props.turnNumber}</h1>
+        <h1 className="font-display text-lg tracking-wide text-brass-300">Revue arbitre — Tour {props.turnNumber}</h1>
         <form action={publishTurnAction}>
           <input type="hidden" name="turnId" value={props.turnId} />
           <PublishButton />
@@ -171,6 +186,7 @@ export function ReviewClient(props: {
             zoom={props.mapZoom}
             sources={sources}
             fitToPoints={units.map((u) => ({ lat: u.currentLat, lng: u.currentLng }))}
+            shipMarkers={shipMarkers}
             className="h-full w-full"
           />
         </main>

@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { GameMap, type MapSourceConfig } from "@/components/GameMap";
+import { GameMap, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { pointsFeatureCollection } from "@/lib/mapData";
 import type { LatLng } from "@/lib/geo";
+import { classifySilhouette } from "@/lib/shipSilhouettes";
 
 type OwnUnit = {
   id: string;
@@ -67,10 +68,23 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
     [report]
   );
 
+  const shipMarkers = useMemo<ShipMarkerConfig[]>(
+    () =>
+      report.ownUnits.map((u) => ({
+        id: u.id,
+        lat: u.currentLat,
+        lng: u.currentLng,
+        headingDeg: u.currentHeadingDeg ?? 0,
+        color: "#38bdf8",
+        silhouette: classifySilhouette(u.unitClass.category, u.unitClass.name),
+      })),
+    [report]
+  );
+
   return (
-    <div className="flex h-screen w-full flex-col bg-slate-950 text-slate-100">
+    <div className="chart-room-bg flex h-screen w-full flex-col text-slate-100">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
-        <h1 className="text-lg font-semibold">Rapport de renseignement — Tour {report.turnNumber}</h1>
+        <h1 className="font-display text-lg tracking-wide text-brass-300">Rapport de renseignement — Tour {report.turnNumber}</h1>
         <select
           value={turnIndex}
           onChange={(e) => setTurnIndex(Number(e.target.value))}
@@ -91,6 +105,7 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
             zoom={props.mapZoom}
             sources={sources}
             fitToPoints={[...report.ownUnits.map((u) => ({ lat: u.currentLat, lng: u.currentLng })), ...report.contacts.map((c) => ({ lat: c.lat, lng: c.lng }))]}
+            shipMarkers={shipMarkers}
             className="h-full w-full"
           />
         </main>
