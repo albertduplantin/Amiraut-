@@ -36,6 +36,62 @@ const AKUREYRI = { lat: 65.66, lng: -18.05 }; // mouillage dans l'Eyjafjörður,
 const KAFJORD = { lat: 70.0, lng: 23.2 }; // Altafjorden, au large de Kåfjord (mouillage réel du Tirpitz/Scharnhorst)
 const EISENBART_LINE = { lat: 73.2, lng: 25.0 };
 
+// ── Disposition de flotte (espacements historiques) ───────────
+// Convoi : colonnes ~910m, navires d'une même colonne ~460m (cf. recherche
+// sur les instructions de convoi US/UK 1943-44). Écran ASW/ligne de file :
+// ~2000m en arc avant pour un écran autour d'un navire capital, ~450m entre
+// navires d'une ligne de file. Les mêmes constantes et la même géométrie
+// servent au script ponctuel qui a corrigé une partie déjà en cours
+// (positions trop rapprochées, cf. historique) : garder les deux alignés
+// en cas de futur ajustement.
+const CONVOY_COLUMN_SPACING_M = 910;
+const CONVOY_ROW_SPACING_M = 460;
+const LINE_AHEAD_SPACING_M = 450;
+const SCREEN_RADIUS_M = 2000;
+const CLOSE_ESCORT_RADIUS_M = 1500;
+
+function toRad(deg: number) {
+  return (deg * Math.PI) / 180;
+}
+
+/** Déplace `ref` de `alongM` mètres dans la direction `headingDeg`, et `acrossM` mètres à 90° à droite de ce cap. */
+function offsetPoint(ref: { lat: number; lng: number }, alongM: number, acrossM: number, headingDeg: number) {
+  const headingRad = toRad(headingDeg);
+  const acrossRad = toRad(headingDeg + 90);
+  const dNorthM = alongM * Math.cos(headingRad) + acrossM * Math.cos(acrossRad);
+  const dEastM = alongM * Math.sin(headingRad) + acrossM * Math.sin(acrossRad);
+  const dLat = dNorthM / 111320;
+  const dLng = dEastM / (111320 * Math.cos(toRad(ref.lat)));
+  return { lat: ref.lat + dLat, lng: ref.lng + dLng };
+}
+
+function convoyGridPositions(ref: { lat: number; lng: number }, headingDeg: number, count: number) {
+  const numColumns = Math.min(count, 3);
+  const numRows = Math.ceil(count / numColumns);
+  return Array.from({ length: count }, (_, i) => {
+    const col = i % numColumns;
+    const row = Math.floor(i / numColumns);
+    const along = (row - (numRows - 1) / 2) * CONVOY_ROW_SPACING_M;
+    const across = (col - (numColumns - 1) / 2) * CONVOY_COLUMN_SPACING_M;
+    return offsetPoint(ref, along, across, headingDeg);
+  });
+}
+
+function lineAheadPositions(ref: { lat: number; lng: number }, headingDeg: number, count: number) {
+  return Array.from({ length: count }, (_, i) => {
+    const along = (i - (count - 1) / 2) * LINE_AHEAD_SPACING_M;
+    return offsetPoint(ref, along, 0, headingDeg);
+  });
+}
+
+function screenArcPositions(ref: { lat: number; lng: number }, headingDeg: number, count: number, radiusM: number) {
+  const spanDeg = 200;
+  return Array.from({ length: count }, (_, i) => {
+    const relBearing = count > 1 ? -spanDeg / 2 + (i * spanDeg) / (count - 1) : 0;
+    return offsetPoint(ref, radiusM * Math.cos(toRad(relBearing)), radiusM * Math.sin(toRad(relBearing)), headingDeg);
+  });
+}
+
 async function main() {
   await prisma.$transaction([
     prisma.report.deleteMany(),
@@ -98,6 +154,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 28,
+      lengthMeters: 227.1,
       sensors: [
         { type: "RADAR", rangeNm: 20 },
         { type: "VISUAL", rangeNm: 14 },
@@ -126,6 +183,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 32,
+      lengthMeters: 180.3,
       sensors: [
         { type: "RADAR", rangeNm: 18 },
         { type: "VISUAL", rangeNm: 13 },
@@ -153,6 +211,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 30,
+      lengthMeters: 187,
       sensors: [
         { type: "RADAR", rangeNm: 19 },
         { type: "VISUAL", rangeNm: 13 },
@@ -180,6 +239,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 31,
+      lengthMeters: 169.3,
       sensors: [
         { type: "RADAR", rangeNm: 17 },
         { type: "VISUAL", rangeNm: 12 },
@@ -206,6 +266,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 32,
+      lengthMeters: 192.9,
       sensors: [
         { type: "RADAR", rangeNm: 18 },
         { type: "VISUAL", rangeNm: 13 },
@@ -234,6 +295,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 36,
+      lengthMeters: 100.3,
       sensors: [
         { type: "RADAR", rangeNm: 15 },
         { type: "VISUAL", rangeNm: 10 },
@@ -260,6 +322,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 36,
+      lengthMeters: 114.9,
       sensors: [
         { type: "RADAR", rangeNm: 15 },
         { type: "VISUAL", rangeNm: 10 },
@@ -286,6 +349,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 37,
+      lengthMeters: 100.3,
       sensors: [
         { type: "RADAR", rangeNm: 16 },
         { type: "VISUAL", rangeNm: 10 },
@@ -312,6 +376,7 @@ async function main() {
       nation: "Royaume-Uni",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 18,
+      lengthMeters: 95.1,
       sensors: [
         { type: "SONAR", rangeNm: 3 },
         { type: "VISUAL", rangeNm: 9 },
@@ -340,6 +405,7 @@ async function main() {
       nation: "Royaume-Uni / États-Unis",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 10,
+      lengthMeters: 135,
       sensors: [{ type: "VISUAL", rangeNm: 8 }],
       detectability: 1.6,
       iconKey: "merchant",
@@ -356,6 +422,7 @@ async function main() {
       nation: "Allemagne",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 32,
+      lengthMeters: 234.9,
       sensors: [
         { type: "RADAR", rangeNm: 12 },
         { type: "VISUAL", rangeNm: 14 },
@@ -384,6 +451,7 @@ async function main() {
       nation: "Allemagne",
       category: "SURFACE_SHIP",
       maxSpeedKnots: 36,
+      lengthMeters: 127,
       sensors: [
         { type: "RADAR", rangeNm: 8 },
         { type: "VISUAL", rangeNm: 10 },
@@ -411,6 +479,7 @@ async function main() {
       nation: "Allemagne",
       category: "SUBMARINE",
       maxSpeedKnots: 18,
+      lengthMeters: 67.1,
       sensors: [
         { type: "HYDROPHONE", rangeNm: 4 },
         { type: "VISUAL", rangeNm: 6 },
@@ -432,6 +501,15 @@ async function main() {
     },
   });
 
+  // Caps de sortie approximatifs, uniquement pour orienter la disposition
+  // initiale (les joueurs redéfinissent leur route dès le tour 1) :
+  // Loch Ewe vers le nord en sortie de sea loch, Akureyri vers le NNE en
+  // direction du point de ralliement, Kåfjord vers l'ouest-nord-ouest en
+  // sortie de l'Altafjorden.
+  const LOCH_EWE_HEADING = 340;
+  const AKUREYRI_HEADING = 20;
+  const KAFJORD_HEADING = 290;
+
   const merchantNames = [
     "Collis P Huntington",
     "Daniel Willard",
@@ -440,35 +518,45 @@ async function main() {
     "Fort Astoria",
     "Fort Hall",
   ];
-  for (const name of merchantNames) {
-    await createUnit(scenario.id, fleetConvoy.id, classMerchant.id, name, LOCH_EWE);
+  const merchantPositions = convoyGridPositions(LOCH_EWE, LOCH_EWE_HEADING, merchantNames.length);
+  for (let i = 0; i < merchantNames.length; i++) {
+    await createUnit(scenario.id, fleetConvoy.id, classMerchant.id, merchantNames[i], merchantPositions[i]);
   }
 
-  const closeEscortNames = ["HMS Westcott", "HMS Speedwell", "HMS Acanthus"];
-  for (const name of closeEscortNames) {
-    await createUnit(scenario.id, fleetCloseEscort.id, classEscort.id, name, LOCH_EWE);
+  const closeEscortUnits = [
+    { name: "HMS Westcott", classId: classEscort.id },
+    { name: "HMS Speedwell", classId: classEscort.id },
+    { name: "HMS Acanthus", classId: classEscort.id },
+    { name: "HMS Milne", classId: classDestroyerM.id },
+    { name: "HMS Matchless", classId: classDestroyerM.id },
+    { name: "HMS Meteor", classId: classDestroyerM.id },
+    { name: "HMS Musketeer", classId: classDestroyerM.id },
+    { name: "HMS Ashanti", classId: classDestroyerTribal.id },
+  ];
+  const closeEscortPositions = screenArcPositions(LOCH_EWE, LOCH_EWE_HEADING, closeEscortUnits.length, CLOSE_ESCORT_RADIUS_M);
+  for (let i = 0; i < closeEscortUnits.length; i++) {
+    await createUnit(scenario.id, fleetCloseEscort.id, closeEscortUnits[i].classId, closeEscortUnits[i].name, closeEscortPositions[i]);
   }
-  const mClassNames = ["HMS Milne", "HMS Matchless", "HMS Meteor", "HMS Musketeer"];
-  for (const name of mClassNames) {
-    await createUnit(scenario.id, fleetCloseEscort.id, classDestroyerM.id, name, LOCH_EWE);
-  }
-  await createUnit(scenario.id, fleetCloseEscort.id, classDestroyerTribal.id, "HMS Ashanti", LOCH_EWE);
 
-  await createUnit(scenario.id, fleetCruisers.id, classCruiserEdinburgh.id, "HMS Belfast", AKUREYRI);
-  await createUnit(scenario.id, fleetCruisers.id, classHeavyCruiser.id, "HMS Norfolk", AKUREYRI);
-  await createUnit(scenario.id, fleetCruisers.id, classCruiserTown.id, "HMS Sheffield", AKUREYRI);
+  const cruiserPositions = lineAheadPositions(AKUREYRI, AKUREYRI_HEADING, 3);
+  await createUnit(scenario.id, fleetCruisers.id, classCruiserEdinburgh.id, "HMS Belfast", cruiserPositions[0]);
+  await createUnit(scenario.id, fleetCruisers.id, classHeavyCruiser.id, "HMS Norfolk", cruiserPositions[1]);
+  await createUnit(scenario.id, fleetCruisers.id, classCruiserTown.id, "HMS Sheffield", cruiserPositions[2]);
 
+  const coveringCapitalPositions = lineAheadPositions(AKUREYRI, AKUREYRI_HEADING, 2);
   await createUnit(
     scenario.id,
     fleetCoveringForce.id,
     classBattleshipKGV.id,
     "HMS Duke of York",
-    AKUREYRI,
+    coveringCapitalPositions[0],
     "Navire amiral de la Home Fleet (amiral Bruce Fraser) lors de l'opération. C'est elle qui porta le coup de grâce au Scharnhorst à courte distance dans la soirée du 26 décembre 1943."
   );
-  await createUnit(scenario.id, fleetCoveringForce.id, classCruiserCrownColony.id, "HMS Jamaica", AKUREYRI);
-  for (const name of ["HMS Saumarez", "HMS Savage", "HMS Scorpion", "HNoMS Stord"]) {
-    await createUnit(scenario.id, fleetCoveringForce.id, classDestroyerS.id, name, AKUREYRI);
+  await createUnit(scenario.id, fleetCoveringForce.id, classCruiserCrownColony.id, "HMS Jamaica", coveringCapitalPositions[1]);
+  const coveringScreenNames = ["HMS Saumarez", "HMS Savage", "HMS Scorpion", "HNoMS Stord"];
+  const coveringScreenPositions = screenArcPositions(AKUREYRI, AKUREYRI_HEADING, coveringScreenNames.length, SCREEN_RADIUS_M);
+  for (let i = 0; i < coveringScreenNames.length; i++) {
+    await createUnit(scenario.id, fleetCoveringForce.id, classDestroyerS.id, coveringScreenNames[i], coveringScreenPositions[i]);
   }
 
   await createUnit(
@@ -479,8 +567,10 @@ async function main() {
     KAFJORD,
     "Appareille de l'Altenfjord le 25 décembre 1943 sous le commandement du contre-amiral Erich Bey pour l'opération Ostfront, avec l'intention d'intercepter le convoi JW55B."
   );
-  for (const name of ["Z29", "Z30", "Z33", "Z34", "Z38"]) {
-    await createUnit(scenario.id, fleetScharnhorst.id, classNarvikDestroyer.id, name, KAFJORD);
+  const narvikNames = ["Z29", "Z30", "Z33", "Z34", "Z38"];
+  const narvikPositions = screenArcPositions(KAFJORD, KAFJORD_HEADING, narvikNames.length, SCREEN_RADIUS_M);
+  for (let i = 0; i < narvikNames.length; i++) {
+    await createUnit(scenario.id, fleetScharnhorst.id, classNarvikDestroyer.id, narvikNames[i], narvikPositions[i]);
   }
 
   for (const name of ["U-277", "U-354", "U-387", "U-601"]) {

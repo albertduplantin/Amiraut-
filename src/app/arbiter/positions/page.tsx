@@ -14,7 +14,7 @@ export default async function PositionsPage() {
     prisma.unit.findMany({
       where: { scenarioId: session.scenarioId, status: "ACTIVE" },
       include: {
-        unitClass: { select: { name: true, category: true } },
+        unitClass: { select: { name: true, category: true, lengthMeters: true } },
         fleet: { select: { name: true, team: { select: { name: true, colorHex: true } } } },
       },
       orderBy: [{ fleet: { team: { name: "asc" } } }, { fleet: { name: "asc" } }, { name: "asc" }],
@@ -30,6 +30,7 @@ export default async function PositionsPage() {
         name: u.name,
         className: u.unitClass.name,
         category: u.unitClass.category,
+        lengthMeters: u.unitClass.lengthMeters,
         teamName: u.fleet.team.name,
         teamColor: u.fleet.team.colorHex,
         fleetName: u.fleet.name,

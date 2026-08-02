@@ -26,7 +26,7 @@ export default async function ReviewPage() {
     prisma.unit.findMany({
       where: { scenarioId: session.scenarioId, status: "ACTIVE" },
       include: {
-        unitClass: { select: { name: true, category: true } },
+        unitClass: { select: { name: true, category: true, lengthMeters: true } },
         fleet: { select: { teamId: true, team: { select: { name: true, colorHex: true } } } },
         orders: { where: { turnId: turn.id }, include: { waypoints: { orderBy: { sequence: "asc" } } } },
       },
@@ -60,6 +60,7 @@ export default async function ReviewPage() {
         name: u.name,
         className: u.unitClass.name,
         category: u.unitClass.category,
+        lengthMeters: u.unitClass.lengthMeters,
         teamId: u.fleet.teamId,
         teamName: u.fleet.team.name,
         currentLat: u.currentLat,

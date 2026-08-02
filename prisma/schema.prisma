@@ -68,6 +68,7 @@ model UnitClass {
   nation           String
   category         UnitCategory
   maxSpeedKnots    Float
+  lengthMeters     Float? // longueur hors-tout réelle, pour l'échelle des silhouettes vue de dessus
   sensors          Json // [{ type: "RADAR", rangeNm: 20 }, ...]
   detectability    Float        @default(1)
   iconKey          String

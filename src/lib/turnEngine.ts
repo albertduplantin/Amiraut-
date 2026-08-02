@@ -465,7 +465,7 @@ async function generateReportForTeam(tx: any, turnId: string, teamId: string) {
       currentLat: true,
       currentLng: true,
       currentHeadingDeg: true,
-      unitClass: { select: { name: true, iconKey: true, category: true } },
+      unitClass: { select: { name: true, iconKey: true, category: true, lengthMeters: true } },
     },
   });
 

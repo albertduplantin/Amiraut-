@@ -21,6 +21,16 @@ const KEYWORD_RULES: [RegExp, SilhouetteKey][] = [
   [/avion|aircraft|aéronef/i, "aircraft"],
 ];
 
+/** Longueur générique de repli (m), utilisée seulement si UnitClass.lengthMeters n'est pas renseigné. */
+export const DEFAULT_LENGTH_METERS: Record<SilhouetteKey, number> = {
+  cargo: 135,
+  destroyer: 110,
+  cruiser: 180,
+  battleship: 230,
+  submarine: 67,
+  aircraft: 12,
+};
+
 export function classifySilhouette(category: string, className: string): SilhouetteKey {
   if (category === "SUBMARINE") return "submarine";
   if (category === "AIRCRAFT") return "aircraft";

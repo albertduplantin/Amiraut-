@@ -33,6 +33,8 @@ export type ShipMarkerConfig = {
   headingDeg: number;
   color: string;
   silhouette: SilhouetteKey;
+  /** Longueur hors-tout réelle en mètres, pour un rendu à l'échelle du zoom. */
+  lengthMeters: number;
   label?: string;
 };
 
@@ -54,6 +56,15 @@ type GameMapProps = {
   shipMarkers?: ShipMarkerConfig[];
   /** Niveau de zoom à partir duquel les silhouettes remplacent les points. */
   shipMarkersMinZoom?: number;
+};
+
+type ShipMarkerEntry = {
+  marker: Marker;
+  el: HTMLDivElement;
+  signature: string;
+  lat: number;
+  lng: number;
+  lengthMeters: number;
 };
 
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
@@ -108,7 +119,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   const fitToPointsRef = useRef(fitToPoints);
   const isFirstFlyRef = useRef(true);
   const lastFlownToRef = useRef<LatLng | null>(null);
-  const shipMarkersRef = useRef(new Map<string, { marker: Marker; el: HTMLDivElement; signature: string }>());
+  const shipMarkersRef = useRef(new Map<string, ShipMarkerEntry>());
 
   useEffect(() => {
     onClickRef.current = onClick;
@@ -121,7 +132,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   const shipMarkersMinZoomRef = useRef(shipMarkersMinZoom);
   useEffect(() => {
     shipMarkersMinZoomRef.current = shipMarkersMinZoom;
-    applyShipMarkerVisibility(mapRef.current, shipMarkersRef.current, shipMarkersMinZoom);
+    applyShipMarkerLayout(mapRef.current, shipMarkersRef.current, shipMarkersMinZoom);
   }, [shipMarkersMinZoom]);
 
   useImperativeHandle(
@@ -175,7 +186,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     });
 
     map.on("zoom", () => {
-      applyShipMarkerVisibility(map, shipMarkersRef.current, shipMarkersMinZoomRef.current);
+      applyShipMarkerLayout(map, shipMarkersRef.current, shipMarkersMinZoomRef.current);
     });
 
     const cancel = onceStyleReady(map, () => {
@@ -226,7 +237,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
           .setLngLat([config.lng, config.lat])
           .setRotation(config.headingDeg)
           .addTo(map);
-        existing.set(config.id, { marker, el, signature });
+        existing.set(config.id, { marker, el, signature, lat: config.lat, lng: config.lng, lengthMeters: config.lengthMeters });
         continue;
       }
       if (current.signature !== signature) {
@@ -236,13 +247,16 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
           .setLngLat([config.lng, config.lat])
           .setRotation(config.headingDeg)
           .addTo(map);
-        existing.set(config.id, { marker, el, signature });
+        existing.set(config.id, { marker, el, signature, lat: config.lat, lng: config.lng, lengthMeters: config.lengthMeters });
       } else {
         current.marker.setLngLat([config.lng, config.lat]).setRotation(config.headingDeg);
+        current.lat = config.lat;
+        current.lng = config.lng;
+        current.lengthMeters = config.lengthMeters;
       }
     }
 
-    applyShipMarkerVisibility(map, existing, shipMarkersMinZoomRef.current);
+    applyShipMarkerLayout(map, existing, shipMarkersMinZoomRef.current);
   }, [shipMarkers]);
 
   useEffect(() => {
@@ -277,15 +291,37 @@ function fitMapToPoints(map: MapLibreMap, points: LatLng[]) {
   map.fitBounds(bounds, { padding: 60, maxZoom: 8, duration: 0 });
 }
 
-function applyShipMarkerVisibility(
-  map: MapLibreMap | null,
-  markers: Map<string, { marker: Marker; el: HTMLDivElement; signature: string }>,
-  minZoom: number
-) {
+/** Sous ce seuil, la silhouette à l'échelle serait de toute façon illisible (quelques dixièmes de pixel). */
+const MIN_SILHOUETTE_HEIGHT_PX = 10;
+/** Rapport hauteur/largeur des silhouettes (viewBox "0 0 24 48", voir shipSilhouettes.ts). */
+const SILHOUETTE_ASPECT = 24 / 48;
+
+/** Longueur en pixels écran d'un segment de `lengthMeters` partant de (lat,lng) vers le nord, dans la vue actuelle. */
+function metersToScreenPx(map: MapLibreMap, lat: number, lng: number, lengthMeters: number): number {
+  const p1 = map.project([lng, lat]);
+  const p2 = map.project([lng, lat + lengthMeters / 111320]);
+  return Math.hypot(p2.x - p1.x, p2.y - p1.y);
+}
+
+/**
+ * Affiche/masque les silhouettes selon le seuil de zoom, et dimensionne
+ * chacune à sa taille réelle à l'échelle de la carte (avec un plancher
+ * lisible : en dessous, un navire de quelques dizaines de mètres serait
+ * de toute façon un pixel invisible à ce zoom).
+ */
+function applyShipMarkerLayout(map: MapLibreMap | null, markers: Map<string, ShipMarkerEntry>, minZoom: number) {
   if (!map) return;
   const visible = map.getZoom() >= minZoom;
-  for (const { el } of markers.values()) {
-    el.style.display = visible ? "flex" : "none";
+  for (const entry of markers.values()) {
+    entry.el.style.display = visible ? "flex" : "none";
+    if (!visible) continue;
+    const heightPx = Math.max(MIN_SILHOUETTE_HEIGHT_PX, metersToScreenPx(map, entry.lat, entry.lng, entry.lengthMeters));
+    const widthPx = heightPx * SILHOUETTE_ASPECT;
+    const svg = entry.el.querySelector("svg");
+    if (svg) {
+      svg.setAttribute("width", String(widthPx));
+      svg.setAttribute("height", String(heightPx));
+    }
   }
 }
 

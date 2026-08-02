@@ -11,7 +11,7 @@ import {
   pointsFeatureCollection,
 } from "@/lib/mapData";
 import { clampPathToBudget, pathLengthNm, speedBudgetNm, type LatLng } from "@/lib/geo";
-import { classifySilhouette } from "@/lib/shipSilhouettes";
+import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 import { submitOrderAction, submitFleetOrderAction, requestFleetTransferAction, cancelFleetTransferAction } from "./actions";
 
 type SensorSpec = { type: string; rangeNm: number };
@@ -27,6 +27,7 @@ type UnitDto = {
   nation: string;
   category: string;
   maxSpeedKnots: number;
+  lengthMeters: number | null;
   sensors: SensorSpec[];
   detectability: number;
   historicalNote: string | null;
@@ -374,14 +375,18 @@ export function OrdersClient(props: {
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(
     () =>
-      units.map((u) => ({
-        id: u.id,
-        lat: u.currentLat,
-        lng: u.currentLng,
-        headingDeg: u.currentHeadingDeg ?? 0,
-        color: "#38bdf8",
-        silhouette: classifySilhouette(u.category, u.className),
-      })),
+      units.map((u) => {
+        const silhouette = classifySilhouette(u.category, u.className);
+        return {
+          id: u.id,
+          lat: u.currentLat,
+          lng: u.currentLng,
+          headingDeg: u.currentHeadingDeg ?? 0,
+          color: "#38bdf8",
+          silhouette,
+          lengthMeters: u.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+        };
+      }),
     [units]
   );
 

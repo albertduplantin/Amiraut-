@@ -5,7 +5,7 @@ import { useFormStatus } from "react-dom";
 import { GameMap, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { multiLineFeatureCollection, pointsFeatureCollection } from "@/lib/mapData";
 import type { LatLng } from "@/lib/geo";
-import { classifySilhouette } from "@/lib/shipSilhouettes";
+import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 import { confirmDetectionAction, rejectDetectionAction, addManualDetectionAction, publishTurnAction } from "../actions";
 
 function PublishButton() {
@@ -65,6 +65,7 @@ type UnitDto = {
   name: string;
   className: string;
   category: string;
+  lengthMeters: number | null;
   teamId: string;
   teamName: string;
   currentLat: number;
@@ -157,14 +158,18 @@ export function ReviewClient(props: {
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(() => {
     const colorByTeam = new Map(teams.map((t) => [t.id, t.colorHex]));
-    return units.map((u) => ({
-      id: u.id,
-      lat: u.currentLat,
-      lng: u.currentLng,
-      headingDeg: u.currentHeadingDeg ?? 0,
-      color: colorByTeam.get(u.teamId) ?? "#38bdf8",
-      silhouette: classifySilhouette(u.category, u.className),
-    }));
+    return units.map((u) => {
+      const silhouette = classifySilhouette(u.category, u.className);
+      return {
+        id: u.id,
+        lat: u.currentLat,
+        lng: u.currentLng,
+        headingDeg: u.currentHeadingDeg ?? 0,
+        color: colorByTeam.get(u.teamId) ?? "#38bdf8",
+        silhouette,
+        lengthMeters: u.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+      };
+    });
   }, [units, teams]);
 
   const [manualObserver, setManualObserver] = useState(units[0]?.id ?? "");

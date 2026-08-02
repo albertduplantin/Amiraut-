@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { GameMap, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { pointsFeatureCollection } from "@/lib/mapData";
 import type { LatLng } from "@/lib/geo";
-import { classifySilhouette } from "@/lib/shipSilhouettes";
+import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 
 type OwnUnit = {
   id: string;
@@ -14,7 +14,7 @@ type OwnUnit = {
   currentLat: number;
   currentLng: number;
   currentHeadingDeg: number | null;
-  unitClass: { name: string; iconKey: string; category: string };
+  unitClass: { name: string; iconKey: string; category: string; lengthMeters: number | null };
 };
 
 type Contact = {
@@ -70,14 +70,18 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(
     () =>
-      report.ownUnits.map((u) => ({
-        id: u.id,
-        lat: u.currentLat,
-        lng: u.currentLng,
-        headingDeg: u.currentHeadingDeg ?? 0,
-        color: "#38bdf8",
-        silhouette: classifySilhouette(u.unitClass.category, u.unitClass.name),
-      })),
+      report.ownUnits.map((u) => {
+        const silhouette = classifySilhouette(u.unitClass.category, u.unitClass.name);
+        return {
+          id: u.id,
+          lat: u.currentLat,
+          lng: u.currentLng,
+          headingDeg: u.currentHeadingDeg ?? 0,
+          color: "#38bdf8",
+          silhouette,
+          lengthMeters: u.unitClass.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+        };
+      }),
     [report]
   );
 

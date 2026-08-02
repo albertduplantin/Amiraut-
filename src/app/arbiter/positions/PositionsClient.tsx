@@ -4,7 +4,7 @@ import { useMemo, useRef, useState, useTransition } from "react";
 import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { pointsFeatureCollection } from "@/lib/mapData";
 import type { LatLng } from "@/lib/geo";
-import { classifySilhouette } from "@/lib/shipSilhouettes";
+import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 import { updateUnitPositionAction } from "../actions";
 
 type UnitDto = {
@@ -12,6 +12,7 @@ type UnitDto = {
   name: string;
   className: string;
   category: string;
+  lengthMeters: number | null;
   teamName: string;
   teamColor: string;
   fleetName: string;
@@ -113,14 +114,18 @@ export function PositionsClient(props: { mapCenter: LatLng; mapZoom: number; uni
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(
     () =>
-      units.map((u) => ({
-        id: u.id,
-        lat: u.currentLat,
-        lng: u.currentLng,
-        headingDeg: u.currentHeadingDeg ?? 0,
-        color: u.teamColor,
-        silhouette: classifySilhouette(u.category, u.className),
-      })),
+      units.map((u) => {
+        const silhouette = classifySilhouette(u.category, u.className);
+        return {
+          id: u.id,
+          lat: u.currentLat,
+          lng: u.currentLng,
+          headingDeg: u.currentHeadingDeg ?? 0,
+          color: u.teamColor,
+          silhouette,
+          lengthMeters: u.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+        };
+      }),
     [units]
   );
 

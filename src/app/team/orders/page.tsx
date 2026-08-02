@@ -36,6 +36,7 @@ export default async function OrdersPage() {
             name: true,
             nation: true,
             maxSpeedKnots: true,
+            lengthMeters: true,
             iconKey: true,
             category: true,
             sensors: true,
@@ -100,6 +101,7 @@ export default async function OrdersPage() {
         nation: u.unitClass.nation,
         category: u.unitClass.category,
         maxSpeedKnots: u.unitClass.maxSpeedKnots,
+        lengthMeters: u.unitClass.lengthMeters,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         sensors: u.unitClass.sensors as any,
         detectability: u.unitClass.detectability,
