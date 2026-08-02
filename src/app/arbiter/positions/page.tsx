@@ -9,16 +9,17 @@ export default async function PositionsPage() {
     redirect("/");
   }
 
-  const scenario = await prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } });
-
-  const units = await prisma.unit.findMany({
-    where: { scenarioId: session.scenarioId, status: "ACTIVE" },
-    include: {
-      unitClass: { select: { name: true } },
-      fleet: { select: { name: true, team: { select: { name: true, colorHex: true } } } },
-    },
-    orderBy: [{ fleet: { team: { name: "asc" } } }, { fleet: { name: "asc" } }, { name: "asc" }],
-  });
+  const [scenario, units] = await Promise.all([
+    prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
+    prisma.unit.findMany({
+      where: { scenarioId: session.scenarioId, status: "ACTIVE" },
+      include: {
+        unitClass: { select: { name: true } },
+        fleet: { select: { name: true, team: { select: { name: true, colorHex: true } } } },
+      },
+      orderBy: [{ fleet: { team: { name: "asc" } } }, { fleet: { name: "asc" } }, { name: "asc" }],
+    }),
+  ]);
 
   return (
     <PositionsClient

@@ -165,10 +165,9 @@ async function maybeResolveTurn(turnId: string) {
  * soumis, puis passe le tour en revue arbitre.
  */
 export async function resolveTurnDetections(turnId: string) {
-  await prisma.turn.update({ where: { id: turnId }, data: { status: "RESOLVING" } });
-
-  const turn = await prisma.turn.findUniqueOrThrow({
+  const turn = await prisma.turn.update({
     where: { id: turnId },
+    data: { status: "RESOLVING" },
     include: { weather: true },
   });
   if (!turn.weather) throw new Error("Météo du tour manquante.");
@@ -193,6 +192,26 @@ export async function resolveTurnDetections(turnId: string) {
   }
 
   const sampleTimes = buildSampleTimes(turn.durationMinutes);
+
+  // Toutes les paires observateur/cible sont évaluées en mémoire, puis
+  // écrites en un seul aller-retour : la version précédente faisait un
+  // upsert par paire détectée (potentiellement des centaines sur un grand
+  // scénario), ce qui dominait le temps de résolution du tour — surtout
+  // avec la latence réseau entre les fonctions Vercel et la base Neon.
+  const detectionRows: {
+    turnId: string;
+    observerUnitId: string;
+    targetUnitId: string;
+    method: SensorType;
+    cpaDistanceNm: number;
+    cpaMinutesIntoTurn: number;
+    observerLatAtCpa: number;
+    observerLngAtCpa: number;
+    targetLatAtCpa: number;
+    targetLngAtCpa: number;
+    systemProposed: boolean;
+    arbiterStatus: ArbiterStatus;
+  }[] = [];
 
   for (const observer of units) {
     for (const target of units) {
@@ -224,39 +243,32 @@ export async function resolveTurnDetections(turnId: string) {
 
       if (!best) continue;
 
-      await prisma.detectionEvent.upsert({
-        where: { turnId_observerUnitId_targetUnitId: { turnId, observerUnitId: observer.id, targetUnitId: target.id } },
-        create: {
-          turnId,
-          observerUnitId: observer.id,
-          targetUnitId: target.id,
-          method: best.type,
-          cpaDistanceNm: cpa.distanceNm,
-          cpaMinutesIntoTurn: cpa.minute,
-          observerLatAtCpa: cpa.observerPos.lat,
-          observerLngAtCpa: cpa.observerPos.lng,
-          targetLatAtCpa: cpa.targetPos.lat,
-          targetLngAtCpa: cpa.targetPos.lng,
-          systemProposed: true,
-          arbiterStatus: "PROPOSED",
-        },
-        update: {
-          method: best.type,
-          cpaDistanceNm: cpa.distanceNm,
-          cpaMinutesIntoTurn: cpa.minute,
-          observerLatAtCpa: cpa.observerPos.lat,
-          observerLngAtCpa: cpa.observerPos.lng,
-          targetLatAtCpa: cpa.targetPos.lat,
-          targetLngAtCpa: cpa.targetPos.lng,
-        },
+      detectionRows.push({
+        turnId,
+        observerUnitId: observer.id,
+        targetUnitId: target.id,
+        method: best.type,
+        cpaDistanceNm: cpa.distanceNm,
+        cpaMinutesIntoTurn: cpa.minute,
+        observerLatAtCpa: cpa.observerPos.lat,
+        observerLngAtCpa: cpa.observerPos.lng,
+        targetLatAtCpa: cpa.targetPos.lat,
+        targetLngAtCpa: cpa.targetPos.lng,
+        systemProposed: true,
+        arbiterStatus: "PROPOSED",
       });
     }
   }
 
-  await prisma.turn.update({
-    where: { id: turnId },
-    data: { status: "PENDING_ARBITER_REVIEW", resolvedAt: new Date() },
-  });
+  await prisma.$transaction([
+    ...(detectionRows.length > 0
+      ? [prisma.detectionEvent.createMany({ data: detectionRows, skipDuplicates: true })]
+      : []),
+    prisma.turn.update({
+      where: { id: turnId },
+      data: { status: "PENDING_ARBITER_REVIEW", resolvedAt: new Date() },
+    }),
+  ]);
 }
 
 function buildSampleTimes(durationMinutes: number) {

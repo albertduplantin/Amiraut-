@@ -9,13 +9,14 @@ export default async function ReportsPage() {
     redirect("/");
   }
 
-  const scenario = await prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } });
-
-  const reports = await prisma.report.findMany({
-    where: { teamId: session.teamId },
-    include: { turn: { select: { number: true, gameStartAt: true } } },
-    orderBy: { turn: { number: "desc" } },
-  });
+  const [scenario, reports] = await Promise.all([
+    prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
+    prisma.report.findMany({
+      where: { teamId: session.teamId },
+      include: { turn: { select: { number: true, gameStartAt: true } } },
+      orderBy: { turn: { number: "desc" } },
+    }),
+  ]);
 
   if (reports.length === 0) {
     return (

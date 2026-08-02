@@ -20,6 +20,45 @@ function PublishButton() {
   );
 }
 
+function ConfirmButton({ disabled }: { disabled: boolean }) {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={disabled || pending}
+      className="rounded bg-emerald-700 px-2 py-0.5 text-xs hover:bg-emerald-600 disabled:opacity-40"
+    >
+      {pending ? "…" : "Confirmer"}
+    </button>
+  );
+}
+
+function RejectButton({ disabled }: { disabled: boolean }) {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={disabled || pending}
+      className="rounded bg-red-800 px-2 py-0.5 text-xs hover:bg-red-700 disabled:opacity-40"
+    >
+      {pending ? "…" : "Rejeter"}
+    </button>
+  );
+}
+
+function AddManualButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="rounded-md bg-sky-700 px-3 py-1.5 text-xs font-medium hover:bg-sky-600 disabled:opacity-60"
+    >
+      {pending ? "Ajout…" : "Ajouter"}
+    </button>
+  );
+}
+
 type UnitDto = {
   id: string;
   name: string;
@@ -152,23 +191,11 @@ export function ReviewClient(props: {
                 <div className="mt-1 flex gap-2">
                   <form action={confirmDetectionAction}>
                     <input type="hidden" name="detectionId" value={d.id} />
-                    <button
-                      type="submit"
-                      disabled={d.arbiterStatus === "CONFIRMED" || d.arbiterStatus === "ADDED_MANUALLY"}
-                      className="rounded bg-emerald-700 px-2 py-0.5 text-xs hover:bg-emerald-600 disabled:opacity-40"
-                    >
-                      Confirmer
-                    </button>
+                    <ConfirmButton disabled={d.arbiterStatus === "CONFIRMED" || d.arbiterStatus === "ADDED_MANUALLY"} />
                   </form>
                   <form action={rejectDetectionAction}>
                     <input type="hidden" name="detectionId" value={d.id} />
-                    <button
-                      type="submit"
-                      disabled={d.arbiterStatus === "REJECTED"}
-                      className="rounded bg-red-800 px-2 py-0.5 text-xs hover:bg-red-700 disabled:opacity-40"
-                    >
-                      Rejeter
-                    </button>
+                    <RejectButton disabled={d.arbiterStatus === "REJECTED"} />
                   </form>
                 </div>
               </li>
@@ -224,9 +251,7 @@ export function ReviewClient(props: {
               <input name="note" className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1" />
             </label>
 
-            <button type="submit" className="rounded-md bg-sky-700 px-3 py-1.5 text-xs font-medium hover:bg-sky-600">
-              Ajouter
-            </button>
+            <AddManualButton />
           </form>
         </aside>
       </div>

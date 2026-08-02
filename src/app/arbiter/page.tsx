@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { setWeatherAction } from "./actions";
+import { SubmitButton } from "./SubmitButton";
 
 export default async function ArbiterDashboardPage() {
   const session = await getSession();
@@ -10,21 +11,21 @@ export default async function ArbiterDashboardPage() {
     redirect("/");
   }
 
-  const scenario = await prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } });
-  const turn = await prisma.turn.findFirst({
-    where: { scenarioId: session.scenarioId },
-    orderBy: { number: "desc" },
-    include: { weather: true },
-  });
+  const [scenario, turn, activeUnitCount] = await Promise.all([
+    prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
+    prisma.turn.findFirst({
+      where: { scenarioId: session.scenarioId },
+      orderBy: { number: "desc" },
+      include: { weather: true },
+    }),
+    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: "ACTIVE" } }),
+  ]);
 
   if (!turn) {
     return <div className="p-6 text-slate-100">Aucun tour trouvé pour ce scénario.</div>;
   }
 
-  const [activeUnitCount, orderCount] = await Promise.all([
-    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: "ACTIVE" } }),
-    prisma.unitOrder.count({ where: { turnId: turn.id } }),
-  ]);
+  const orderCount = await prisma.unitOrder.count({ where: { turnId: turn.id } });
 
   return (
     <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
@@ -143,9 +144,10 @@ export default async function ArbiterDashboardPage() {
               />
             </label>
 
-            <button type="submit" className="rounded-md bg-sky-600 px-4 py-1.5 font-medium hover:bg-sky-500">
-              {turn.weatherId ? "Enregistrer" : "Ouvrir le tour aux ordres"}
-            </button>
+            <SubmitButton
+              pendingLabel="Enregistrement…"
+              idleLabel={turn.weatherId ? "Enregistrer" : "Ouvrir le tour aux ordres"}
+            />
           </form>
         </section>
       )}

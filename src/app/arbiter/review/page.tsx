@@ -21,27 +21,26 @@ export default async function ReviewPage() {
     redirect("/arbiter");
   }
 
-  const scenario = await prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } });
-
-  const units = await prisma.unit.findMany({
-    where: { scenarioId: session.scenarioId, status: "ACTIVE" },
-    include: {
-      unitClass: { select: { name: true } },
-      fleet: { select: { teamId: true, team: { select: { name: true, colorHex: true } } } },
-      orders: { where: { turnId: turn.id }, include: { waypoints: { orderBy: { sequence: "asc" } } } },
-    },
-  });
-
-  const detections = await prisma.detectionEvent.findMany({
-    where: { turnId: turn.id },
-    include: {
-      observerUnit: { select: { id: true, name: true, fleet: { select: { team: { select: { name: true } } } } } },
-      targetUnit: { select: { id: true, name: true, fleet: { select: { team: { select: { name: true } } } } } },
-    },
-    orderBy: { cpaDistanceNm: "asc" },
-  });
-
-  const teams = await prisma.team.findMany({ where: { scenarioId: session.scenarioId } });
+  const [scenario, units, detections, teams] = await Promise.all([
+    prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
+    prisma.unit.findMany({
+      where: { scenarioId: session.scenarioId, status: "ACTIVE" },
+      include: {
+        unitClass: { select: { name: true } },
+        fleet: { select: { teamId: true, team: { select: { name: true, colorHex: true } } } },
+        orders: { where: { turnId: turn.id }, include: { waypoints: { orderBy: { sequence: "asc" } } } },
+      },
+    }),
+    prisma.detectionEvent.findMany({
+      where: { turnId: turn.id },
+      include: {
+        observerUnit: { select: { id: true, name: true, fleet: { select: { team: { select: { name: true } } } } } },
+        targetUnit: { select: { id: true, name: true, fleet: { select: { team: { select: { name: true } } } } } },
+      },
+      orderBy: { cpaDistanceNm: "asc" },
+    }),
+    prisma.team.findMany({ where: { scenarioId: session.scenarioId } }),
+  ]);
 
   return (
     <ReviewClient

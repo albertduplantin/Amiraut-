@@ -9,23 +9,23 @@ export default async function WaitingPage() {
     redirect("/");
   }
 
-  const openTurn = await prisma.turn.findFirst({
-    where: { scenarioId: session.scenarioId, status: "PENDING_ORDERS" },
-    orderBy: { number: "desc" },
-  });
+  const [openTurn, latestPublished, currentTurn] = await Promise.all([
+    prisma.turn.findFirst({
+      where: { scenarioId: session.scenarioId, status: "PENDING_ORDERS" },
+      orderBy: { number: "desc" },
+    }),
+    prisma.turn.findFirst({
+      where: { scenarioId: session.scenarioId, status: "PUBLISHED" },
+      orderBy: { number: "desc" },
+    }),
+    prisma.turn.findFirst({
+      where: { scenarioId: session.scenarioId },
+      orderBy: { number: "desc" },
+    }),
+  ]);
   if (openTurn?.weatherId) {
     redirect("/team/orders");
   }
-
-  const latestPublished = await prisma.turn.findFirst({
-    where: { scenarioId: session.scenarioId, status: "PUBLISHED" },
-    orderBy: { number: "desc" },
-  });
-
-  const currentTurn = await prisma.turn.findFirst({
-    where: { scenarioId: session.scenarioId },
-    orderBy: { number: "desc" },
-  });
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950 px-6 text-center text-slate-100">

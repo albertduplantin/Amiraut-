@@ -19,51 +19,48 @@ export default async function OrdersPage() {
     redirect("/team/waiting");
   }
 
-  const scenario = await prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } });
-
-  const units = await prisma.unit.findMany({
-    where: {
-      scenarioId: session.scenarioId,
-      status: "ACTIVE",
-      fleet: {
+  const [scenario, units, teamFleets, teamUnitCount, teamOrderCount, allActiveUnitCount, allOrderCount] = await Promise.all([
+    prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
+    prisma.unit.findMany({
+      where: {
+        scenarioId: session.scenarioId,
+        status: "ACTIVE",
+        fleet: {
+          teamId: session.teamId,
+          ...(session.fleetIds ? { id: { in: session.fleetIds } } : {}),
+        },
+      },
+      include: {
+        unitClass: {
+          select: {
+            name: true,
+            nation: true,
+            maxSpeedKnots: true,
+            iconKey: true,
+            category: true,
+            sensors: true,
+            detectability: true,
+            historicalNote: true,
+            profileImageUrl: true,
+          },
+        },
+        fleet: { select: { name: true } },
+        pendingFleet: { select: { name: true } },
+        orders: {
+          where: { turnId: turn.id },
+          include: { waypoints: { orderBy: { sequence: "asc" } } },
+        },
+      },
+      orderBy: [{ fleet: { name: "asc" } }, { name: "asc" }],
+    }),
+    prisma.fleet.findMany({
+      where: {
         teamId: session.teamId,
         ...(session.fleetIds ? { id: { in: session.fleetIds } } : {}),
       },
-    },
-    include: {
-      unitClass: {
-        select: {
-          name: true,
-          nation: true,
-          maxSpeedKnots: true,
-          iconKey: true,
-          category: true,
-          sensors: true,
-          detectability: true,
-          historicalNote: true,
-          profileImageUrl: true,
-        },
-      },
-      fleet: { select: { name: true } },
-      pendingFleet: { select: { name: true } },
-      orders: {
-        where: { turnId: turn.id },
-        include: { waypoints: { orderBy: { sequence: "asc" } } },
-      },
-    },
-    orderBy: [{ fleet: { name: "asc" } }, { name: "asc" }],
-  });
-
-  const teamFleets = await prisma.fleet.findMany({
-    where: {
-      teamId: session.teamId,
-      ...(session.fleetIds ? { id: { in: session.fleetIds } } : {}),
-    },
-    select: { id: true, name: true },
-    orderBy: { name: "asc" },
-  });
-
-  const [teamUnitCount, teamOrderCount, allActiveUnitCount, allOrderCount] = await Promise.all([
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
     prisma.unit.count({ where: { scenarioId: session.scenarioId, status: "ACTIVE", fleet: { teamId: session.teamId } } }),
     prisma.unitOrder.count({
       where: { turnId: turn.id, unit: { fleet: { teamId: session.teamId } } },
