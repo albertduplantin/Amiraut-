@@ -329,6 +329,12 @@ export async function setTurnWeather(
   if (turn.status !== "PENDING_ORDERS") {
     throw new OrderValidationError("Ce tour n'est plus modifiable (ordres déjà en cours ou tour publié).");
   }
+  const orderCount = await prisma.unitOrder.count({ where: { turnId } });
+  if (orderCount > 0) {
+    throw new OrderValidationError(
+      "Ce tour n'est plus modifiable : des unités ont déjà soumis un ordre sur la base de ces paramètres."
+    );
+  }
   if (weather.durationMinutes !== undefined) {
     if (weather.durationMinutes <= 0) {
       throw new OrderValidationError("La durée du tour doit être positive.");

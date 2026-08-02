@@ -38,9 +38,17 @@ export default async function ArbiterDashboardPage() {
         Repositionner des unités
       </Link>
 
-      {turn.status === "PENDING_ORDERS" && !turn.weatherId && (
+      {turn.status === "PENDING_ORDERS" && orderCount === 0 && (
         <section className="mt-6 max-w-lg rounded-md border border-slate-800 bg-slate-900 p-4">
-          <h2 className="mb-3 font-medium">Définir la météo du tour {turn.number}</h2>
+          <h2 className="mb-3 font-medium">
+            {turn.weatherId ? `Modifier les paramètres du tour ${turn.number}` : `Définir la météo du tour ${turn.number}`}
+          </h2>
+          {turn.weatherId && (
+            <p className="mb-3 text-xs text-slate-500">
+              Modifiable tant qu&apos;aucun ordre n&apos;a été soumis pour ce tour (ici pré-rempli avec les valeurs
+              actuelles).
+            </p>
+          )}
           <form action={setWeatherAction} className="space-y-3 text-sm">
             <input type="hidden" name="turnId" value={turn.id} />
 
@@ -62,17 +70,36 @@ export default async function ArbiterDashboardPage() {
 
             <label className="block">
               Visibilité (nm)
-              <input name="visibilityNm" type="number" step="0.5" defaultValue={8} required className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1" />
+              <input
+                name="visibilityNm"
+                type="number"
+                step="0.5"
+                defaultValue={turn.weather?.visibilityNm ?? 8}
+                required
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+              />
             </label>
 
             <label className="block">
               État de mer (0-9)
-              <input name="seaState" type="number" min={0} max={9} defaultValue={4} required className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1" />
+              <input
+                name="seaState"
+                type="number"
+                min={0}
+                max={9}
+                defaultValue={turn.weather?.seaState ?? 4}
+                required
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+              />
             </label>
 
             <label className="block">
               Luminosité
-              <select name="daylight" defaultValue="NIGHT" className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1">
+              <select
+                name="daylight"
+                defaultValue={turn.weather?.daylight ?? "NIGHT"}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+              >
                 <option value="DAY">Jour</option>
                 <option value="TWILIGHT">Crépuscule</option>
                 <option value="NIGHT">Nuit</option>
@@ -83,7 +110,11 @@ export default async function ArbiterDashboardPage() {
 
             <label className="block">
               Précipitations
-              <select name="precipitation" defaultValue="NONE" className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1">
+              <select
+                name="precipitation"
+                defaultValue={turn.weather?.precipitation ?? "NONE"}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+              >
                 <option value="NONE">Aucune</option>
                 <option value="RAIN">Pluie</option>
                 <option value="SNOW">Neige</option>
@@ -93,22 +124,33 @@ export default async function ArbiterDashboardPage() {
 
             <label className="block">
               Vent (nds, optionnel)
-              <input name="windKnots" type="number" step="1" className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1" />
+              <input
+                name="windKnots"
+                type="number"
+                step="1"
+                defaultValue={turn.weather?.windKnots ?? undefined}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+              />
             </label>
 
             <label className="block">
               Notes (optionnel)
-              <textarea name="notes" rows={2} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1" />
+              <textarea
+                name="notes"
+                rows={2}
+                defaultValue={turn.weather?.notes ?? undefined}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+              />
             </label>
 
             <button type="submit" className="rounded-md bg-sky-600 px-4 py-1.5 font-medium hover:bg-sky-500">
-              Ouvrir le tour aux ordres
+              {turn.weatherId ? "Enregistrer" : "Ouvrir le tour aux ordres"}
             </button>
           </form>
         </section>
       )}
 
-      {turn.status === "PENDING_ORDERS" && turn.weatherId && (
+      {turn.status === "PENDING_ORDERS" && orderCount > 0 && (
         <p className="mt-6 text-slate-300">
           Ordres en cours : {orderCount}/{activeUnitCount} unités actives ont soumis un ordre.
         </p>
