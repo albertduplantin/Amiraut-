@@ -2,8 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
-import { assertArbiter } from "@/lib/auth";
+import { assertArbiter, AccessDeniedError } from "@/lib/auth";
 import { setTurnWeather, setDetectionStatus, addManualDetection, publishTurn } from "@/lib/turnEngine";
+import { prisma } from "@/lib/prisma";
 
 export async function setWeatherAction(formData: FormData) {
   const session = await getSession();
@@ -50,6 +51,29 @@ export async function addManualDetectionAction(formData: FormData) {
   });
 
   revalidatePath("/arbiter/review");
+}
+
+export type UpdatePositionResult = { ok: true } | { ok: false; error: string };
+
+/** Repositionne une unité (typiquement pour corriger une position de départ mal placée). */
+export async function updateUnitPositionAction(params: {
+  unitId: string;
+  lat: number;
+  lng: number;
+}): Promise<UpdatePositionResult> {
+  const session = await getSession();
+  try {
+    assertArbiter(session);
+  } catch (error) {
+    if (error instanceof AccessDeniedError) return { ok: false, error: error.message };
+    throw error;
+  }
+
+  await prisma.unit.update({ where: { id: params.unitId }, data: { currentLat: params.lat, currentLng: params.lng } });
+
+  revalidatePath("/arbiter/positions");
+  revalidatePath("/team/orders");
+  return { ok: true };
 }
 
 export async function publishTurnAction(formData: FormData) {

@@ -37,6 +37,7 @@ type UnitDto = {
 type UnitDraft = { speedKnots: number; waypoints: LatLng[]; saved: boolean };
 type FleetDraft = { speedKnots: number; waypoints: LatLng[] };
 type Mode = "unit" | "fleet";
+type SortMode = "fleet" | "type" | "name";
 
 export function OrdersClient(props: {
   turnId: string;
@@ -73,6 +74,21 @@ export function OrdersClient(props: {
   const allUnitPositions = useMemo(() => units.map((u) => ({ lat: u.currentLat, lng: u.currentLng })), [units]);
 
   const [mode, setMode] = useState<Mode>("unit");
+  const [sortMode, setSortMode] = useState<SortMode>("fleet");
+  const sortedUnits = useMemo(() => {
+    const copy = [...units];
+    switch (sortMode) {
+      case "type":
+        copy.sort((a, b) => a.className.localeCompare(b.className) || a.name.localeCompare(b.name));
+        break;
+      case "name":
+        copy.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      default:
+        copy.sort((a, b) => a.fleetName.localeCompare(b.fleetName) || a.name.localeCompare(b.name));
+    }
+    return copy;
+  }, [units, sortMode]);
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(units[0]?.id ?? null);
   const [selectedFleetId, setSelectedFleetId] = useState<string | null>(fleets[0]?.fleetId ?? null);
 
@@ -368,8 +384,21 @@ export function OrdersClient(props: {
           </div>
 
           {mode === "unit" ? (
-            <ul className="space-y-1">
-              {units.map((unit) => {
+            <>
+              <label className="mb-2 flex items-center gap-2 text-xs text-slate-400">
+                Trier par
+                <select
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value as SortMode)}
+                  className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200"
+                >
+                  <option value="fleet">Flotte</option>
+                  <option value="type">Type</option>
+                  <option value="name">Nom</option>
+                </select>
+              </label>
+              <ul className="space-y-1">
+              {sortedUnits.map((unit) => {
                 const draft = unitDrafts[unit.id];
                 return (
                   <li key={unit.id}>
@@ -381,6 +410,11 @@ export function OrdersClient(props: {
                     >
                       <div className="flex items-center justify-between">
                         <span className="flex items-center gap-1.5 font-medium">
+                          <span
+                            className="inline-block h-2.5 w-1.5 shrink-0 rounded-sm"
+                            style={{ backgroundColor: colorForId(unit.fleetId) }}
+                            title={`Flotte : ${unit.fleetName}`}
+                          />
                           {draft?.saved && (
                             <span
                               className="inline-block h-2.5 w-2.5 rounded-full"
@@ -399,7 +433,8 @@ export function OrdersClient(props: {
                   </li>
                 );
               })}
-            </ul>
+              </ul>
+            </>
           ) : (
             <ul className="space-y-1">
               {fleets.map((fleet) => {
@@ -413,7 +448,13 @@ export function OrdersClient(props: {
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-medium">{fleet.fleetName}</span>
+                        <span className="flex items-center gap-1.5 font-medium">
+                          <span
+                            className="inline-block h-2.5 w-1.5 shrink-0 rounded-sm"
+                            style={{ backgroundColor: colorForId(fleet.fleetId) }}
+                          />
+                          {fleet.fleetName}
+                        </span>
                         {allSaved && <span className="text-emerald-400">✓</span>}
                       </div>
                       <div className="text-xs text-slate-500">{fleet.units.length} navires</div>

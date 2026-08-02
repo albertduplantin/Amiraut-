@@ -11,7 +11,9 @@
       "Bash(pdftoppm *)",
       "Bash(pdftotext *)",
       "Bash(pdfinfo *)",
-      "Bash(netstat *)"
+      "Bash(netstat *)",
+      "Bash(rm -f verify-*)",
+      "Bash(rm -f stub-*)"
     ]
   }
 }

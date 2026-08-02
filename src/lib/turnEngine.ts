@@ -325,42 +325,59 @@ export async function publishTurn(turnId: string) {
     include: { waypoints: { orderBy: { sequence: "asc" } } },
   });
 
-  await prisma.$transaction(async (tx) => {
-    for (const order of orders) {
-      if (order.waypoints.length === 0) continue;
-      const last = order.waypoints[order.waypoints.length - 1];
-      const secondToLast = order.waypoints.length > 1 ? order.waypoints[order.waypoints.length - 2] : null;
-      const unit = await tx.unit.findUniqueOrThrow({ where: { id: order.unitId } });
-      const from = secondToLast ?? { lat: unit.currentLat, lng: unit.currentLng };
+  // Pré-charge en un seul aller-retour les positions actuelles des unités qui
+  // en ont besoin (fallback "from" quand un ordre n'a qu'un seul waypoint),
+  // au lieu d'un findUniqueOrThrow par unité dans la boucle : sur ~30 unités,
+  // ça faisait dépasser le timeout par défaut des transactions Prisma (5s).
+  const movedUnitIds = orders.filter((o) => o.waypoints.length > 0).map((o) => o.unitId);
+  const currentPositions = new Map(
+    (
+      await prisma.unit.findMany({
+        where: { id: { in: movedUnitIds } },
+        select: { id: true, currentLat: true, currentLng: true },
+      })
+    ).map((u) => [u.id, u])
+  );
 
-      await tx.unit.update({
-        where: { id: order.unitId },
+  await prisma.$transaction(
+    async (tx) => {
+      for (const order of orders) {
+        if (order.waypoints.length === 0) continue;
+        const last = order.waypoints[order.waypoints.length - 1];
+        const secondToLast = order.waypoints.length > 1 ? order.waypoints[order.waypoints.length - 2] : null;
+        const current = currentPositions.get(order.unitId)!;
+        const from = secondToLast ?? { lat: current.currentLat, lng: current.currentLng };
+
+        await tx.unit.update({
+          where: { id: order.unitId },
+          data: {
+            currentLat: last.lat,
+            currentLng: last.lng,
+            currentHeadingDeg: bearingDeg(from, last),
+            lastResolvedTurn: turn.number,
+          },
+        });
+      }
+
+      const teams = await tx.team.findMany({ where: { scenarioId: turn.scenarioId } });
+      for (const team of teams) {
+        await generateReportForTeam(tx, turnId, team.id);
+      }
+
+      await tx.turn.update({ where: { id: turnId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
+
+      await tx.turn.create({
         data: {
-          currentLat: last.lat,
-          currentLng: last.lng,
-          currentHeadingDeg: bearingDeg(from, last),
-          lastResolvedTurn: turn.number,
+          scenarioId: turn.scenarioId,
+          number: turn.number + 1,
+          status: "PENDING_ORDERS",
+          gameStartAt: new Date(turn.gameStartAt.getTime() + turn.durationMinutes * 60_000),
+          durationMinutes: turn.scenario.defaultTurnMinutes,
         },
       });
-    }
-
-    const teams = await tx.team.findMany({ where: { scenarioId: turn.scenarioId } });
-    for (const team of teams) {
-      await generateReportForTeam(tx, turnId, team.id);
-    }
-
-    await tx.turn.update({ where: { id: turnId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
-
-    await tx.turn.create({
-      data: {
-        scenarioId: turn.scenarioId,
-        number: turn.number + 1,
-        status: "PENDING_ORDERS",
-        gameStartAt: new Date(turn.gameStartAt.getTime() + turn.durationMinutes * 60_000),
-        durationMinutes: turn.scenario.defaultTurnMinutes,
-      },
-    });
-  });
+    },
+    { timeout: 20000 }
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
