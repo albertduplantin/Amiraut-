@@ -11,10 +11,22 @@ type OwnUnit = {
   name: string;
   pennant: string | null;
   status: string;
+  healthCurrent: number | null;
+  healthMax: number | null;
   currentLat: number;
   currentLng: number;
   currentHeadingDeg: number | null;
   unitClass: { name: string; iconKey: string; category: string; lengthMeters: number | null };
+};
+
+type CombatLogEntry = {
+  side: "ATTACKER" | "TARGET";
+  attackerName: string;
+  targetName: string;
+  weaponType: string;
+  hits: number;
+  damagePoints: number;
+  targetSunk: boolean;
 };
 
 type Contact = {
@@ -35,6 +47,7 @@ type ReportDto = {
   gameStartAt: string;
   ownUnits: OwnUnit[];
   contacts: Contact[];
+  combats: CombatLogEntry[];
   narrative: string | null;
 };
 
@@ -123,15 +136,44 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
 
           <h2 className="mb-2 text-sm font-semibold text-slate-400">Vos unités ({report.ownUnits.length})</h2>
           <ul className="mb-6 space-y-1 text-sm">
-            {report.ownUnits.map((u) => (
-              <li key={u.id} className="rounded-md bg-slate-900 px-2 py-1">
-                <span className="font-medium">{u.name}</span>{" "}
-                <span className="text-xs text-slate-500">
-                  {u.unitClass.name} · {u.status === "ACTIVE" ? "actif" : u.status}
-                </span>
-              </li>
-            ))}
+            {report.ownUnits.map((u) => {
+              const ratio = u.healthMax && u.healthMax > 0 ? Math.max(0, Math.min(1, (u.healthCurrent ?? 0) / u.healthMax)) : null;
+              return (
+                <li key={u.id} className="rounded-md bg-slate-900 px-2 py-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">{u.name}</span>
+                    <span className={`text-xs ${statusColor(u.status)}`}>{statusLabel(u.status)}</span>
+                  </div>
+                  <div className="text-xs text-slate-500">{u.unitClass.name}</div>
+                  {ratio !== null && u.status !== "SUNK" && (
+                    <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-slate-800">
+                      <div className={`h-full ${ratio < 0.6 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${ratio * 100}%` }} />
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
+
+          {report.combats.length > 0 && (
+            <>
+              <h2 className="mb-2 text-sm font-semibold text-slate-400">Combats ({report.combats.length})</h2>
+              <ul className="mb-6 space-y-1 text-sm">
+                {report.combats.map((c, i) => (
+                  <li key={i} className="rounded-md bg-red-950/40 px-2 py-1">
+                    <div>
+                      <span className="font-medium">{c.attackerName}</span> →{" "}
+                      <span className="font-medium">{c.targetName}</span>
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {formatWeapon(c.weaponType)} · {c.hits > 0 ? `${c.hits} coup${c.hits > 1 ? "s" : ""} au but, ${c.damagePoints} pts` : "tir manqué"}
+                      {c.targetSunk && <span className="text-red-400"> · coulé</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
 
           <h2 className="mb-2 text-sm font-semibold text-slate-400">Contacts détectés ({report.contacts.length})</h2>
           {report.contacts.length === 0 ? (
@@ -152,6 +194,43 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
       </div>
     </div>
   );
+}
+
+function statusLabel(status: string) {
+  switch (status) {
+    case "ACTIVE":
+      return "actif";
+    case "DAMAGED":
+      return "endommagé";
+    case "SUNK":
+      return "coulé";
+    case "WITHDRAWN":
+      return "retiré";
+    default:
+      return status;
+  }
+}
+
+function statusColor(status: string) {
+  switch (status) {
+    case "DAMAGED":
+      return "text-amber-400";
+    case "SUNK":
+      return "text-red-400";
+    default:
+      return "text-slate-500";
+  }
+}
+
+function formatWeapon(weaponType: string) {
+  switch (weaponType) {
+    case "GUN":
+      return "artillerie";
+    case "TORPEDO":
+      return "torpille";
+    default:
+      return weaponType;
+  }
 }
 
 function formatMethod(method: string) {

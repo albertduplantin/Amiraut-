@@ -3,7 +3,10 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { buildTimedTrack, distanceNm, pathLengthNm, speedBudgetNm, bearingDeg, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm } from "@/lib/weather";
+import { resolveGunEngagement, type CombatProfile } from "@/lib/combat";
 import type { ArbiterStatus, SensorType } from "@/generated/prisma/client";
+
+const NM_TO_M = 1852;
 
 const SensorSchema = z.object({
   type: z.enum(["RADAR", "VISUAL", "HYDROPHONE", "SONAR", "OTHER"]),
@@ -151,7 +154,7 @@ async function maybeResolveTurn(turnId: string) {
   if (turn.status !== "PENDING_ORDERS") return;
 
   const [activeUnitCount, orderCount] = await Promise.all([
-    prisma.unit.count({ where: { scenarioId: turn.scenarioId, status: "ACTIVE" } }),
+    prisma.unit.count({ where: { scenarioId: turn.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } } }),
     prisma.unitOrder.count({ where: { turnId } }),
   ]);
 
@@ -173,7 +176,7 @@ export async function resolveTurnDetections(turnId: string) {
   if (!turn.weather) throw new Error("Météo du tour manquante.");
 
   const units = await prisma.unit.findMany({
-    where: { scenarioId: turn.scenarioId, status: "ACTIVE" },
+    where: { scenarioId: turn.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } },
     include: {
       unitClass: true,
       fleet: { select: { teamId: true } },
@@ -432,6 +435,11 @@ export async function publishTurn(turnId: string) {
         await tx.unit.update({ where: { id: u.id }, data: { fleetId: u.pendingFleetId!, pendingFleetId: null } });
       }
 
+      // Combat : suit directement la confirmation de détection par
+      // l'arbitre (arbitrage hybride). Doit s'exécuter avant la génération
+      // des rapports pour que les navires coulés/endommagés y apparaissent.
+      await resolveCombat(tx, turnId);
+
       const teams = await tx.team.findMany({ where: { scenarioId: turn.scenarioId } });
       for (const team of teams) {
         await generateReportForTeam(tx, turnId, team.id);
@@ -453,6 +461,111 @@ export async function publishTurn(turnId: string) {
   );
 }
 
+function statusFromHealth(current: number, max: number): "ACTIVE" | "DAMAGED" | "SUNK" {
+  if (current <= 0) return "SUNK";
+  if (current < max * 0.6) return "DAMAGED";
+  return "ACTIVE";
+}
+
+/**
+ * Résout l'artillerie pour toutes les détections confirmées/ajoutées
+ * manuellement du tour, à la distance de CPA déjà calculée pour la
+ * détection. Torpilles/aviation/ASM : phases suivantes, pas encore
+ * implémentées ici.
+ *
+ * Simplification V1 assumée : les engagements d'un même tour sont résolus
+ * en une passe, dans l'ordre des détections — pas d'alternance par pas de
+ * 5 minutes comme dans le livret original (p. 11). Concrètement, un navire
+ * coulé plus tôt dans la passe ne riposte pas à une détection le visant
+ * plus loin dans la liste, même si elle date du même tour. À affiner si le
+ * jeu montre que l'ordre de résolution donne un avantage perceptible.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function resolveCombat(tx: any, turnId: string) {
+  const detections = await tx.detectionEvent.findMany({
+    where: { turnId, arbiterStatus: { in: ["CONFIRMED", "ADDED_MANUALLY"] } },
+    include: {
+      observerUnit: { include: { unitClass: true } },
+      targetUnit: { include: { unitClass: true } },
+    },
+  });
+  if (detections.length === 0) return;
+
+  const orders = await tx.unitOrder.findMany({
+    where: { turnId },
+    select: { unitId: true, speedKnots: true },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const speedByUnit = new Map(orders.map((o: any) => [o.unitId, o.speedKnots]));
+
+  // PV tenus en mémoire pendant la résolution : plusieurs détections du
+  // même tour peuvent viser la même cible, il faut cumuler les dégâts.
+  const health = new Map<string, { current: number; max: number }>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getHealth = (unit: any) => {
+    if (!health.has(unit.id)) {
+      health.set(unit.id, { current: unit.healthCurrent ?? unit.healthMax ?? 1, max: unit.healthMax ?? 1 });
+    }
+    return health.get(unit.id)!;
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const combatRows: any[] = [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const d of detections as any[]) {
+    const attacker = d.observerUnit;
+    const target = d.targetUnit;
+    if (attacker.status === "SUNK" || target.status === "SUNK") continue;
+
+    const combatProfile = attacker.unitClass.combatProfile as CombatProfile | null;
+    if (!combatProfile?.guns?.length) continue;
+
+    const attackerHealth = getHealth(attacker);
+    const targetHealth = getHealth(target);
+    if (attackerHealth.current <= 0 || targetHealth.current <= 0) continue;
+
+    const result = resolveGunEngagement({
+      attackerProfile: combatProfile,
+      attackerHealthCurrent: attackerHealth.current,
+      attackerHealthMax: attackerHealth.max,
+      targetLengthM: target.unitClass.lengthMeters ?? 100,
+      targetBeamM: target.unitClass.beamMeters ?? 12,
+      targetSpeedKnots: (speedByUnit.get(target.id) as number | undefined) ?? 0,
+      rangeM: d.cpaDistanceNm * NM_TO_M,
+    });
+    if (!result) continue; // hors de portée de toute batterie de l'attaquant
+
+    if (result.hit) {
+      targetHealth.current = Math.max(0, targetHealth.current - result.damagePoints);
+    }
+
+    combatRows.push({
+      turnId,
+      attackerUnitId: attacker.id,
+      targetUnitId: target.id,
+      weaponType: "GUN",
+      rangeNm: d.cpaDistanceNm,
+      hitChancePercent: result.hitChancePercent,
+      hits: result.hits,
+      damagePoints: result.damagePoints,
+      targetHealthLeft: targetHealth.current,
+      targetSunk: targetHealth.current <= 0,
+    });
+  }
+
+  if (combatRows.length > 0) {
+    await tx.combatEvent.createMany({ data: combatRows });
+  }
+
+  for (const [unitId, h] of health) {
+    await tx.unit.update({
+      where: { id: unitId },
+      data: { healthCurrent: h.current, status: statusFromHealth(h.current, h.max) },
+    });
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function generateReportForTeam(tx: any, turnId: string, teamId: string) {
   const ownUnits = await tx.unit.findMany({
@@ -462,6 +575,8 @@ async function generateReportForTeam(tx: any, turnId: string, teamId: string) {
       name: true,
       pennant: true,
       status: true,
+      healthCurrent: true,
+      healthMax: true,
       currentLat: true,
       currentLng: true,
       currentHeadingDeg: true,
@@ -494,9 +609,30 @@ async function generateReportForTeam(tx: any, turnId: string, teamId: string) {
     observedBy: d.observerUnit.name,
   }));
 
+  const combatEvents = await tx.combatEvent.findMany({
+    where: {
+      turnId,
+      OR: [{ attackerUnit: { fleet: { teamId } } }, { targetUnit: { fleet: { teamId } } }],
+    },
+    include: {
+      attackerUnit: { select: { id: true, name: true, fleet: { select: { teamId: true } } } },
+      targetUnit: { select: { id: true, name: true, fleet: { select: { teamId: true } } } },
+    },
+  });
+
+  const combats = combatEvents.map((c: (typeof combatEvents)[number]) => ({
+    side: c.attackerUnit.fleet.teamId === teamId ? ("ATTACKER" as const) : ("TARGET" as const),
+    attackerName: c.attackerUnit.name,
+    targetName: c.targetUnit.name,
+    weaponType: c.weaponType,
+    hits: c.hits,
+    damagePoints: Math.round(c.damagePoints * 10) / 10,
+    targetSunk: c.targetSunk,
+  }));
+
   await tx.report.upsert({
     where: { turnId_teamId: { turnId, teamId } },
-    create: { turnId, teamId, ownUnits, contacts },
-    update: { ownUnits, contacts },
+    create: { turnId, teamId, ownUnits, contacts, combats },
+    update: { ownUnits, contacts, combats },
   });
 }

@@ -12,7 +12,7 @@ export default async function PositionsPage() {
   const [scenario, units] = await Promise.all([
     prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
     prisma.unit.findMany({
-      where: { scenarioId: session.scenarioId, status: "ACTIVE" },
+      where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } },
       include: {
         unitClass: { select: { name: true, category: true, lengthMeters: true } },
         fleet: { select: { name: true, team: { select: { name: true, colorHex: true } } } },

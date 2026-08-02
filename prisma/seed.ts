@@ -95,6 +95,7 @@ function screenArcPositions(ref: { lat: number; lng: number }, headingDeg: numbe
 async function main() {
   await prisma.$transaction([
     prisma.report.deleteMany(),
+    prisma.combatEvent.deleteMany(),
     prisma.detectionEvent.deleteMany(),
     prisma.waypoint.deleteMany(),
     prisma.unitOrder.deleteMany(),
@@ -155,6 +156,13 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 28,
       lengthMeters: 227.1,
+      beamMeters: 31.4,
+      combatProfile: {
+        guns: [
+          { calibreMm: 356, count: 10, rangeM: 37000 },
+          { calibreMm: 133, count: 16, rangeM: 23400 },
+        ],
+      },
       sensors: [
         { type: "RADAR", rangeNm: 20 },
         { type: "VISUAL", rangeNm: 14 },
@@ -184,6 +192,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 32,
       lengthMeters: 180.3,
+      beamMeters: 18.9,
+      combatProfile: {
+        guns: [{ calibreMm: 152, count: 12, rangeM: 22500 }],
+        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30 },
+      },
       sensors: [
         { type: "RADAR", rangeNm: 18 },
         { type: "VISUAL", rangeNm: 13 },
@@ -212,6 +225,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 30,
       lengthMeters: 187,
+      beamMeters: 19.3,
+      combatProfile: {
+        guns: [{ calibreMm: 152, count: 12, rangeM: 22600 }],
+        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30 },
+      },
       sensors: [
         { type: "RADAR", rangeNm: 19 },
         { type: "VISUAL", rangeNm: 13 },
@@ -240,6 +258,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 31,
       lengthMeters: 169.3,
+      beamMeters: 18.9,
+      combatProfile: {
+        guns: [{ calibreMm: 152, count: 12, rangeM: 22600 }],
+        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30 },
+      },
       sensors: [
         { type: "RADAR", rangeNm: 17 },
         { type: "VISUAL", rangeNm: 12 },
@@ -267,6 +290,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 32,
       lengthMeters: 192.9,
+      beamMeters: 20.1,
+      combatProfile: {
+        guns: [{ calibreMm: 203, count: 8, rangeM: 19200 }],
+        torpedoTubes: { count: 8, rangeM: 11000, speedKnots: 30 },
+      },
       sensors: [
         { type: "RADAR", rangeNm: 18 },
         { type: "VISUAL", rangeNm: 13 },
@@ -296,6 +324,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 36,
       lengthMeters: 100.3,
+      beamMeters: 10.4,
+      combatProfile: {
+        guns: [{ calibreMm: 120, count: 6, rangeM: 18200 }],
+        torpedoTubes: { count: 4, rangeM: 11000, speedKnots: 30 },
+      },
       sensors: [
         { type: "RADAR", rangeNm: 15 },
         { type: "VISUAL", rangeNm: 10 },
@@ -323,6 +356,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 36,
       lengthMeters: 114.9,
+      beamMeters: 11.1,
+      combatProfile: {
+        guns: [{ calibreMm: 120, count: 8, rangeM: 18200 }],
+        torpedoTubes: { count: 4, rangeM: 11000, speedKnots: 30 },
+      },
       sensors: [
         { type: "RADAR", rangeNm: 15 },
         { type: "VISUAL", rangeNm: 10 },
@@ -350,6 +388,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 37,
       lengthMeters: 100.3,
+      beamMeters: 10.2,
+      combatProfile: {
+        guns: [{ calibreMm: 120, count: 4, rangeM: 18200 }],
+        torpedoTubes: { count: 8, rangeM: 11000, speedKnots: 30 },
+      },
       sensors: [
         { type: "RADAR", rangeNm: 16 },
         { type: "VISUAL", rangeNm: 10 },
@@ -377,6 +420,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 18,
       lengthMeters: 95.1,
+      beamMeters: 9.35,
+      combatProfile: {
+        guns: [{ calibreMm: 102, count: 4, rangeM: 12500 }],
+        torpedoTubes: { count: 6, rangeM: 9000, speedKnots: 25 },
+      },
       sensors: [
         { type: "SONAR", rangeNm: 3 },
         { type: "VISUAL", rangeNm: 9 },
@@ -406,6 +454,7 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 10,
       lengthMeters: 135,
+      beamMeters: 17.3,
       sensors: [{ type: "VISUAL", rangeNm: 8 }],
       detectability: 1.6,
       iconKey: "merchant",
@@ -423,6 +472,14 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 32,
       lengthMeters: 234.9,
+      beamMeters: 30,
+      combatProfile: {
+        guns: [
+          { calibreMm: 283, count: 9, rangeM: 41000 },
+          { calibreMm: 149, count: 12, rangeM: 22000 },
+          { calibreMm: 105, count: 14, rangeM: 17700 },
+        ],
+      },
       sensors: [
         { type: "RADAR", rangeNm: 12 },
         { type: "VISUAL", rangeNm: 14 },
@@ -452,6 +509,11 @@ async function main() {
       category: "SURFACE_SHIP",
       maxSpeedKnots: 36,
       lengthMeters: 127,
+      beamMeters: 12,
+      combatProfile: {
+        guns: [{ calibreMm: 149, count: 5, rangeM: 22000 }],
+        torpedoTubes: { count: 8, rangeM: 12500, speedKnots: 30 },
+      },
       sensors: [
         { type: "RADAR", rangeNm: 8 },
         { type: "VISUAL", rangeNm: 10 },
@@ -480,6 +542,14 @@ async function main() {
       category: "SUBMARINE",
       maxSpeedKnots: 18,
       lengthMeters: 67.1,
+      beamMeters: 6.2,
+      // Pas de canon en combatProfile : en 1943 un U-Boot en surface évite
+      // le duel d'artillerie avec un escorteur. Combat V1 = canons
+      // seulement ; le U-Boot ne peut donc pas encore engager au canon
+      // (cohérent avec la doctrine réelle), les torpilles suivront.
+      combatProfile: {
+        torpedoTubes: { count: 5, rangeM: 5000, speedKnots: 40 },
+      },
       sensors: [
         { type: "HYDROPHONE", rangeNm: 4 },
         { type: "VISUAL", rangeNm: 6 },
@@ -520,49 +590,49 @@ async function main() {
   ];
   const merchantPositions = convoyGridPositions(LOCH_EWE, LOCH_EWE_HEADING, merchantNames.length);
   for (let i = 0; i < merchantNames.length; i++) {
-    await createUnit(scenario.id, fleetConvoy.id, classMerchant.id, merchantNames[i], merchantPositions[i]);
+    await createUnit(scenario.id, fleetConvoy.id, classMerchant, merchantNames[i], merchantPositions[i]);
   }
 
   const closeEscortUnits = [
-    { name: "HMS Westcott", classId: classEscort.id },
-    { name: "HMS Speedwell", classId: classEscort.id },
-    { name: "HMS Acanthus", classId: classEscort.id },
-    { name: "HMS Milne", classId: classDestroyerM.id },
-    { name: "HMS Matchless", classId: classDestroyerM.id },
-    { name: "HMS Meteor", classId: classDestroyerM.id },
-    { name: "HMS Musketeer", classId: classDestroyerM.id },
-    { name: "HMS Ashanti", classId: classDestroyerTribal.id },
+    { name: "HMS Westcott", unitClass: classEscort },
+    { name: "HMS Speedwell", unitClass: classEscort },
+    { name: "HMS Acanthus", unitClass: classEscort },
+    { name: "HMS Milne", unitClass: classDestroyerM },
+    { name: "HMS Matchless", unitClass: classDestroyerM },
+    { name: "HMS Meteor", unitClass: classDestroyerM },
+    { name: "HMS Musketeer", unitClass: classDestroyerM },
+    { name: "HMS Ashanti", unitClass: classDestroyerTribal },
   ];
   const closeEscortPositions = screenArcPositions(LOCH_EWE, LOCH_EWE_HEADING, closeEscortUnits.length, CLOSE_ESCORT_RADIUS_M);
   for (let i = 0; i < closeEscortUnits.length; i++) {
-    await createUnit(scenario.id, fleetCloseEscort.id, closeEscortUnits[i].classId, closeEscortUnits[i].name, closeEscortPositions[i]);
+    await createUnit(scenario.id, fleetCloseEscort.id, closeEscortUnits[i].unitClass, closeEscortUnits[i].name, closeEscortPositions[i]);
   }
 
   const cruiserPositions = lineAheadPositions(AKUREYRI, AKUREYRI_HEADING, 3);
-  await createUnit(scenario.id, fleetCruisers.id, classCruiserEdinburgh.id, "HMS Belfast", cruiserPositions[0]);
-  await createUnit(scenario.id, fleetCruisers.id, classHeavyCruiser.id, "HMS Norfolk", cruiserPositions[1]);
-  await createUnit(scenario.id, fleetCruisers.id, classCruiserTown.id, "HMS Sheffield", cruiserPositions[2]);
+  await createUnit(scenario.id, fleetCruisers.id, classCruiserEdinburgh, "HMS Belfast", cruiserPositions[0]);
+  await createUnit(scenario.id, fleetCruisers.id, classHeavyCruiser, "HMS Norfolk", cruiserPositions[1]);
+  await createUnit(scenario.id, fleetCruisers.id, classCruiserTown, "HMS Sheffield", cruiserPositions[2]);
 
   const coveringCapitalPositions = lineAheadPositions(AKUREYRI, AKUREYRI_HEADING, 2);
   await createUnit(
     scenario.id,
     fleetCoveringForce.id,
-    classBattleshipKGV.id,
+    classBattleshipKGV,
     "HMS Duke of York",
     coveringCapitalPositions[0],
     "Navire amiral de la Home Fleet (amiral Bruce Fraser) lors de l'opération. C'est elle qui porta le coup de grâce au Scharnhorst à courte distance dans la soirée du 26 décembre 1943."
   );
-  await createUnit(scenario.id, fleetCoveringForce.id, classCruiserCrownColony.id, "HMS Jamaica", coveringCapitalPositions[1]);
+  await createUnit(scenario.id, fleetCoveringForce.id, classCruiserCrownColony, "HMS Jamaica", coveringCapitalPositions[1]);
   const coveringScreenNames = ["HMS Saumarez", "HMS Savage", "HMS Scorpion", "HNoMS Stord"];
   const coveringScreenPositions = screenArcPositions(AKUREYRI, AKUREYRI_HEADING, coveringScreenNames.length, SCREEN_RADIUS_M);
   for (let i = 0; i < coveringScreenNames.length; i++) {
-    await createUnit(scenario.id, fleetCoveringForce.id, classDestroyerS.id, coveringScreenNames[i], coveringScreenPositions[i]);
+    await createUnit(scenario.id, fleetCoveringForce.id, classDestroyerS, coveringScreenNames[i], coveringScreenPositions[i]);
   }
 
   await createUnit(
     scenario.id,
     fleetScharnhorst.id,
-    classScharnhorst.id,
+    classScharnhorst,
     "Scharnhorst",
     KAFJORD,
     "Appareille de l'Altenfjord le 25 décembre 1943 sous le commandement du contre-amiral Erich Bey pour l'opération Ostfront, avec l'intention d'intercepter le convoi JW55B."
@@ -570,11 +640,11 @@ async function main() {
   const narvikNames = ["Z29", "Z30", "Z33", "Z34", "Z38"];
   const narvikPositions = screenArcPositions(KAFJORD, KAFJORD_HEADING, narvikNames.length, SCREEN_RADIUS_M);
   for (let i = 0; i < narvikNames.length; i++) {
-    await createUnit(scenario.id, fleetScharnhorst.id, classNarvikDestroyer.id, narvikNames[i], narvikPositions[i]);
+    await createUnit(scenario.id, fleetScharnhorst.id, classNarvikDestroyer, narvikNames[i], narvikPositions[i]);
   }
 
   for (const name of ["U-277", "U-354", "U-387", "U-601"]) {
-    await createUnit(scenario.id, fleetUboats.id, classUboat.id, name, jitter(EISENBART_LINE));
+    await createUnit(scenario.id, fleetUboats.id, classUboat, name, jitter(EISENBART_LINE));
   }
 
   const weather1 = await prisma.weather.create({
@@ -635,21 +705,29 @@ async function main() {
 async function createUnit(
   scenarioId: string,
   fleetId: string,
-  unitClassId: string,
+  unitClass: { id: string; weaponSystems: unknown },
   name: string,
   position: { lat: number; lng: number },
   historicalNote?: string
 ) {
+  // Potentiel de résistance = formule du livret (Dw/1000 + blindage + K%),
+  // déjà calculée et stockée comme originalGamePoints lors de la recherche
+  // historique des caractéristiques de chaque classe.
+  const weaponSystems = unitClass.weaponSystems as { originalGamePoints?: number } | null;
+  const healthMax = weaponSystems?.originalGamePoints ?? 5;
+
   return prisma.unit.create({
     data: {
       scenarioId,
       fleetId,
-      unitClassId,
+      unitClassId: unitClass.id,
       name,
       currentLat: position.lat,
       currentLng: position.lng,
       status: "ACTIVE",
       historicalNote,
+      healthMax,
+      healthCurrent: healthMax,
     },
   });
 }

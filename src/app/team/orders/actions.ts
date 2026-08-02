@@ -105,7 +105,7 @@ export async function submitFleetOrderAction(params: {
     await assertCanOrderFleet(session, params.fleetId);
 
     const units = await prisma.unit.findMany({
-      where: { fleetId: params.fleetId, status: "ACTIVE" },
+      where: { fleetId: params.fleetId, status: { in: ["ACTIVE", "DAMAGED"] } },
       select: { id: true, name: true, currentLat: true, currentLng: true },
     });
     if (units.length === 0) {

@@ -24,7 +24,7 @@ export default async function ReviewPage() {
   const [scenario, units, detections, teams] = await Promise.all([
     prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
     prisma.unit.findMany({
-      where: { scenarioId: session.scenarioId, status: "ACTIVE" },
+      where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } },
       include: {
         unitClass: { select: { name: true, category: true, lengthMeters: true } },
         fleet: { select: { teamId: true, team: { select: { name: true, colorHex: true } } } },

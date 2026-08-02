@@ -32,6 +32,9 @@ type UnitDto = {
   detectability: number;
   historicalNote: string | null;
   profileImageUrl: string | null;
+  status: string;
+  healthCurrent: number | null;
+  healthMax: number | null;
   currentLat: number;
   currentLng: number;
   currentHeadingDeg: number | null;
@@ -470,6 +473,11 @@ export function OrdersClient(props: {
                             />
                           )}
                           {unit.name}
+                          {unit.status === "DAMAGED" && (
+                            <span className="text-amber-400" title="Endommagé">
+                              ⚠
+                            </span>
+                          )}
                         </span>
                         {draft?.saved && <span className="text-emerald-400">✓</span>}
                       </div>
@@ -696,9 +704,28 @@ export function OrdersClient(props: {
 }
 
 function ShipDetailPanel({ unit }: { unit: UnitDto }) {
+  const healthRatio = unit.healthMax && unit.healthMax > 0 ? clamp01((unit.healthCurrent ?? 0) / unit.healthMax) : null;
   return (
     <div className="space-y-2 border-t border-slate-800 pt-4">
       <h3 className="text-sm font-semibold text-slate-400">Caractéristiques</h3>
+      {healthRatio !== null && (
+        <div>
+          <div className="flex items-center justify-between text-xs">
+            <span className={unit.status === "DAMAGED" ? "text-amber-400" : "text-slate-400"}>
+              {unit.status === "DAMAGED" ? "Endommagé" : "État"}
+            </span>
+            <span className="text-slate-500">
+              {Math.round(unit.healthCurrent ?? 0)} / {Math.round(unit.healthMax ?? 0)} pts
+            </span>
+          </div>
+          <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+            <div
+              className={`h-full ${healthRatio < 0.6 ? "bg-amber-500" : "bg-emerald-500"}`}
+              style={{ width: `${healthRatio * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
       {unit.profileImageUrl && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -744,6 +771,10 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
 
 function defaultSpeed(maxSpeedKnots: number) {
   return Math.max(1, Math.round(maxSpeedKnots * 0.7));
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
 function formatCategory(category: string) {

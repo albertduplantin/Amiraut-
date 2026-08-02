@@ -69,6 +69,7 @@ model UnitClass {
   category         UnitCategory
   maxSpeedKnots    Float
   lengthMeters     Float? // longueur hors-tout réelle, pour l'échelle des silhouettes vue de dessus
+  beamMeters       Float? // largeur hors-tout réelle, pour la taille de cible au combat (L × l)
   sensors          Json // [{ type: "RADAR", rangeNm: 20 }, ...]
   detectability    Float        @default(1)
   iconKey          String
@@ -76,7 +77,8 @@ model UnitClass {
   planImageUrl     String? // silhouette vue de dessus, si disponible
   historicalNote   String? // contexte historique du type de navire
   enduranceMinutes Int? // réservé phase 2 (autonomie/carburant), inutilisé en V1
-  weaponSystems    Json? // réservé phase 2 (armement), inutilisé en V1
+  weaponSystems    Json? // fiche d'armement historique affichée aux joueurs (texte libre)
+  combatProfile    Json? // armement structuré utilisé par le moteur de combat, voir CombatProfile dans combat.ts
 
   units Unit[]
 }
@@ -105,17 +107,19 @@ model Unit {
   name              String
   pennant           String?
   historicalNote    String? // contexte historique propre à ce navire (rôle dans la bataille, etc.)
-  status            UnitStatus @default(ACTIVE) // DAMAGED/SUNK réservés phase 2 (moteur de combat)
-  healthMax         Int? // réservé phase 2
-  healthCurrent     Int? // réservé phase 2
+  status            UnitStatus @default(ACTIVE)
+  healthMax         Float? // potentiel de résistance initial (formule du livret : Dw/1000 + blindage + K%)
+  healthCurrent     Float?
   currentLat        Float
   currentLng        Float
   currentHeadingDeg Float?
   lastResolvedTurn  Int        @default(0)
 
-  orders       UnitOrder[]
-  detectedAs   DetectionEvent[] @relation("TargetUnit")
-  observedFrom DetectionEvent[] @relation("ObserverUnit")
+  orders          UnitOrder[]
+  detectedAs      DetectionEvent[] @relation("TargetUnit")
+  observedFrom    DetectionEvent[] @relation("ObserverUnit")
+  combatAsTarget  CombatEvent[]    @relation("CombatTarget")
+  combatAsAttacker CombatEvent[]   @relation("CombatAttacker")
 
   @@index([scenarioId, fleetId])
 }
@@ -179,6 +183,7 @@ model Turn {
 
   orders          UnitOrder[]
   detectionEvents DetectionEvent[]
+  combatEvents    CombatEvent[]
   reports         Report[]
 
   @@unique([scenarioId, number])
@@ -287,6 +292,37 @@ enum ArbiterStatus {
   ADDED_MANUALLY
 }
 
+// ── Combat ──────────────────────────────────────────────────
+// Déclenché pour toute détection CONFIRMÉE/ADDED_MANUALLY dont la distance
+// de CPA tombe dans la portée d'une arme de l'observateur : l'engagement
+// suit directement la confirmation de détection par l'arbitre (arbitrage
+// hybride, cohérent avec la détection). Voir src/lib/combat.ts.
+
+model CombatEvent {
+  id               String     @id @default(cuid())
+  turnId           String
+  turn             Turn       @relation(fields: [turnId], references: [id])
+  attackerUnitId   String
+  attackerUnit     Unit       @relation("CombatAttacker", fields: [attackerUnitId], references: [id])
+  targetUnitId     String
+  targetUnit       Unit       @relation("CombatTarget", fields: [targetUnitId], references: [id])
+  weaponType       WeaponType
+  rangeNm          Float
+  hitChancePercent Float
+  hits             Int
+  damagePoints     Float
+  targetHealthLeft Float
+  targetSunk       Boolean    @default(false)
+  createdAt        DateTime   @default(now())
+
+  @@index([turnId])
+}
+
+enum WeaponType {
+  GUN
+  TORPEDO
+}
+
 // ── Rapport publié, filtré par équipe ────────────────────────
 
 model Report {
@@ -298,6 +334,7 @@ model Report {
   publishedAt DateTime @default(now())
   ownUnits    Json
   contacts    Json
+  combats     Json? // engagements d'artillerie impliquant l'équipe ce tour (voir CombatEvent)
   narrative   String?
 
   @@unique([turnId, teamId])

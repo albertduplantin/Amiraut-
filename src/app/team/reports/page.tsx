@@ -37,6 +37,8 @@ export default async function ReportsPage() {
         ownUnits: r.ownUnits as any,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         contacts: r.contacts as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        combats: (r.combats ?? []) as any,
         narrative: r.narrative,
       }))}
     />

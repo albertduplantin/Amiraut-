@@ -24,7 +24,7 @@ export default async function OrdersPage() {
     prisma.unit.findMany({
       where: {
         scenarioId: session.scenarioId,
-        status: "ACTIVE",
+        status: { in: ["ACTIVE", "DAMAGED"] },
         fleet: {
           teamId: session.teamId,
           ...(session.fleetIds ? { id: { in: session.fleetIds } } : {}),
@@ -62,11 +62,13 @@ export default async function OrdersPage() {
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
-    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: "ACTIVE", fleet: { teamId: session.teamId } } }),
+    prisma.unit.count({
+      where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] }, fleet: { teamId: session.teamId } },
+    }),
     prisma.unitOrder.count({
       where: { turnId: turn.id, unit: { fleet: { teamId: session.teamId } } },
     }),
-    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: "ACTIVE" } }),
+    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } } }),
     prisma.unitOrder.count({ where: { turnId: turn.id } }),
   ]);
 
@@ -107,6 +109,9 @@ export default async function OrdersPage() {
         detectability: u.unitClass.detectability,
         historicalNote: u.historicalNote ?? u.unitClass.historicalNote,
         profileImageUrl: u.unitClass.profileImageUrl,
+        status: u.status,
+        healthCurrent: u.healthCurrent,
+        healthMax: u.healthMax,
         currentLat: u.currentLat,
         currentLng: u.currentLng,
         currentHeadingDeg: u.currentHeadingDeg,

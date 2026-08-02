@@ -18,14 +18,31 @@ export default async function ArbiterDashboardPage() {
       orderBy: { number: "desc" },
       include: { weather: true },
     }),
-    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: "ACTIVE" } }),
+    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } } }),
   ]);
 
   if (!turn) {
     return <div className="p-6 text-slate-100">Aucun tour trouvé pour ce scénario.</div>;
   }
 
-  const orderCount = await prisma.unitOrder.count({ where: { turnId: turn.id } });
+  const [orderCount, lastPublishedTurn] = await Promise.all([
+    prisma.unitOrder.count({ where: { turnId: turn.id } }),
+    prisma.turn.findFirst({
+      where: { scenarioId: session.scenarioId, status: "PUBLISHED" },
+      orderBy: { number: "desc" },
+    }),
+  ]);
+
+  const combatEvents = lastPublishedTurn
+    ? await prisma.combatEvent.findMany({
+        where: { turnId: lastPublishedTurn.id },
+        include: {
+          attackerUnit: { select: { name: true, fleet: { select: { team: { select: { name: true } } } } } },
+          targetUnit: { select: { name: true, fleet: { select: { team: { select: { name: true } } } } } },
+        },
+        orderBy: { createdAt: "asc" },
+      })
+    : [];
 
   return (
     <div className="chart-room-bg min-h-screen p-6 text-slate-100">
@@ -168,8 +185,44 @@ export default async function ArbiterDashboardPage() {
           </Link>
         </div>
       )}
+
+      {combatEvents.length > 0 && lastPublishedTurn && (
+        <section className="panel-brass mt-6 max-w-2xl rounded-md bg-slate-900 p-4">
+          <h2 className="font-display mb-3 tracking-wide text-brass-300">
+            Journal de combat — tour {lastPublishedTurn.number}
+          </h2>
+          <ul className="space-y-1 text-sm">
+            {combatEvents.map((c) => (
+              <li key={c.id} className="rounded-md bg-slate-950/60 px-3 py-2">
+                <div>
+                  <span className="font-medium">{c.attackerUnit.name}</span>{" "}
+                  <span className="text-xs text-slate-500">({c.attackerUnit.fleet.team.name})</span> →{" "}
+                  <span className="font-medium">{c.targetUnit.name}</span>{" "}
+                  <span className="text-xs text-slate-500">({c.targetUnit.fleet.team.name})</span>
+                </div>
+                <div className="text-xs text-slate-400">
+                  {formatWeaponType(c.weaponType)} à {c.rangeNm.toFixed(1)}nm · {c.hitChancePercent.toFixed(0)}% de chances ·{" "}
+                  {c.hits > 0 ? `${c.hits} coup${c.hits > 1 ? "s" : ""} au but, ${c.damagePoints.toFixed(1)} pts` : "tir manqué"}
+                  {c.targetSunk && <span className="text-red-400"> · coulé</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
+}
+
+function formatWeaponType(weaponType: string) {
+  switch (weaponType) {
+    case "GUN":
+      return "artillerie";
+    case "TORPEDO":
+      return "torpille";
+    default:
+      return weaponType;
+  }
 }
 
 function formatStatus(status: string) {
