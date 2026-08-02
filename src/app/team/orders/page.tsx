@@ -45,12 +45,22 @@ export default async function OrdersPage() {
         },
       },
       fleet: { select: { name: true } },
+      pendingFleet: { select: { name: true } },
       orders: {
         where: { turnId: turn.id },
         include: { waypoints: { orderBy: { sequence: "asc" } } },
       },
     },
     orderBy: [{ fleet: { name: "asc" } }, { name: "asc" }],
+  });
+
+  const teamFleets = await prisma.fleet.findMany({
+    where: {
+      teamId: session.teamId,
+      ...(session.fleetIds ? { id: { in: session.fleetIds } } : {}),
+    },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
   });
 
   const [teamUnitCount, teamOrderCount, allActiveUnitCount, allOrderCount] = await Promise.all([
@@ -81,12 +91,14 @@ export default async function OrdersPage() {
       mapZoom={scenario.mapDefaultZoom}
       teamProgress={{ submitted: teamOrderCount, total: teamUnitCount }}
       globalProgress={{ submitted: allOrderCount, total: allActiveUnitCount }}
+      teamFleets={teamFleets}
       units={units.map((u) => ({
         id: u.id,
         name: u.name,
         pennant: u.pennant,
         fleetId: u.fleetId,
         fleetName: u.fleet.name,
+        pendingFleetName: u.pendingFleet?.name ?? null,
         className: u.unitClass.name,
         nation: u.unitClass.nation,
         category: u.unitClass.category,

@@ -55,8 +55,9 @@ model Fleet {
   team   Team   @relation(fields: [teamId], references: [id])
   name   String
 
-  units        Unit[]
-  scopedTokens ParticipantFleetScope[]
+  units              Unit[]
+  pendingTransfersIn Unit[]                  @relation("PendingFleetTransfer")
+  scopedTokens       ParticipantFleetScope[]
 }
 
 // ── Bibliothèque d'unités (gabarits réutilisables) ────────
@@ -93,6 +94,11 @@ model Unit {
   scenario          Scenario   @relation(fields: [scenarioId], references: [id])
   fleetId           String
   fleet             Fleet      @relation(fields: [fleetId], references: [id])
+  // Transfert de flotte demandé par un joueur (ordre par signal) : prend
+  // effet à la publication du tour en cours, pas immédiatement — le navire
+  // a besoin d'un tour pour rallier sa nouvelle formation.
+  pendingFleetId    String?
+  pendingFleet      Fleet?     @relation("PendingFleetTransfer", fields: [pendingFleetId], references: [id])
   unitClassId       String
   unitClass         UnitClass  @relation(fields: [unitClassId], references: [id])
   name              String

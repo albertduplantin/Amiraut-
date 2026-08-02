@@ -45,6 +45,22 @@ export default async function ArbiterDashboardPage() {
             <input type="hidden" name="turnId" value={turn.id} />
 
             <label className="block">
+              Durée de ce tour (heures)
+              <input
+                name="durationHours"
+                type="number"
+                min={1}
+                step="0.5"
+                defaultValue={turn.durationMinutes / 60}
+                required
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                Modifiable à chaque tour (ex: accélérer pour tester la détection en resserrant les flottes).
+              </span>
+            </label>
+
+            <label className="block">
               Visibilité (nm)
               <input name="visibilityNm" type="number" step="0.5" defaultValue={8} required className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1" />
             </label>

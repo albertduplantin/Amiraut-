@@ -13,7 +13,8 @@
       "Bash(pdfinfo *)",
       "Bash(netstat *)",
       "Bash(rm -f verify-*)",
-      "Bash(rm -f stub-*)"
+      "Bash(rm -f stub-*)",
+      "Bash(curl *)"
     ]
   }
 }

@@ -18,6 +18,7 @@ export async function setWeatherAction(formData: FormData) {
     precipitation: String(formData.get("precipitation")),
     windKnots: formData.get("windKnots") ? Number(formData.get("windKnots")) : undefined,
     notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
+    durationMinutes: formData.get("durationHours") ? Number(formData.get("durationHours")) * 60 : undefined,
   });
 
   revalidatePath("/arbiter");

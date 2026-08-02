@@ -11,7 +11,7 @@ import {
   pointsFeatureCollection,
 } from "@/lib/mapData";
 import { clampPathToBudget, pathLengthNm, speedBudgetNm, type LatLng } from "@/lib/geo";
-import { submitOrderAction, submitFleetOrderAction } from "./actions";
+import { submitOrderAction, submitFleetOrderAction, requestFleetTransferAction, cancelFleetTransferAction } from "./actions";
 
 type SensorSpec = { type: string; rangeNm: number };
 
@@ -21,6 +21,7 @@ type UnitDto = {
   pennant: string | null;
   fleetId: string;
   fleetName: string;
+  pendingFleetName: string | null;
   className: string;
   nation: string;
   category: string;
@@ -48,9 +49,10 @@ export function OrdersClient(props: {
   mapZoom: number;
   teamProgress: { submitted: number; total: number };
   globalProgress: { submitted: number; total: number };
+  teamFleets: { id: string; name: string }[];
   units: UnitDto[];
 }) {
-  const { turnId, turnNumber, turnDurationMinutes, weather, units } = props;
+  const { turnId, turnNumber, turnDurationMinutes, weather, units, teamFleets } = props;
 
   const fleets = useMemo(() => {
     const byFleet = new Map<string, UnitDto[]>();
@@ -111,6 +113,9 @@ export function OrdersClient(props: {
 
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [fleetTransferTarget, setFleetTransferTarget] = useState("");
+  const [fleetTransferError, setFleetTransferError] = useState<string | null>(null);
+  const [isFleetTransferPending, startFleetTransferTransition] = useTransition();
   const gameMapRef = useRef<GameMapHandle>(null);
 
   const selectedUnit = units.find((u) => u.id === selectedUnitId) ?? null;
@@ -246,6 +251,28 @@ export function OrdersClient(props: {
         }
         return next;
       });
+    });
+  }
+
+  function requestTransfer() {
+    if (!selectedUnit || !fleetTransferTarget) return;
+    setFleetTransferError(null);
+    startFleetTransferTransition(async () => {
+      const result = await requestFleetTransferAction({ unitId: selectedUnit.id, targetFleetId: fleetTransferTarget });
+      if (!result.ok) {
+        setFleetTransferError(result.error);
+        return;
+      }
+      setFleetTransferTarget("");
+    });
+  }
+
+  function cancelTransfer() {
+    if (!selectedUnit) return;
+    setFleetTransferError(null);
+    startFleetTransferTransition(async () => {
+      const result = await cancelFleetTransferAction({ unitId: selectedUnit.id });
+      if (!result.ok) setFleetTransferError(result.error);
     });
   }
 
@@ -428,6 +455,7 @@ export function OrdersClient(props: {
                       </div>
                       <div className="text-xs text-slate-500">
                         {unit.className} · {unit.fleetName}
+                        {unit.pendingFleetName && <span className="text-amber-400"> → {unit.pendingFleetName}</span>}
                       </div>
                     </button>
                   </li>
@@ -521,6 +549,60 @@ export function OrdersClient(props: {
               </div>
 
               {error && <p className="text-sm text-red-400">{error}</p>}
+
+              <div className="space-y-2 border-t border-slate-800 pt-4">
+                <h3 className="text-sm font-semibold text-slate-400">Flotte</h3>
+                <p className="text-xs text-slate-500">
+                  Actuellement : {selectedUnit.fleetName}
+                  {selectedUnit.pendingFleetName && (
+                    <span className="text-amber-400"> → transfert vers {selectedUnit.pendingFleetName} au tour suivant</span>
+                  )}
+                </p>
+
+                {selectedUnit.pendingFleetName ? (
+                  <button
+                    onClick={cancelTransfer}
+                    disabled={isFleetTransferPending}
+                    className="rounded-md border border-slate-700 px-3 py-1 text-xs hover:bg-slate-900 disabled:opacity-50"
+                  >
+                    Annuler le transfert
+                  </button>
+                ) : (
+                  teamFleets.filter((f) => f.id !== selectedUnit.fleetId).length > 0 && (
+                    <div className="flex gap-2">
+                      <select
+                        value={fleetTransferTarget}
+                        onChange={(e) => setFleetTransferTarget(e.target.value)}
+                        className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs"
+                      >
+                        <option value="">Choisir une flotte…</option>
+                        {teamFleets
+                          .filter((f) => f.id !== selectedUnit.fleetId)
+                          .map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.name}
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        onClick={requestTransfer}
+                        disabled={!fleetTransferTarget || isFleetTransferPending}
+                        className="rounded-md bg-slate-700 px-3 py-1 text-xs hover:bg-slate-600 disabled:opacity-50"
+                      >
+                        Demander
+                      </button>
+                    </div>
+                  )
+                )}
+
+                {fleetTransferError && <p className="text-xs text-red-400">{fleetTransferError}</p>}
+
+                <p className="text-[11px] italic text-slate-600">
+                  Représente un ordre transmis par signal au commandement (comme le détachement de destroyers de
+                  l&apos;amiral Fraser vers sa Force 2 pendant la bataille du cap Nord) : prend effet au tour
+                  suivant, le temps que le navire rallie sa nouvelle formation.
+                </p>
+              </div>
 
               <ShipDetailPanel unit={selectedUnit} />
             </div>

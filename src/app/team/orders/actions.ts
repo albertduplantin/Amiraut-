@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
 import { assertPlayer, assertCanOrderUnit, assertCanOrderFleet, AccessDeniedError } from "@/lib/auth";
-import { saveUnitOrder, OrderValidationError } from "@/lib/turnEngine";
+import { saveUnitOrder, requestFleetTransfer, cancelFleetTransfer, OrderValidationError } from "@/lib/turnEngine";
 import { prisma } from "@/lib/prisma";
 import type { LatLng } from "@/lib/geo";
 
@@ -36,6 +36,54 @@ export async function submitOrderAction(params: {
 
   revalidatePath("/team/orders");
   revalidatePath("/team/waiting");
+  return { ok: true };
+}
+
+export type FleetTransferResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Demande un changement de flotte pour une unité. Ordre transmis par
+ * signal : ne s'applique qu'à la publication du tour en cours (voir
+ * `requestFleetTransfer` dans turnEngine.ts pour la justification
+ * historique), pas immédiatement.
+ */
+export async function requestFleetTransferAction(params: {
+  unitId: string;
+  targetFleetId: string;
+}): Promise<FleetTransferResult> {
+  const session = await getSession();
+
+  try {
+    assertPlayer(session);
+    await assertCanOrderUnit(session, params.unitId);
+    await assertCanOrderFleet(session, params.targetFleetId);
+    await requestFleetTransfer({ unitId: params.unitId, targetFleetId: params.targetFleetId });
+  } catch (error) {
+    if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+
+  revalidatePath("/team/orders");
+  return { ok: true };
+}
+
+export async function cancelFleetTransferAction(params: { unitId: string }): Promise<FleetTransferResult> {
+  const session = await getSession();
+
+  try {
+    assertPlayer(session);
+    await assertCanOrderUnit(session, params.unitId);
+    await cancelFleetTransfer(params.unitId);
+  } catch (error) {
+    if (error instanceof AccessDeniedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+
+  revalidatePath("/team/orders");
   return { ok: true };
 }
 

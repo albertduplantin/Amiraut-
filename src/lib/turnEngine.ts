@@ -116,6 +116,36 @@ export async function saveUnitOrder(params: {
   await maybeResolveTurn(turnId);
 }
 
+/**
+ * Demande le transfert d'une unité vers une autre flotte de la même équipe.
+ * Ne prend effet qu'à la publication du tour en cours (voir `publishTurn`) :
+ * historiquement, un tel changement passait par un ordre du commandement
+ * transmis par signal (ex: le contre-amiral Fraser détachant quatre
+ * destroyers de l'escorte de RA 55A pour rejoindre sa Force 2 pendant la
+ * bataille du cap Nord), et le navire avait besoin de temps pour rallier sa
+ * nouvelle formation — ce n'est jamais instantané.
+ */
+export async function requestFleetTransfer(params: { unitId: string; targetFleetId: string }) {
+  const unit = await prisma.unit.findUniqueOrThrow({
+    where: { id: params.unitId },
+    select: { fleetId: true, fleet: { select: { teamId: true } } },
+  });
+  const targetFleet = await prisma.fleet.findUniqueOrThrow({ where: { id: params.targetFleetId } });
+
+  if (targetFleet.teamId !== unit.fleet.teamId) {
+    throw new OrderValidationError("Une unité ne peut être transférée que vers une flotte de sa propre équipe.");
+  }
+  if (params.targetFleetId === unit.fleetId) {
+    throw new OrderValidationError("Cette unité appartient déjà à cette flotte.");
+  }
+
+  await prisma.unit.update({ where: { id: params.unitId }, data: { pendingFleetId: params.targetFleetId } });
+}
+
+export async function cancelFleetTransfer(unitId: string) {
+  await prisma.unit.update({ where: { id: unitId }, data: { pendingFleetId: null } });
+}
+
 async function maybeResolveTurn(turnId: string) {
   const turn = await prisma.turn.findUniqueOrThrow({ where: { id: turnId } });
   if (turn.status !== "PENDING_ORDERS") return;
@@ -285,9 +315,26 @@ export async function addManualDetection(params: {
 
 export async function setTurnWeather(
   turnId: string,
-  weather: { visibilityNm: number; seaState: number; daylight: string; precipitation: string; windKnots?: number; notes?: string }
+  weather: {
+    visibilityNm: number;
+    seaState: number;
+    daylight: string;
+    precipitation: string;
+    windKnots?: number;
+    notes?: string;
+    durationMinutes?: number;
+  }
 ) {
   const turn = await prisma.turn.findUniqueOrThrow({ where: { id: turnId } });
+  if (turn.status !== "PENDING_ORDERS") {
+    throw new OrderValidationError("Ce tour n'est plus modifiable (ordres déjà en cours ou tour publié).");
+  }
+  if (weather.durationMinutes !== undefined) {
+    if (weather.durationMinutes <= 0) {
+      throw new OrderValidationError("La durée du tour doit être positive.");
+    }
+    await prisma.turn.update({ where: { id: turnId }, data: { durationMinutes: weather.durationMinutes } });
+  }
   await prisma.weather.upsert({
     where: { id: turn.weatherId ?? "__none__" },
     create: {
@@ -357,6 +404,14 @@ export async function publishTurn(turnId: string) {
             lastResolvedTurn: turn.number,
           },
         });
+      }
+
+      const pendingTransfers = await tx.unit.findMany({
+        where: { scenarioId: turn.scenarioId, pendingFleetId: { not: null } },
+        select: { id: true, pendingFleetId: true },
+      });
+      for (const u of pendingTransfers) {
+        await tx.unit.update({ where: { id: u.id }, data: { fleetId: u.pendingFleetId!, pendingFleetId: null } });
       }
 
       const teams = await tx.team.findMany({ where: { scenarioId: turn.scenarioId } });
