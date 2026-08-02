@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { Map as MapLibreMap, LngLatBounds, setWorkerUrl, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { LatLng } from "@/lib/geo";
@@ -10,10 +10,19 @@ export type MapSourceConfig = {
   data: GeoJSON.FeatureCollection;
   kind: "points" | "line";
   color?: string;
+  /** Si vrai, utilise la propriété `color` de chaque feature au lieu de `color`. */
+  colorByFeature?: boolean;
   radius?: number;
   width?: number;
   dashed?: boolean;
   showLabels?: boolean;
+};
+
+export type GameMapHandle = {
+  /** Faux si le point tombe sur une couche terrestre du fond de carte. */
+  isWaterPoint: (p: LatLng) => boolean;
+  /** Échantillonne le segment [a,b] ; faux si un point échantillonné est sur terre. */
+  isWaterSegment: (a: LatLng, b: LatLng, steps?: number) => boolean;
 };
 
 type GameMapProps = {
@@ -29,6 +38,28 @@ type GameMapProps = {
 };
 
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+
+/**
+ * Couches du style dont la présence à un point indique la terre ferme.
+ * Volontairement conservateur : "park"/"park_outline" sont exclus car ils
+ * peuvent longer une côte (jardins, réserves littorales) et provoquer de
+ * faux positifs très près du rivage sans être une vraie barrière terrestre.
+ */
+const LAND_LAYERS = [
+  "landcover_wood",
+  "landcover_grass",
+  "landuse_residential",
+  "landuse_pitch",
+  "landuse_track",
+  "landuse_cemetery",
+  "landuse_hospital",
+  "landuse_school",
+  "building",
+  "building-3d",
+  "aeroway_fill",
+  "aeroway_runway",
+  "aeroway_taxiway",
+];
 
 /**
  * `map.isStyleLoaded()`/l'événement `load` attendent le rendu complet des
@@ -48,12 +79,16 @@ function onceStyleReady(map: MapLibreMap, callback: () => void): () => void {
   return () => map.off("style.load", handler);
 }
 
-export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint }: GameMapProps) {
+export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
+  { center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint },
+  ref
+) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const onClickRef = useRef(onClick);
   const fitToPointsRef = useRef(fitToPoints);
   const isFirstFlyRef = useRef(true);
+  const lastFlownToRef = useRef<LatLng | null>(null);
 
   useEffect(() => {
     onClickRef.current = onClick;
@@ -62,6 +97,32 @@ export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPo
   useEffect(() => {
     fitToPointsRef.current = fitToPoints;
   }, [fitToPoints]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      isWaterPoint: (p: LatLng) => {
+        const map = mapRef.current;
+        if (!map) return true;
+        const px = map.project([p.lng, p.lat]);
+        const land = map.queryRenderedFeatures([px.x, px.y], { layers: LAND_LAYERS });
+        return land.length === 0;
+      },
+      isWaterSegment: (a: LatLng, b: LatLng, steps = 6) => {
+        const map = mapRef.current;
+        if (!map) return true;
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps;
+          const p = { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+          const px = map.project([p.lng, p.lat]);
+          const land = map.queryRenderedFeatures([px.x, px.y], { layers: LAND_LAYERS });
+          if (land.length > 0) return false;
+        }
+        return true;
+      },
+    }),
+    []
+  );
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -111,17 +172,24 @@ export function GameMap({ center, zoom = 5, sources, onClick, className, fitToPo
     // Seuls les changements de sélection ultérieurs déclenchent le survol.
     if (isFirstFlyRef.current) {
       isFirstFlyRef.current = false;
+      lastFlownToRef.current = flyToPoint ?? null;
       return;
     }
     const map = mapRef.current;
     if (!map || !flyToPoint) return;
+    // Comparaison par valeur : un nouveau rendu avec les mêmes coordonnées
+    // (référence d'objet différente mais point identique) ne doit pas
+    // redéclencher un survol de la carte.
+    const last = lastFlownToRef.current;
+    if (last && last.lat === flyToPoint.lat && last.lng === flyToPoint.lng) return;
+    lastFlownToRef.current = flyToPoint;
     return onceStyleReady(map, () => {
       map.flyTo({ center: [flyToPoint.lng, flyToPoint.lat], zoom: Math.max(map.getZoom(), 6), speed: 1.4 });
     });
   }, [flyToPoint]);
 
   return <div ref={containerRef} className={className ?? "h-full w-full"} />;
-}
+});
 
 function fitMapToPoints(map: MapLibreMap, points: LatLng[]) {
   const bounds = points.reduce(
@@ -139,6 +207,7 @@ function applyLayer(map: MapLibreMap, config: MapSourceConfig) {
   }
 
   map.addSource(config.id, { type: "geojson", data: config.data });
+  const colorExpr = config.colorByFeature ? (["get", "color"] as unknown as string) : (config.color ?? "#22d3ee");
 
   if (config.kind === "line") {
     map.addLayer({
@@ -147,7 +216,7 @@ function applyLayer(map: MapLibreMap, config: MapSourceConfig) {
       source: config.id,
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
-        "line-color": config.color ?? "#22d3ee",
+        "line-color": colorExpr,
         "line-width": config.width ?? 2,
         ...(config.dashed ? { "line-dasharray": [2, 2] } : {}),
       },
@@ -160,7 +229,7 @@ function applyLayer(map: MapLibreMap, config: MapSourceConfig) {
     type: "circle",
     source: config.id,
     paint: {
-      "circle-color": config.color ?? "#22d3ee",
+      "circle-color": colorExpr,
       "circle-radius": config.radius ?? 6,
       "circle-stroke-color": "#0f172a",
       "circle-stroke-width": 1.5,

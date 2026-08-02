@@ -1,10 +1,24 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useFormStatus } from "react-dom";
 import { GameMap, type MapSourceConfig } from "@/components/GameMap";
 import { multiLineFeatureCollection, pointsFeatureCollection } from "@/lib/mapData";
 import type { LatLng } from "@/lib/geo";
 import { confirmDetectionAction, rejectDetectionAction, addManualDetectionAction, publishTurnAction } from "../actions";
+
+function PublishButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-medium hover:bg-emerald-500 disabled:opacity-60"
+    >
+      {pending ? "Publication…" : "Publier le tour"}
+    </button>
+  );
+}
 
 type UnitDto = {
   id: string;
@@ -107,9 +121,7 @@ export function ReviewClient(props: {
         <h1 className="text-lg font-semibold">Revue arbitre — Tour {props.turnNumber}</h1>
         <form action={publishTurnAction}>
           <input type="hidden" name="turnId" value={props.turnId} />
-          <button type="submit" className="rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-medium hover:bg-emerald-500">
-            Publier le tour
-          </button>
+          <PublishButton />
         </form>
       </header>
 

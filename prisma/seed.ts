@@ -24,9 +24,13 @@ const prisma = new PrismaClient({ adapter });
 
 const SOURCE = "Amirauté (Paul Bois) — Avions et Navires";
 
+// Positions vérifiées en mer (pas sur terre) par requête sur la couche
+// vectorielle "water" du fond de carte. Akureyri et l'Altenfjord d'origine
+// tombaient sur la terre ferme ; corrigés avec de vraies coordonnées de
+// mouillage.
 const LOCH_EWE = { lat: 57.87, lng: -5.6 };
-const AKUREYRI = { lat: 65.68, lng: -18.09 };
-const ALTENFJORD = { lat: 69.92, lng: 23.28 };
+const AKUREYRI = { lat: 65.66, lng: -18.05 }; // mouillage dans l'Eyjafjörður, au large d'Akureyri
+const KAFJORD = { lat: 69.9689, lng: 23.0392 }; // Kåfjord, mouillage réel du Tirpitz/Scharnhorst dans l'Altenfjord
 const EISENBART_LINE = { lat: 73.2, lng: 25.0 };
 
 async function main() {
@@ -51,7 +55,7 @@ async function main() {
       name: "Convoi JW55B / RA55A — Bataille du cap Nord (déc. 1943)",
       description:
         "Le convoi JW55B quitte Loch Ewe le 22 décembre 1943 pour Mourmansk, escorté par le Home Fleet. " +
-        "Le Kriegsmarine engage le Scharnhorst depuis l'Altenfjord (opération Ostfront) et des U-boots " +
+        "Le Kriegsmarine engage le Scharnhorst depuis Kåfjord, dans l'Altenfjord (opération Ostfront), et des U-boots " +
         "de la ligne de patrouille Eisenbart. Objectif allié : livrer le convoi intact. Objectif allemand : " +
         "intercepter et détruire le convoi et/ou son escorte.",
       mapCenterLat: 70,
@@ -469,11 +473,11 @@ async function main() {
     fleetScharnhorst.id,
     classScharnhorst.id,
     "Scharnhorst",
-    ALTENFJORD,
+    KAFJORD,
     "Appareille de l'Altenfjord le 25 décembre 1943 sous le commandement du contre-amiral Erich Bey pour l'opération Ostfront, avec l'intention d'intercepter le convoi JW55B."
   );
   for (const name of ["Z29", "Z30", "Z33", "Z34", "Z38"]) {
-    await createUnit(scenario.id, fleetScharnhorst.id, classNarvikDestroyer.id, name, ALTENFJORD);
+    await createUnit(scenario.id, fleetScharnhorst.id, classNarvikDestroyer.id, name, KAFJORD);
   }
 
   for (const name of ["U-277", "U-354", "U-387", "U-601"]) {

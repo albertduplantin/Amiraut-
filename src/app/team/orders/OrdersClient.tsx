@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { GameMap, type MapSourceConfig } from "@/components/GameMap";
+import { useMemo, useRef, useState, useTransition } from "react";
+import { GameMap, type GameMapHandle, type MapSourceConfig } from "@/components/GameMap";
 import {
   budgetCircleFeatureCollection,
+  colorForId,
   lineFeatureCollection,
   multiLineFeatureCollection,
+  multiLineFeatureCollectionColored,
   pointsFeatureCollection,
 } from "@/lib/mapData";
 import { clampPathToBudget, pathLengthNm, speedBudgetNm, type LatLng } from "@/lib/geo";
@@ -93,6 +95,7 @@ export function OrdersClient(props: {
 
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const gameMapRef = useRef<GameMapHandle>(null);
 
   const selectedUnit = units.find((u) => u.id === selectedUnitId) ?? null;
   const selectedUnitDraft = selectedUnitId ? unitDrafts[selectedUnitId] : null;
@@ -128,8 +131,15 @@ export function OrdersClient(props: {
     if (mode === "unit") {
       if (!selectedUnit || !selectedUnitDraft) return;
       const start = { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
+      const previous = selectedUnitDraft.waypoints[selectedUnitDraft.waypoints.length - 1] ?? start;
       const budget = speedBudgetNm(selectedUnitDraft.speedKnots, turnDurationMinutes);
       const clamped = clampPathToBudget([start, ...selectedUnitDraft.waypoints, pos], budget);
+      const newPoint = clamped[clamped.length - 1];
+      if (gameMapRef.current && !gameMapRef.current.isWaterSegment(previous, newPoint)) {
+        setError("Trajet impossible : il traverserait la terre.");
+        return;
+      }
+      setError(null);
       setUnitDrafts((prev) => ({
         ...prev,
         [selectedUnit.id]: { ...prev[selectedUnit.id], waypoints: clamped.slice(1), saved: false },
@@ -138,8 +148,15 @@ export function OrdersClient(props: {
     }
 
     if (!selectedFleet || !selectedFleetDraft) return;
+    const previous = selectedFleetDraft.waypoints[selectedFleetDraft.waypoints.length - 1] ?? selectedFleet.centroid;
     const budget = speedBudgetNm(selectedFleetDraft.speedKnots, turnDurationMinutes);
     const clamped = clampPathToBudget([selectedFleet.centroid, ...selectedFleetDraft.waypoints, pos], budget);
+    const newPoint = clamped[clamped.length - 1];
+    if (gameMapRef.current && !gameMapRef.current.isWaterSegment(previous, newPoint)) {
+      setError("Trajet impossible : il traverserait la terre.");
+      return;
+    }
+    setError(null);
     setFleetDrafts((prev) => ({ ...prev, [selectedFleet.fleetId]: { ...prev[selectedFleet.fleetId], waypoints: clamped.slice(1) } }));
   }
 
@@ -236,6 +253,23 @@ export function OrdersClient(props: {
       },
     ];
 
+    const savedPaths = units
+      .filter((u) => unitDrafts[u.id]?.saved)
+      .map((u) => ({
+        points: [{ lat: u.currentLat, lng: u.currentLng }, ...unitDrafts[u.id].waypoints],
+        color: colorForId(u.id),
+      }))
+      .filter((p) => p.points.length >= 2);
+    if (savedPaths.length > 0) {
+      list.push({
+        id: "saved-paths",
+        kind: "line",
+        data: multiLineFeatureCollectionColored(savedPaths),
+        colorByFeature: true,
+        width: 2,
+      });
+    }
+
     if (mode === "unit" && selectedUnit) {
       list.push({
         id: "highlight",
@@ -291,7 +325,7 @@ export function OrdersClient(props: {
 
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [units, mode, selectedUnitId, selectedUnitDraft, unitRemainingNm, selectedFleetId, selectedFleetDraft, fleetRemainingNm]);
+  }, [units, unitDrafts, mode, selectedUnitId, selectedUnitDraft, unitRemainingNm, selectedFleetId, selectedFleetDraft, fleetRemainingNm]);
 
   return (
     <div className="flex h-screen w-full flex-col bg-slate-950 text-slate-100">
@@ -346,7 +380,16 @@ export function OrdersClient(props: {
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-medium">{unit.name}</span>
+                        <span className="flex items-center gap-1.5 font-medium">
+                          {draft?.saved && (
+                            <span
+                              className="inline-block h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: colorForId(unit.id) }}
+                              title="Trajet enregistré"
+                            />
+                          )}
+                          {unit.name}
+                        </span>
                         {draft?.saved && <span className="text-emerald-400">✓</span>}
                       </div>
                       <div className="text-xs text-slate-500">
@@ -384,6 +427,7 @@ export function OrdersClient(props: {
 
         <main className="relative flex-1">
           <GameMap
+            ref={gameMapRef}
             center={props.mapCenter}
             zoom={props.mapZoom}
             sources={sources}
@@ -484,7 +528,13 @@ export function OrdersClient(props: {
                 <ul className="space-y-1">
                   {selectedFleet.units.map((u) => (
                     <li key={u.id}>
-                      <button onClick={() => inspectUnit(u.id)} className="w-full rounded-md bg-slate-900 px-2 py-1 text-left text-xs hover:bg-slate-800">
+                      <button
+                        onClick={() => inspectUnit(u.id)}
+                        className="flex w-full items-center gap-1.5 rounded-md bg-slate-900 px-2 py-1 text-left text-xs hover:bg-slate-800"
+                      >
+                        {unitDrafts[u.id]?.saved && (
+                          <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: colorForId(u.id) }} />
+                        )}
                         <span className="font-medium">{u.name}</span> <span className="text-slate-500">— {u.className}</span>
                       </button>
                     </li>
