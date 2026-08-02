@@ -10,7 +10,8 @@
       "Bash(npx prisma generate)",
       "Bash(pdftoppm *)",
       "Bash(pdftotext *)",
-      "Bash(pdfinfo *)"
+      "Bash(pdfinfo *)",
+      "Bash(netstat *)"
     ]
   }
 }

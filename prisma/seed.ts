@@ -24,13 +24,16 @@ const prisma = new PrismaClient({ adapter });
 
 const SOURCE = "Amirauté (Paul Bois) — Avions et Navires";
 
-// Positions vérifiées en mer (pas sur terre) par requête sur la couche
-// vectorielle "water" du fond de carte. Akureyri et l'Altenfjord d'origine
-// tombaient sur la terre ferme ; corrigés avec de vraies coordonnées de
-// mouillage.
+// Positions vérifiées en mer (pas sur terre) par double contrôle sur le fond
+// de carte : absence de couche terrestre (bois/herbe/bâti/...) ET présence
+// positive de la couche "water" au point exact (une simple absence de terre
+// ne suffit pas : de petits bras de mer peuvent n'avoir ni l'un ni l'autre
+// selon le niveau de zoom). Akureyri et Kåfjord d'origine tombaient sur la
+// terre ferme (la première coordonnée de Kåfjord était en fait à l'intérieur
+// des terres, près du village, pas dans le fjord) ; corrigées.
 const LOCH_EWE = { lat: 57.87, lng: -5.6 };
 const AKUREYRI = { lat: 65.66, lng: -18.05 }; // mouillage dans l'Eyjafjörður, au large d'Akureyri
-const KAFJORD = { lat: 69.9689, lng: 23.0392 }; // Kåfjord, mouillage réel du Tirpitz/Scharnhorst dans l'Altenfjord
+const KAFJORD = { lat: 70.0, lng: 23.2 }; // Altafjorden, au large de Kåfjord (mouillage réel du Tirpitz/Scharnhorst)
 const EISENBART_LINE = { lat: 73.2, lng: 25.0 };
 
 async function main() {
