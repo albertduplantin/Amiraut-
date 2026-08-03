@@ -43,13 +43,28 @@ export default async function TacticalPage({ params }: { params: Promise<{ detec
     redirect("/team/orders");
   }
 
-  const [scenario, alreadyFired] = await Promise.all([
+  // Les tirs déjà effectués se comptent sur le tour EN COURS et pour ce
+  // couple attaquant/cible (voir fireTacticalWeapon) : la détection, elle,
+  // appartient au tour précédent déjà publié.
+  const [scenario, openTurn] = await Promise.all([
     prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
-    prisma.combatEvent.findMany({
-      where: { detectionEventId: detection.id },
-      select: { weaponType: true },
+    prisma.turn.findFirst({
+      where: { scenarioId: session.scenarioId, status: { not: "PUBLISHED" } },
+      orderBy: { number: "asc" },
+      select: { id: true, number: true },
     }),
   ]);
+
+  const alreadyFired = openTurn
+    ? await prisma.combatEvent.findMany({
+        where: {
+          turnId: openTurn.id,
+          attackerUnitId: detection.observerUnitId,
+          targetUnitId: detection.targetUnitId,
+        },
+        select: { weaponType: true },
+      })
+    : [];
 
   const observerUnitClass = detection.observerUnit.unitClass;
 
@@ -63,6 +78,7 @@ export default async function TacticalPage({ params }: { params: Promise<{ detec
       cpaMinutesIntoTurn={detection.cpaMinutesIntoTurn}
       mapZoom={scenario.mapDefaultZoom}
       weaponTypesAlreadyFired={alreadyFired.map((c) => c.weaponType)}
+      currentTurnNumber={openTurn?.number ?? null}
       observer={{
         id: detection.observerUnit.id,
         name: detection.observerUnit.name,

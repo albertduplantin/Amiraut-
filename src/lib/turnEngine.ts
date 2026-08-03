@@ -381,6 +381,24 @@ export async function acknowledgeTacticalMode(detectionEventId: string) {
   });
 }
 
+/**
+ * Tour actuellement ouvert du scénario auquel appartient `referenceTurnId`
+ * (le premier tour non publié). Un tir tactique s'y rattache : la détection
+ * qui l'a déclenché, elle, appartient au tour précédent déjà publié.
+ */
+async function currentOpenTurn(referenceTurnId: string) {
+  const reference = await prisma.turn.findUniqueOrThrow({
+    where: { id: referenceTurnId },
+    select: { scenarioId: true },
+  });
+  const open = await prisma.turn.findFirst({
+    where: { scenarioId: reference.scenarioId, status: { not: "PUBLISHED" } },
+    orderBy: { number: "asc" },
+  });
+  if (!open) throw new OrderValidationError("Aucun tour ouvert : attendez l'ouverture du tour suivant.");
+  return open;
+}
+
 export type TacticalFireResult = {
   hit: boolean;
   hitChancePercent: number;
@@ -423,11 +441,21 @@ export async function fireTacticalWeapon(params: {
   if (attacker.status === "SUNK") throw new OrderValidationError("Votre unité est coulée.");
   if (target.status === "SUNK") throw new OrderValidationError("La cible est déjà coulée.");
 
+  // Un tir tactique est une action du tour EN COURS, pas du tour (déjà
+  // publié et déjà résolu automatiquement) auquel appartient la détection :
+  // le joueur agit sur un contact qu'il a appris par son dernier rapport.
+  const currentTurn = await currentOpenTurn(detection.turnId);
+
   const alreadyResolved = await prisma.combatEvent.findFirst({
-    where: { detectionEventId: detection.id, weaponType: params.weaponType },
+    where: {
+      turnId: currentTurn.id,
+      attackerUnitId: attacker.id,
+      targetUnitId: target.id,
+      weaponType: params.weaponType,
+    },
   });
   if (alreadyResolved) {
-    throw new OrderValidationError("Un tir de ce type a déjà été résolu pour cet engagement ce tour-ci.");
+    throw new OrderValidationError("Cette arme a déjà tiré sur cette cible ce tour-ci.");
   }
 
   if (params.weaponType === "TORPEDO" && attacker.unitClass.category === "SUBMARINE") {
@@ -444,7 +472,7 @@ export async function fireTacticalWeapon(params: {
     distanceNm({ lat: attacker.currentLat, lng: attacker.currentLng }, { lat: target.currentLat, lng: target.currentLng }) * NM_TO_M;
 
   const targetOrder = await prisma.unitOrder.findUnique({
-    where: { turnId_unitId: { turnId: detection.turnId, unitId: target.id } },
+    where: { turnId_unitId: { turnId: currentTurn.id, unitId: target.id } },
   });
   const targetSpeedKnots = targetOrder?.speedKnots ?? 0;
 
@@ -495,7 +523,7 @@ export async function fireTacticalWeapon(params: {
   await prisma.$transaction(async (tx) => {
     await tx.combatEvent.create({
       data: {
-        turnId: detection.turnId,
+        turnId: currentTurn.id,
         detectionEventId: detection.id,
         attackerUnitId: attacker.id,
         targetUnitId: target.id,
@@ -790,17 +818,23 @@ async function resolveCombat(tx: any, turnId: string) {
   });
   if (detections.length === 0) return;
 
-  // Un tir déjà résolu en mode tactique (ou par une passe automatique
-  // précédente) pour une paire (détection, type d'arme) ne doit pas l'être
-  // une seconde fois ici.
+  // Une arme déjà tirée ce tour-ci sur cette cible (typiquement un tir
+  // manuel en mode tactique) ne doit pas l'être une seconde fois par cette
+  // passe automatique. La garde porte sur le couple attaquant/cible plutôt
+  // que sur l'identifiant de détection : un tir tactique se rattache au tour
+  // courant tout en citant la détection du tour précédent qui l'a motivé.
   const alreadyFired = await tx.combatEvent.findMany({
-    where: { turnId, detectionEventId: { in: detections.map((d: { id: string }) => d.id) } },
-    select: { detectionEventId: true, weaponType: true },
+    where: { turnId },
+    select: { attackerUnitId: true, targetUnitId: true, weaponType: true },
   });
   const alreadyFiredSet = new Set(
-    alreadyFired.map((c: { detectionEventId: string | null; weaponType: string }) => `${c.detectionEventId}|${c.weaponType}`)
+    alreadyFired.map(
+      (c: { attackerUnitId: string; targetUnitId: string; weaponType: string }) =>
+        `${c.attackerUnitId}|${c.targetUnitId}|${c.weaponType}`
+    )
   );
-  const hasBeenFired = (detectionId: string, weaponType: string) => alreadyFiredSet.has(`${detectionId}|${weaponType}`);
+  const hasBeenFired = (attackerId: string, targetId: string, weaponType: string) =>
+    alreadyFiredSet.has(`${attackerId}|${targetId}|${weaponType}`);
 
   const orders = await tx.unitOrder.findMany({
     where: { turnId },
@@ -866,7 +900,7 @@ async function resolveCombat(tx: any, turnId: string) {
       // seul un escorteur avec des grenades ASM en réserve, ayant repéré la
       // cible à l'oreille (hydrophone/ASDIC), peut l'attaquer.
       if (
-        !hasBeenFired(d.id, "DEPTH_CHARGE") &&
+        !hasBeenFired(attacker.id, target.id, "DEPTH_CHARGE") &&
         (d.method === "HYDROPHONE" || d.method === "SONAR") &&
         attacker.depthChargesRemaining != null
       ) {
@@ -901,7 +935,7 @@ async function resolveCombat(tx: any, turnId: string) {
     const combatProfile = attacker.unitClass.combatProfile as CombatProfile | null;
     if (!combatProfile?.guns?.length && !combatProfile?.torpedoTubes) continue;
 
-    if (combatProfile.guns?.length && !hasBeenFired(d.id, "GUN")) {
+    if (combatProfile.guns?.length && !hasBeenFired(attacker.id, target.id, "GUN")) {
       const gunResult = resolveGunEngagement({
         attackerProfile: combatProfile,
         attackerHealthCurrent: attackerHealth.current,
@@ -943,7 +977,7 @@ async function resolveCombat(tx: any, turnId: string) {
       targetHealth.current > 0 &&
       attackerCanTorpedo &&
       torpedoesLeft > 0 &&
-      !hasBeenFired(d.id, "TORPEDO")
+      !hasBeenFired(attacker.id, target.id, "TORPEDO")
     ) {
       // Angle entre le cap de la cible et la ligne de tir au moment du CPA
       // (les positions y sont déjà enregistrées pour la détection) —

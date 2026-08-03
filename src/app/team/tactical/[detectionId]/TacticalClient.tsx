@@ -62,6 +62,7 @@ export function TacticalClient(props: {
   cpaMinutesIntoTurn: number;
   mapZoom: number;
   weaponTypesAlreadyFired: string[];
+  currentTurnNumber: number | null;
   observer: ObserverDto;
   target: TargetDto;
 }) {
@@ -260,6 +261,11 @@ export function TacticalClient(props: {
               {Math.round(props.cpaMinutesIntoTurn)}min dans le tour précédent. La position de la cible ci-dessous est celle
               du dernier contact, pas sa position réelle actuelle : vous tirez sur une solution de tir estimée.
             </p>
+            {props.currentTurnNumber !== null && (
+              <p className="mt-1 text-xs text-slate-500">
+                Un tir engagé ici compte pour le tour {props.currentTurnNumber}, en cours.
+              </p>
+            )}
           </div>
 
           <h2 className="mb-1 font-semibold">{observer.name}</h2>
