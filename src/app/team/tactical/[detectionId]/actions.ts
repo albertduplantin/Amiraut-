@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
-import { assertPlayer, assertCanViewDetection, AccessDeniedError } from "@/lib/auth";
+import { assertPlayer, assertCanViewDetection, assertCanFireAt, AccessDeniedError } from "@/lib/auth";
 import { requestTacticalMode, fireTacticalWeapon, OrderValidationError, type TacticalFireResult } from "@/lib/turnEngine";
 import type { WeaponType } from "@/generated/prisma/client";
 
@@ -31,6 +31,8 @@ export type FireResult = { ok: true; result: TacticalFireResult } | { ok: false;
 
 export async function fireTacticalWeaponAction(params: {
   detectionId: string;
+  attackerUnitId: string;
+  targetUnitId: string;
   weaponType: WeaponType;
   torpedoTypeId?: string;
 }): Promise<FireResult> {
@@ -38,9 +40,10 @@ export async function fireTacticalWeaponAction(params: {
 
   try {
     assertPlayer(session);
-    await assertCanViewDetection(session, params.detectionId);
+    await assertCanFireAt(session, params.attackerUnitId, params.targetUnitId);
     const result = await fireTacticalWeapon({
-      detectionEventId: params.detectionId,
+      attackerUnitId: params.attackerUnitId,
+      targetUnitId: params.targetUnitId,
       weaponType: params.weaponType,
       torpedoTypeId: params.torpedoTypeId,
     });

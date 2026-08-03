@@ -62,3 +62,28 @@ export async function assertCanViewDetection(session: Session & { teamId: string
     throw new AccessDeniedError("Cette détection n'appartient pas à votre équipe.");
   }
 }
+
+/**
+ * Vérifie qu'un joueur peut engager cette cible avec cette unité : l'unité
+ * doit être la sienne, et la cible doit avoir été repérée par son camp
+ * (n'importe laquelle de ses unités — les contacts se partagent par radio).
+ * Interdit donc de tirer sur une unité dont on ignore l'existence.
+ */
+export async function assertCanFireAt(
+  session: Session & { teamId: string },
+  attackerUnitId: string,
+  targetUnitId: string
+) {
+  await assertCanOrderUnit(session, attackerUnitId);
+
+  const contact = await prisma.detectionEvent.findFirst({
+    where: {
+      targetUnitId,
+      observerUnit: { fleet: { teamId: session.teamId } },
+      arbiterStatus: { in: ["CONFIRMED", "ADDED_MANUALLY"] },
+    },
+  });
+  if (!contact) {
+    throw new AccessDeniedError("Cette cible n'a été repérée par aucune de vos unités.");
+  }
+}

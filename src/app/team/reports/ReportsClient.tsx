@@ -127,6 +127,7 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
             sources={sources}
             fitToPoints={[...report.ownUnits.map((u) => ({ lat: u.currentLat, lng: u.currentLng })), ...report.contacts.map((c) => ({ lat: c.lat, lng: c.lng }))]}
             shipMarkers={shipMarkers}
+            showScaleAndRuler
             className="h-full w-full"
           />
         </main>

@@ -245,6 +245,7 @@ export function ReviewClient(props: {
             sources={sources}
             fitToPoints={units.map((u) => ({ lat: u.currentLat, lng: u.currentLng }))}
             shipMarkers={shipMarkers}
+            showScaleAndRuler
             className="h-full w-full"
           />
         </main>

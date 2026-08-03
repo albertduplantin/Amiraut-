@@ -28,6 +28,34 @@ const ASDIC_ATTACK_RANGE_M = 2000;
 const BATTERY_SPEED_EXPONENT = 4;
 const BATTERY_REFERENCE_SPEED_KNOTS = 4;
 
+/**
+ * Durée d'un tour en mode bataille tactique. Le livret original résout le
+ * combat par tranches de 5 minutes ; on reste dans cet ordre de grandeur
+ * pour que manœuvres et tirs se jouent à l'échelle du combat plutôt qu'à
+ * celle du transit (un tour de patrouille dure typiquement 1 à 4 heures).
+ */
+const TACTICAL_TURN_MINUTES = 10;
+
+/**
+ * Resserre l'échelle de temps du tour en cours : appelé dès qu'un
+ * engagement tactique commence. Ne réduit jamais un tour déjà tactique, et
+ * ne touche pas à un tour où des ordres ont déjà été soumis (ce serait
+ * invalider des trajets déjà planifiés sur la durée précédente).
+ */
+async function switchTurnToTacticalScale(turnId: string): Promise<boolean> {
+  const turn = await prisma.turn.findUniqueOrThrow({ where: { id: turnId } });
+  if (turn.tacticalMode || turn.status !== "PENDING_ORDERS") return false;
+
+  const orderCount = await prisma.unitOrder.count({ where: { turnId } });
+  if (orderCount > 0) return false;
+
+  await prisma.turn.update({
+    where: { id: turnId },
+    data: { tacticalMode: true, durationMinutes: Math.min(turn.durationMinutes, TACTICAL_TURN_MINUTES) },
+  });
+  return true;
+}
+
 /** Ordre des paliers d'immersion : un ordre ne peut déplacer l'unité que d'un cran. */
 const DEPTH_BAND_ORDER: DepthBand[] = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"];
 
@@ -367,10 +395,17 @@ function buildSampleTimes(durationMinutes: number) {
  * compte (ex: raccourcir le tour suivant pour une résolution plus fine).
  */
 export async function requestTacticalMode(detectionEventId: string) {
-  await prisma.detectionEvent.update({
+  const detection = await prisma.detectionEvent.update({
     where: { id: detectionEventId },
     data: { tacticalModeRequested: true },
   });
+  // Resserre aussi l'échelle de temps du tour en cours, si c'est encore
+  // possible : c'est tout l'intérêt de passer en mode tactique.
+  const open = await prisma.turn.findFirst({
+    where: { scenarioId: (await prisma.turn.findUniqueOrThrow({ where: { id: detection.turnId } })).scenarioId, status: { not: "PUBLISHED" } },
+    orderBy: { number: "asc" },
+  });
+  if (open) await switchTurnToTacticalScale(open.id);
 }
 
 /** L'arbitre marque une demande de mode tactique comme traitée (elle disparaît de son tableau de bord). */
@@ -410,9 +445,13 @@ export type TacticalFireResult = {
 
 /**
  * Résout immédiatement un tir depuis le mode bataille tactique — pas
- * d'attente de la publication du tour : l'observateur choisit son arme (et,
- * pour les torpilles, son type) sur une détection déjà CONFIRMÉE/ADDED_MANUALLY
- * par l'arbitre, et le résultat s'applique tout de suite (dégâts, coulage).
+ * d'attente de la publication du tour : le joueur choisit laquelle de ses
+ * unités tire, sur quel contact repéré par son camp, avec quelle arme (et
+ * pour les torpilles quel type), et le résultat s'applique tout de suite.
+ *
+ * N'importe laquelle des unités du camp peut engager n'importe quel contact
+ * connu : les comptes rendus de contact se partageaient par radio, ce n'est
+ * pas au seul navire ayant fait la détection de tirer.
  *
  * La portée réelle est calculée à partir des positions actuelles en base
  * (vérité serveur), alors que le joueur ne voit à l'écran que la dernière
@@ -420,24 +459,31 @@ export type TacticalFireResult = {
  * d'une solution de tir approximative, pas d'une télémétrie parfaite.
  */
 export async function fireTacticalWeapon(params: {
-  detectionEventId: string;
+  attackerUnitId: string;
+  targetUnitId: string;
   weaponType: WeaponType;
   torpedoTypeId?: string;
 }): Promise<TacticalFireResult> {
-  const detection = await prisma.detectionEvent.findUniqueOrThrow({
-    where: { id: params.detectionEventId },
-    include: {
-      observerUnit: { include: { unitClass: true } },
-      targetUnit: { include: { unitClass: true } },
-    },
-  });
+  const [attacker, target] = await Promise.all([
+    prisma.unit.findUniqueOrThrow({ where: { id: params.attackerUnitId }, include: { unitClass: true } }),
+    prisma.unit.findUniqueOrThrow({ where: { id: params.targetUnitId }, include: { unitClass: true } }),
+  ]);
 
-  if (detection.arbiterStatus !== "CONFIRMED" && detection.arbiterStatus !== "ADDED_MANUALLY") {
-    throw new OrderValidationError("Cette détection n'est pas confirmée par l'arbitre.");
+  // Détection la plus récente de cette cible par le camp de l'attaquant :
+  // sert de justification (on ne tire pas sur un inconnu) et de traçabilité.
+  const detection = await prisma.detectionEvent.findFirst({
+    where: {
+      targetUnitId: target.id,
+      observerUnit: { fleetId: { not: undefined } },
+      arbiterStatus: { in: ["CONFIRMED", "ADDED_MANUALLY"] },
+    },
+    orderBy: { turn: { number: "desc" } },
+    include: { turn: { select: { number: true } } },
+  });
+  if (!detection) {
+    throw new OrderValidationError("Aucun contact confirmé sur cette cible.");
   }
 
-  const attacker = detection.observerUnit;
-  const target = detection.targetUnit;
   if (attacker.status === "SUNK") throw new OrderValidationError("Votre unité est coulée.");
   if (target.status === "SUNK") throw new OrderValidationError("La cible est déjà coulée.");
 
@@ -491,7 +537,11 @@ export async function fireTacticalWeapon(params: {
       targetSpeedKnots,
       rangeM,
     });
-    if (!engagement) throw new OrderValidationError("Aucune batterie de canon à portée de cette distance.");
+    if (!engagement) {
+      throw new OrderValidationError(
+        `Aucune batterie à portée : la cible s'est révélée à ${(rangeM / NM_TO_M).toFixed(1)}nm, pas là où le dernier contact la situait.`
+      );
+    }
   } else if (params.weaponType === "TORPEDO") {
     const battery = selectTorpedoBattery(combatProfile, params.torpedoTypeId);
     if (!battery) throw new OrderValidationError("Aucun tube lance-torpilles disponible.");
@@ -510,7 +560,11 @@ export async function fireTacticalWeapon(params: {
       angleOfAttackDeg,
       rangeM,
     });
-    if (!engagement) throw new OrderValidationError("Cible hors de portée des torpilles.");
+    if (!engagement) {
+      throw new OrderValidationError(
+        `Torpilles hors de portée : la cible s'est révélée à ${(rangeM / NM_TO_M).toFixed(1)}nm, pas là où le dernier contact la situait.`
+      );
+    }
   } else {
     throw new OrderValidationError("Ce type d'arme ne peut pas être engagé en mode tactique.");
   }
@@ -546,6 +600,10 @@ export async function fireTacticalWeapon(params: {
       await tx.unit.update({ where: { id: attacker.id }, data: { torpedoesRemaining: attacker.torpedoesRemaining - 1 } });
     }
   });
+
+  // Le feu est ouvert : on n'est plus en transit, le tour passe à l'échelle
+  // de temps du combat.
+  await switchTurnToTacticalScale(currentTurn.id);
 
   return {
     hit: engagement.hit,

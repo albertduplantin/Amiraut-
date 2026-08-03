@@ -295,6 +295,7 @@ export function PositionsClient(props: { mapCenter: LatLng; mapZoom: number; uni
             onClick={handleMapClick}
             fitToPoints={allUnitPositions}
             shipMarkers={shipMarkers}
+            showScaleAndRuler
             onShipMarkerClick={handleShipMarkerClick}
             className="h-full w-full"
           />

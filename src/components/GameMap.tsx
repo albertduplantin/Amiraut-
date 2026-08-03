@@ -1,9 +1,17 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { Map as MapLibreMap, Marker, LngLatBounds, setWorkerUrl, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  Map as MapLibreMap,
+  Marker,
+  LngLatBounds,
+  ScaleControl,
+  setWorkerUrl,
+  type GeoJSONSource,
+  type MapMouseEvent,
+} from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { LatLng } from "@/lib/geo";
+import { distanceNm, type LatLng } from "@/lib/geo";
 import { buildSilhouetteElement, type SilhouetteKey, type UnitVisualStatus } from "@/lib/shipSilhouettes";
 
 export type MapSourceConfig = {
@@ -71,6 +79,11 @@ type GameMapProps = {
    * (dessin de trajet) : rend les navires sélectionnables à la souris.
    */
   onShipMarkerClick?: (id: string) => void;
+  /**
+   * Affiche une barre d'échelle (en milles nautiques, recalculée à chaque
+   * zoom) et un outil de mesure de distance activable par le joueur.
+   */
+  showScaleAndRuler?: boolean;
 };
 
 type ShipMarkerEntry = {
@@ -125,7 +138,19 @@ function onceStyleReady(map: MapLibreMap, callback: () => void): () => void {
 }
 
 export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
-  { center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint, shipMarkers, shipMarkersMinZoom = 7, onShipMarkerClick },
+  {
+    center,
+    zoom = 5,
+    sources,
+    onClick,
+    className,
+    fitToPoints,
+    flyToPoint,
+    shipMarkers,
+    shipMarkersMinZoom = 7,
+    onShipMarkerClick,
+    showScaleAndRuler = false,
+  },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -133,6 +158,9 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   const onClickRef = useRef(onClick);
   const onShipMarkerClickRef = useRef(onShipMarkerClick);
   const fitToPointsRef = useRef(fitToPoints);
+  const [rulerActive, setRulerActive] = useState(false);
+  const [rulerPoints, setRulerPoints] = useState<LatLng[]>([]);
+  const rulerActiveRef = useRef(false);
   const isFirstFlyRef = useRef(true);
   const lastFlownToRef = useRef<LatLng | null>(null);
   const shipMarkersRef = useRef(new Map<string, ShipMarkerEntry>());
@@ -144,6 +172,53 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   useEffect(() => {
     onShipMarkerClickRef.current = onShipMarkerClick;
   }, [onShipMarkerClick]);
+
+  useEffect(() => {
+    rulerActiveRef.current = rulerActive;
+  }, [rulerActive]);
+
+  // Tracé de la règle de mesure : segments cumulés + jalons cliqués.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !showScaleAndRuler) return;
+    return onceStyleReady(map, () => {
+      applyLayer(map, {
+        id: "ruler-line",
+        kind: "line",
+        data:
+          rulerPoints.length >= 2
+            ? {
+                type: "FeatureCollection",
+                features: [
+                  {
+                    type: "Feature",
+                    geometry: { type: "LineString", coordinates: rulerPoints.map((p) => [p.lng, p.lat]) },
+                    properties: {},
+                  },
+                ],
+              }
+            : { type: "FeatureCollection", features: [] },
+        color: "#facc15",
+        width: 2,
+        dashed: true,
+      });
+      applyLayer(map, {
+        id: "ruler-points",
+        kind: "points",
+        data: {
+          type: "FeatureCollection",
+          features: rulerPoints.map((p, i) => ({
+            type: "Feature" as const,
+            geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+            properties: { name: i === 0 ? "" : `${cumulativeNm(rulerPoints, i).toFixed(1)} nm` },
+          })),
+        },
+        color: "#facc15",
+        radius: 4,
+        showLabels: true,
+      });
+    });
+  }, [rulerPoints, showScaleAndRuler]);
 
   useEffect(() => {
     fitToPointsRef.current = fitToPoints;
@@ -202,8 +277,19 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     mapRef.current = map;
 
     map.on("click", (e: MapMouseEvent) => {
-      onClickRef.current?.({ lat: e.lngLat.lat, lng: e.lngLat.lng });
+      const point = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+      // En mode mesure, le clic sert à jalonner la règle et ne doit pas
+      // aussi poser un waypoint de trajet.
+      if (rulerActiveRef.current) {
+        setRulerPoints((prev) => [...prev, point]);
+        return;
+      }
+      onClickRef.current?.(point);
     });
+
+    if (showScaleAndRuler) {
+      map.addControl(new ScaleControl({ unit: "nautical", maxWidth: 140 }), "bottom-left");
+    }
 
     map.on("zoom", () => {
       applyShipMarkerLayout(map, shipMarkersRef.current, shipMarkersMinZoomRef.current);
@@ -302,8 +388,62 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     });
   }, [flyToPoint]);
 
-  return <div ref={containerRef} className={className ?? "h-full w-full"} />;
+  const rulerTotalNm = cumulativeNm(rulerPoints, rulerPoints.length - 1);
+
+  if (!showScaleAndRuler) {
+    return <div ref={containerRef} className={className ?? "h-full w-full"} />;
+  }
+
+  return (
+    <div className={`relative ${className ?? "h-full w-full"}`}>
+      <div ref={containerRef} className="h-full w-full" />
+
+      <div className="absolute right-2 top-2 z-10 flex flex-col items-end gap-1">
+        <button
+          onClick={() => {
+            setRulerActive((active) => !active);
+            if (rulerActive) setRulerPoints([]);
+          }}
+          className={`rounded-md border px-2 py-1 text-xs shadow-lg transition ${
+            rulerActive
+              ? "border-yellow-400 bg-yellow-500/90 text-slate-900"
+              : "border-slate-600 bg-slate-900/90 text-slate-200 hover:bg-slate-800"
+          }`}
+          title="Mesurer une distance : cliquez des points successifs sur la carte"
+        >
+          📏 {rulerActive ? "Mesure active" : "Mesurer"}
+        </button>
+
+        {rulerActive && (
+          <div className="rounded-md border border-slate-600 bg-slate-900/90 px-2 py-1 text-right text-xs text-slate-200 shadow-lg">
+            {rulerPoints.length < 2 ? (
+              <span className="text-slate-400">Cliquez deux points ou plus</span>
+            ) : (
+              <>
+                <div className="font-medium">{rulerTotalNm.toFixed(1)} nm</div>
+                <div className="text-slate-400">{(rulerTotalNm * 1.852).toFixed(1)} km</div>
+              </>
+            )}
+            {rulerPoints.length > 0 && (
+              <button onClick={() => setRulerPoints([])} className="mt-1 text-[10px] text-slate-400 underline hover:text-slate-200">
+                effacer
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 });
+
+/** Distance cumulée le long de la règle, du premier jalon jusqu'à l'indice donné. */
+function cumulativeNm(points: LatLng[], upToIndex: number): number {
+  let total = 0;
+  for (let i = 1; i <= upToIndex && i < points.length; i++) {
+    total += distanceNm(points[i - 1], points[i]);
+  }
+  return total;
+}
 
 /**
  * Les silhouettes sont créées avec `pointer-events: none` (pour laisser le

@@ -64,7 +64,13 @@ export default async function ArbiterDashboardPage() {
   return (
     <div className="chart-room-bg min-h-screen p-6 text-slate-100">
       <h1 className="font-display text-xl tracking-wide text-brass-300">{scenario.name}</h1>
-      <p className="mt-1 text-sm text-slate-400">Tour {turn.number} — statut : {formatStatus(turn.status)}</p>
+      <p className="mt-1 text-sm text-slate-400">
+        Tour {turn.number} — statut : {formatStatus(turn.status)} · durée{" "}
+        {turn.durationMinutes < 60 ? `${turn.durationMinutes} min` : `${turn.durationMinutes / 60} h`}
+        {turn.tacticalMode && (
+          <span className="ml-2 rounded bg-red-900/60 px-2 py-0.5 text-xs text-red-200">⚔ échelle tactique</span>
+        )}
+      </p>
 
       {tacticalRequests.length > 0 && (
         <section className="panel-brass mt-4 max-w-2xl rounded-md border border-orange-800 bg-orange-950/30 p-4">

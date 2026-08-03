@@ -206,6 +206,10 @@ model Turn {
   status          TurnStatus @default(PENDING_ORDERS)
   gameStartAt     DateTime
   durationMinutes Int
+  // Tour resserré parce qu'un contact est engagé : la durée passe à
+  // TACTICAL_TURN_MINUTES pour que les manœuvres et tirs se jouent à une
+  // échelle de temps de combat plutôt que de transit (voir turnEngine.ts).
+  tacticalMode    Boolean    @default(false)
   weatherId       String?    @unique
   weather         Weather?   @relation(fields: [weatherId], references: [id])
   resolvedAt      DateTime?

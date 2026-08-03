@@ -88,6 +88,7 @@ export default async function OrdersPage() {
       turnId={turn.id}
       turnNumber={turn.number}
       turnDurationMinutes={turn.durationMinutes}
+      turnTacticalMode={turn.tacticalMode}
       weather={
         turn.weather
           ? {
