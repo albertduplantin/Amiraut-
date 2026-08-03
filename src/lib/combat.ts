@@ -1,16 +1,18 @@
 /**
- * Moteur de combat — artillerie (v1 du phase 2, torpilles/aviation/ASM à
- * suivre). Adapté des règles originales d'Amirauté (Paul Bois) : la
- * résolution reste en trois jets indépendants (chance de toucher → nombre
- * de coups au but dans la salve → dégâts par coup), et la puissance de feu
- * se dégrade en proportion directe des dommages subis plutôt qu'un seuil
+ * Moteur de combat — artillerie et torpilles (phase 2, volets 1 et 2 ;
+ * aviation/ASM à suivre). Adapté des règles originales d'Amirauté (Paul
+ * Bois) : la résolution reste en jets indépendants (chance de toucher →
+ * nombre de coups au but → dégâts par coup), et la puissance de feu se
+ * dégrade en proportion directe des dommages subis plutôt qu'un seuil
  * binaire.
  *
- * La formule de chance de toucher ci-dessous est *inspirée* des exemples
- * chiffrés du livret (17 %/70 % à 28000/14000m pour un cuirassé de 380mm,
- * 7 %/50 % à 16000/8000m pour un croiseur de 152mm) sans en reproduire les
- * tables exactes — l'auteur original invite lui-même à l'adaptation
- * (« ces pièces ne prétendent pas être des règles sans appel »).
+ * Les formules de chance de toucher ci-dessous sont *inspirées* des
+ * exemples chiffrés du livret (artillerie : 17 %/70 % à 28000/14000m pour
+ * un cuirassé de 380mm, 7 %/50 % à 16000/8000m pour un croiseur de 152mm ;
+ * torpilles : 55 % à 3600m sous 35°, 1 % sous 120°, cf. p. 6) sans en
+ * reproduire les tables exactes — l'auteur original invite lui-même à
+ * l'adaptation (« ces pièces ne prétendent pas être des règles sans
+ * appel »).
  */
 
 export type GunBattery = { calibreMm: number; count: number; rangeM: number };
@@ -124,6 +126,108 @@ export function resolveGunEngagement(params: {
   const hits = rollHitCount(effectiveGunCount, rng);
   let damagePoints = 0;
   for (let i = 0; i < hits; i++) damagePoints += gunDamagePerHit(battery.calibreMm, rng);
+
+  return { battery, hitChancePercent, hitRoll, hit: true, hits, damagePoints };
+}
+
+// ── Torpilles ───────────────────────────────────────────────
+
+/**
+ * Dégâts moyens d'une torpille de 533mm. Une torpille touche sous la
+ * flottaison (voie d'eau, envahissement) et fut historiquement souvent
+ * plus dévastatrice qu'un coup de canon équivalent — d'où une référence
+ * légèrement supérieure à celle d'un coup de 380mm.
+ */
+const REFERENCE_DAMAGE_PER_TORPEDO_HIT = 28;
+
+/**
+ * Chance de toucher pour une torpille. `angleOfAttackDeg` est l'angle entre
+ * le cap de la cible et la ligne de tir (0°/180° = cible de face/de dos,
+ * la plus dure à toucher ; 90° = cible de travers, la plus facile) — le
+ * livret l'appelle « angle de tir », aigu si la cible se rapproche, obtus
+ * si elle s'éloigne (p. 6).
+ */
+export function torpedoHitChancePercent(params: {
+  rangeM: number;
+  maxRangeM: number;
+  torpedoSpeedKnots: number;
+  targetLengthM: number;
+  targetBeamM: number;
+  targetSpeedKnots: number;
+  angleOfAttackDeg: number;
+}): number {
+  const rangeRatio = clamp(params.rangeM / params.maxRangeM, 0, 1);
+  const rangeFactor = Math.pow(1 - rangeRatio, 1.3);
+  // Profil exposé par la cible : plein travers (sin=1) présente toute sa
+  // longueur, de face/de dos (sin=0) seulement sa largeur.
+  const exposedLengthM = Math.max(
+    params.targetBeamM,
+    params.targetLengthM * Math.abs(Math.sin((params.angleOfAttackDeg * Math.PI) / 180))
+  );
+  const sizeFactor = clamp((exposedLengthM * params.targetBeamM) / 1800, 0.1, 2.5);
+  // Une cible rapide laisse moins de temps pour corriger la solution de tir ;
+  // une torpille rapide en laisse moins besoin.
+  const speedFactor = params.torpedoSpeedKnots / (params.torpedoSpeedKnots + params.targetSpeedKnots * 1.5);
+  const baseAccuracy = 0.55;
+  return clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * 100, 0, 90);
+}
+
+function torpedoDamagePerHit(rng: () => number): number {
+  const variability = 0.75 + rng() * 0.6; // 0.75x à 1.35x
+  return REFERENCE_DAMAGE_PER_TORPEDO_HIT * variability;
+}
+
+export type TorpedoEngagementResult = {
+  battery: TorpedoBattery;
+  hitChancePercent: number;
+  hitRoll: number;
+  hit: boolean;
+  hits: number;
+  damagePoints: number;
+};
+
+/**
+ * Résout un engagement de torpilles observateur → cible pour un tour.
+ * Retourne `null` si l'attaquant n'a pas de tubes ou si la cible est hors
+ * de portée.
+ */
+export function resolveTorpedoEngagement(params: {
+  attackerProfile: CombatProfile | null | undefined;
+  attackerHealthCurrent: number;
+  attackerHealthMax: number;
+  targetLengthM: number;
+  targetBeamM: number;
+  targetSpeedKnots: number;
+  angleOfAttackDeg: number;
+  rangeM: number;
+  rng?: () => number;
+}): TorpedoEngagementResult | null {
+  const rng = params.rng ?? Math.random;
+  const battery = params.attackerProfile?.torpedoTubes;
+  if (!battery || params.rangeM > battery.rangeM) return null;
+
+  const hitChancePercent = torpedoHitChancePercent({
+    rangeM: params.rangeM,
+    maxRangeM: battery.rangeM,
+    torpedoSpeedKnots: battery.speedKnots,
+    targetLengthM: params.targetLengthM,
+    targetBeamM: params.targetBeamM,
+    targetSpeedKnots: params.targetSpeedKnots,
+    angleOfAttackDeg: params.angleOfAttackDeg,
+  });
+
+  const hitRoll = rng() * 100;
+  const hit = hitRoll < hitChancePercent;
+  if (!hit) {
+    return { battery, hitChancePercent, hitRoll, hit: false, hits: 0, damagePoints: 0 };
+  }
+
+  const firepowerRatio = params.attackerHealthMax > 0 ? clamp(params.attackerHealthCurrent / params.attackerHealthMax, 0, 1) : 1;
+  const effectiveTubeCount = Math.max(1, Math.ceil(battery.count * firepowerRatio));
+
+  const hits = rollHitCount(effectiveTubeCount, rng);
+  let damagePoints = 0;
+  for (let i = 0; i < hits; i++) damagePoints += torpedoDamagePerHit(rng);
 
   return { battery, hitChancePercent, hitRoll, hit: true, hits, damagePoints };
 }

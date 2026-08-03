@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { buildTimedTrack, distanceNm, pathLengthNm, speedBudgetNm, bearingDeg, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm } from "@/lib/weather";
-import { resolveGunEngagement, type CombatProfile } from "@/lib/combat";
+import { resolveGunEngagement, resolveTorpedoEngagement, type CombatProfile } from "@/lib/combat";
 import type { ArbiterStatus, SensorType } from "@/generated/prisma/client";
 
 const NM_TO_M = 1852;
@@ -519,39 +519,81 @@ async function resolveCombat(tx: any, turnId: string) {
     if (attacker.status === "SUNK" || target.status === "SUNK") continue;
 
     const combatProfile = attacker.unitClass.combatProfile as CombatProfile | null;
-    if (!combatProfile?.guns?.length) continue;
+    if (!combatProfile?.guns?.length && !combatProfile?.torpedoTubes) continue;
 
     const attackerHealth = getHealth(attacker);
     const targetHealth = getHealth(target);
     if (attackerHealth.current <= 0 || targetHealth.current <= 0) continue;
 
-    const result = resolveGunEngagement({
-      attackerProfile: combatProfile,
-      attackerHealthCurrent: attackerHealth.current,
-      attackerHealthMax: attackerHealth.max,
-      targetLengthM: target.unitClass.lengthMeters ?? 100,
-      targetBeamM: target.unitClass.beamMeters ?? 12,
-      targetSpeedKnots: (speedByUnit.get(target.id) as number | undefined) ?? 0,
-      rangeM: d.cpaDistanceNm * NM_TO_M,
-    });
-    if (!result) continue; // hors de portée de toute batterie de l'attaquant
+    const targetSpeedKnots = (speedByUnit.get(target.id) as number | undefined) ?? 0;
+    const rangeM = d.cpaDistanceNm * NM_TO_M;
 
-    if (result.hit) {
-      targetHealth.current = Math.max(0, targetHealth.current - result.damagePoints);
+    if (combatProfile.guns?.length) {
+      const gunResult = resolveGunEngagement({
+        attackerProfile: combatProfile,
+        attackerHealthCurrent: attackerHealth.current,
+        attackerHealthMax: attackerHealth.max,
+        targetLengthM: target.unitClass.lengthMeters ?? 100,
+        targetBeamM: target.unitClass.beamMeters ?? 12,
+        targetSpeedKnots,
+        rangeM,
+      });
+      if (gunResult) {
+        if (gunResult.hit) targetHealth.current = Math.max(0, targetHealth.current - gunResult.damagePoints);
+        combatRows.push({
+          turnId,
+          attackerUnitId: attacker.id,
+          targetUnitId: target.id,
+          weaponType: "GUN",
+          rangeNm: d.cpaDistanceNm,
+          hitChancePercent: gunResult.hitChancePercent,
+          hits: gunResult.hits,
+          damagePoints: gunResult.damagePoints,
+          targetHealthLeft: targetHealth.current,
+          targetSunk: targetHealth.current <= 0,
+        });
+      }
     }
 
-    combatRows.push({
-      turnId,
-      attackerUnitId: attacker.id,
-      targetUnitId: target.id,
-      weaponType: "GUN",
-      rangeNm: d.cpaDistanceNm,
-      hitChancePercent: result.hitChancePercent,
-      hits: result.hits,
-      damagePoints: result.damagePoints,
-      targetHealthLeft: targetHealth.current,
-      targetSunk: targetHealth.current <= 0,
-    });
+    // Les torpilles suivent le tir de canon dans la même passe (une cible
+    // déjà coulée par l'artillerie n'est pas torpillée en plus).
+    if (combatProfile.torpedoTubes && targetHealth.current > 0) {
+      // Angle entre le cap de la cible et la ligne de tir au moment du CPA
+      // (les positions y sont déjà enregistrées pour la détection) —
+      // « angle de tir » du livret (p. 6) : aigu si la cible approche,
+      // obtus si elle s'éloigne.
+      const lineOfFireBearing = bearingDeg(
+        { lat: d.targetLatAtCpa, lng: d.targetLngAtCpa },
+        { lat: d.observerLatAtCpa, lng: d.observerLngAtCpa }
+      );
+      const angleOfAttackDeg = lineOfFireBearing - (target.currentHeadingDeg ?? 0);
+
+      const torpedoResult = resolveTorpedoEngagement({
+        attackerProfile: combatProfile,
+        attackerHealthCurrent: attackerHealth.current,
+        attackerHealthMax: attackerHealth.max,
+        targetLengthM: target.unitClass.lengthMeters ?? 100,
+        targetBeamM: target.unitClass.beamMeters ?? 12,
+        targetSpeedKnots,
+        angleOfAttackDeg,
+        rangeM,
+      });
+      if (torpedoResult) {
+        if (torpedoResult.hit) targetHealth.current = Math.max(0, targetHealth.current - torpedoResult.damagePoints);
+        combatRows.push({
+          turnId,
+          attackerUnitId: attacker.id,
+          targetUnitId: target.id,
+          weaponType: "TORPEDO",
+          rangeNm: d.cpaDistanceNm,
+          hitChancePercent: torpedoResult.hitChancePercent,
+          hits: torpedoResult.hits,
+          damagePoints: torpedoResult.damagePoints,
+          targetHealthLeft: targetHealth.current,
+          targetSunk: targetHealth.current <= 0,
+        });
+      }
+    }
   }
 
   if (combatRows.length > 0) {
