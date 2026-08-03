@@ -41,6 +41,10 @@ type UnitDto = {
   currentHeadingDeg: number | null;
   depthBand: string;
   depthChargesRemaining: number | null;
+  batteryChargePercent: number | null;
+  oxygenHoursRemaining: number | null;
+  oxygenEnduranceHours: number | null;
+  torpedoesRemaining: number | null;
   existingOrder: { speedKnots: number; waypoints: LatLng[]; depthBand: string | null } | null;
 };
 
@@ -364,6 +368,7 @@ export function OrdersClient(props: {
         color: "#38bdf8",
         radius: 6,
         showLabels: true,
+        fadeAboveZoom: 7,
       },
     ];
 
@@ -969,6 +974,35 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
             <tr>
               <td className="py-0.5 pr-2 text-slate-500">Grenades ASM</td>
               <td>{unit.depthChargesRemaining}</td>
+            </tr>
+          )}
+          {unit.torpedoesRemaining != null && (
+            <tr>
+              <td className="py-0.5 pr-2 text-slate-500">Torpilles</td>
+              <td>{unit.torpedoesRemaining}</td>
+            </tr>
+          )}
+          {unit.batteryChargePercent != null && (
+            <tr>
+              <td className="py-0.5 pr-2 text-slate-500">Batterie</td>
+              <td className={unit.batteryChargePercent < 30 ? "text-amber-400" : undefined}>
+                {unit.batteryChargePercent.toFixed(0)}%
+              </td>
+            </tr>
+          )}
+          {unit.oxygenHoursRemaining != null && (
+            <tr>
+              <td className="py-0.5 pr-2 text-slate-500">Oxygène</td>
+              <td
+                className={
+                  unit.oxygenEnduranceHours && unit.oxygenHoursRemaining < unit.oxygenEnduranceHours * 0.3
+                    ? "text-amber-400"
+                    : undefined
+                }
+              >
+                {unit.oxygenHoursRemaining.toFixed(1)}h
+                {unit.oxygenEnduranceHours ? ` / ${unit.oxygenEnduranceHours.toFixed(0)}h` : ""}
+              </td>
             </tr>
           )}
         </tbody>

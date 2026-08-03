@@ -17,6 +17,13 @@ export type MapSourceConfig = {
   width?: number;
   dashed?: boolean;
   showLabels?: boolean;
+  /**
+   * Si défini, le cercle (et son label) s'estompe progressivement à
+   * l'approche de ce niveau de zoom pour disparaître au-delà — utile pour la
+   * couche de position "brute" une fois que la silhouette du navire prend le
+   * relais (évite d'afficher les deux superposés).
+   */
+  fadeAboveZoom?: number;
 };
 
 export type GameMapHandle = {
@@ -380,6 +387,13 @@ function applyLayer(map: MapLibreMap, config: MapSourceConfig) {
     return;
   }
 
+  // S'estompe juste avant `fadeAboveZoom` pour disparaître complètement une
+  // fois ce zoom atteint (typiquement le seuil où la silhouette du navire
+  // prend le relais) : évite d'avoir les deux superposés.
+  const fadeExpr = config.fadeAboveZoom
+    ? (["interpolate", ["linear"], ["zoom"], config.fadeAboveZoom - 0.5, 1, config.fadeAboveZoom, 0] as unknown as number)
+    : 1;
+
   map.addLayer({
     id: `${config.id}-circle`,
     type: "circle",
@@ -389,6 +403,8 @@ function applyLayer(map: MapLibreMap, config: MapSourceConfig) {
       "circle-radius": config.radius ?? 6,
       "circle-stroke-color": "#0f172a",
       "circle-stroke-width": 1.5,
+      "circle-opacity": fadeExpr,
+      "circle-stroke-opacity": fadeExpr,
     },
   });
 
@@ -406,6 +422,7 @@ function applyLayer(map: MapLibreMap, config: MapSourceConfig) {
       paint: {
         "text-color": "#e2e8f0",
         "text-halo-color": "#0f172a",
+        "text-opacity": fadeExpr,
         "text-halo-width": 1,
       },
     });

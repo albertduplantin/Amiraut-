@@ -129,6 +129,7 @@ export function ReviewClient(props: {
         color: team.colorHex,
         radius: 5,
         showLabels: true,
+        fadeAboveZoom: 7,
       });
     });
 

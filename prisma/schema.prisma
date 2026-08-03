@@ -80,6 +80,13 @@ model UnitClass {
   weaponSystems    Json? // fiche d'armement historique affichée aux joueurs (texte libre)
   combatProfile    Json? // armement structuré utilisé par le moteur de combat, voir CombatProfile dans combat.ts
   depthChargeStock Int? // stock initial de grenades ASM (escorteurs uniquement), voir Unit.depthChargesRemaining
+  // Autonomie sous-marine (sous-marins uniquement) : batterie ~80nm à 4nds
+  // pour un Type VIIC (uboat.net), oxygène/CO2 jusqu'à ~72h en cas extrême
+  // (cartouches + bouteilles de secours) — voir Unit.batteryChargePercent et
+  // Unit.oxygenHoursRemaining.
+  submergedRangeNmAt4kt Float?
+  oxygenEnduranceHours  Float?
+  torpedoStock          Int? // torpilles totales embarquées (sous-marins), voir Unit.torpedoesRemaining
 
   units Unit[]
 }
@@ -120,6 +127,13 @@ model Unit {
   // à la fois — voir UnitOrder.depthBand et resolveTurnDetections/resolveCombat.
   depthBand           DepthBand @default(SURFACE)
   depthChargesRemaining Int? // grenades ASM restantes (escorteurs uniquement, null sinon)
+  // Autonomie sous-marine courante (sous-marins uniquement, null sinon) : la
+  // batterie se vide en immersion (vite à haute vitesse, cf. combat.ts),
+  // l'oxygène se consomme au temps passé immergé quelle que soit la vitesse.
+  // Les deux se rechargent/renouvellent intégralement en faisant surface.
+  batteryChargePercent Float?
+  oxygenHoursRemaining Float?
+  torpedoesRemaining   Int? // torpilles restantes (sous-marins), tous types confondus
 
   orders          UnitOrder[]
   detectedAs      DetectionEvent[] @relation("TargetUnit")
@@ -303,6 +317,8 @@ model DetectionEvent {
   // même une fois le tour concerné publié depuis longtemps.
   tacticalModeAcknowledged Boolean @default(false)
 
+  combatEvents CombatEvent[]
+
   @@unique([turnId, observerUnitId, targetUnitId])
 }
 
@@ -331,20 +347,31 @@ model CombatEvent {
   id               String     @id @default(cuid())
   turnId           String
   turn             Turn       @relation(fields: [turnId], references: [id])
+  // Détection à l'origine de l'engagement : sert de garde-fou pour qu'un
+  // tir déclenché manuellement en mode tactique ne soit pas ensuite résolu
+  // une seconde fois par la passe automatique de fin de tour (et
+  // inversement), voir resolveCombat()/fireTacticalWeapon() dans turnEngine.ts.
+  detectionEventId String?
+  detectionEvent   DetectionEvent? @relation(fields: [detectionEventId], references: [id])
   attackerUnitId   String
   attackerUnit     Unit       @relation("CombatAttacker", fields: [attackerUnitId], references: [id])
   targetUnitId     String
   targetUnit       Unit       @relation("CombatTarget", fields: [targetUnitId], references: [id])
   weaponType       WeaponType
+  // Identifiant du type de torpille utilisé (ex: "g7a"/"g7e"), null pour
+  // canon/grenades ASM ou torpille sans variantes — voir CombatProfile.torpedoTypes.
+  torpedoTypeId    String?
   rangeNm          Float
   hitChancePercent Float
   hits             Int
   damagePoints     Float
   targetHealthLeft Float
   targetSunk       Boolean    @default(false)
+  firedTactically  Boolean    @default(false)
   createdAt        DateTime   @default(now())
 
   @@index([turnId])
+  @@index([detectionEventId, weaponType])
 }
 
 enum WeaponType {

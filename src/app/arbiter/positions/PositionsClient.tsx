@@ -165,6 +165,7 @@ export function PositionsClient(props: { mapCenter: LatLng; mapZoom: number; uni
         color: "#38bdf8",
         radius: 6,
         showLabels: true,
+        fadeAboveZoom: 7,
       },
     ];
 

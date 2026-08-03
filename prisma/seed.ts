@@ -550,12 +550,26 @@ async function main() {
       lengthMeters: 67.1,
       beamMeters: 6.2,
       // Pas de canon en combatProfile : en 1943 un U-Boot en surface évite
-      // le duel d'artillerie avec un escorteur. Combat V1 = canons
-      // seulement ; le U-Boot ne peut donc pas encore engager au canon
-      // (cohérent avec la doctrine réelle), les torpilles suivront.
+      // le duel d'artillerie avec un escorteur (cohérent avec la doctrine
+      // réelle). Deux types de torpilles au choix, un vrai arbitrage
+      // tactique : la G7a à vapeur va vite mais laisse un sillage de bulles
+      // qui trahit la position du tireur ; la G7e électrique est plus lente
+      // (donc plus facile à esquiver) mais reste invisible.
       combatProfile: {
         torpedoTubes: { count: 5, rangeM: 5000, speedKnots: 40 },
+        torpedoTypes: [
+          { id: "g7a", label: "G7a (à vapeur)", speedKnots: 44, rangeM: 7500, wakeVisible: true },
+          { id: "g7e", label: "G7e (électrique)", speedKnots: 30, rangeM: 5000, wakeVisible: false },
+        ],
       },
+      // Autonomie immergée réelle d'un Type VIIC : ~80nm à 4nds, mais à peine
+      // ~1h à pleine vitesse immergée (uboat.net) — d'où la forte pénalité de
+      // consommation avec la vitesse dans turnEngine.ts. Air respirable :
+      // jusqu'à ~72h en cas extrême (cartouches à chaux + bouteilles de
+      // secours), ici pris à 48h pour rester dans un régime jouable.
+      submergedRangeNmAt4kt: 80,
+      oxygenEnduranceHours: 48,
+      torpedoStock: 14,
       sensors: [
         // GHG (Gruppenhorchgerät) : portée réelle ~3.5-10nm sur un navire
         // isolé selon l'état de mer (uboat.net/articles/id/52) ; ici prise à
@@ -716,7 +730,13 @@ async function main() {
 async function createUnit(
   scenarioId: string,
   fleetId: string,
-  unitClass: { id: string; weaponSystems: unknown; depthChargeStock?: number | null },
+  unitClass: {
+    id: string;
+    weaponSystems: unknown;
+    depthChargeStock?: number | null;
+    torpedoStock?: number | null;
+    oxygenEnduranceHours?: number | null;
+  },
   name: string,
   position: { lat: number; lng: number },
   historicalNote?: string
@@ -726,6 +746,7 @@ async function createUnit(
   // historique des caractéristiques de chaque classe.
   const weaponSystems = unitClass.weaponSystems as { originalGamePoints?: number } | null;
   const healthMax = weaponSystems?.originalGamePoints ?? 5;
+  const isSubmarine = unitClass.oxygenEnduranceHours != null;
 
   return prisma.unit.create({
     data: {
@@ -740,6 +761,10 @@ async function createUnit(
       healthMax,
       healthCurrent: healthMax,
       depthChargesRemaining: unitClass.depthChargeStock ?? undefined,
+      torpedoesRemaining: unitClass.torpedoStock ?? undefined,
+      // Les sous-marins démarrent en surface, donc pleins.
+      batteryChargePercent: isSubmarine ? 100 : undefined,
+      oxygenHoursRemaining: unitClass.oxygenEnduranceHours ?? undefined,
     },
   });
 }

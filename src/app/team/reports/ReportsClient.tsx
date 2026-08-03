@@ -68,6 +68,7 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
         color: "#38bdf8",
         radius: 6,
         showLabels: true,
+        fadeAboveZoom: 7,
       },
       {
         id: "contacts",

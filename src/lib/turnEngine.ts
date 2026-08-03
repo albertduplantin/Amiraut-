@@ -7,14 +7,26 @@ import {
   resolveGunEngagement,
   resolveTorpedoEngagement,
   resolveDepthChargeAttack,
+  selectTorpedoBattery,
   type CombatProfile,
   type DepthBand as CombatDepthBand,
 } from "@/lib/combat";
-import type { ArbiterStatus, SensorType, DepthBand } from "@/generated/prisma/client";
+import type { ArbiterStatus, SensorType, DepthBand, WeaponType } from "@/generated/prisma/client";
 
 const NM_TO_M = 1852;
 /** Portée effective d'une passe d'attaque aux grenades ASM (livret : ASDIC ~2000m). */
 const ASDIC_ATTACK_RANGE_M = 2000;
+
+/**
+ * Autonomie sous-marine : la batterie se vide en (vitesse/4nds)^4 fois plus
+ * vite qu'au régime économique de référence (calibré sur deux points réels
+ * uboat.net : un Type VIIC tient ~20h à 4nds mais seulement ~1h à pleine
+ * vitesse ~8nds immergé — (8/4)^4 = 16, proche du rapport observé 20/1).
+ * L'oxygène/CO2, lui, se consomme au temps passé immergé quelle que soit la
+ * vitesse (l'équipage respire pareil, vite ou lentement).
+ */
+const BATTERY_SPEED_EXPONENT = 4;
+const BATTERY_REFERENCE_SPEED_KNOTS = 4;
 
 /** Ordre des paliers d'immersion : un ordre ne peut déplacer l'unité que d'un cran. */
 const DEPTH_BAND_ORDER: DepthBand[] = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"];
@@ -121,6 +133,27 @@ export async function saveUnitOrder(params: {
     if (!isAdjacentDepthBand(unit.depthBand, depthBand)) {
       throw new OrderValidationError(
         `Changement d'immersion impossible en un tour : ${unit.depthBand} → ${depthBand} (un seul palier à la fois).`
+      );
+    }
+  }
+
+  const effectiveDepthBand = depthBand ?? unit.depthBand;
+  if (unit.unitClass.category === "SUBMARINE" && effectiveDepthBand !== "SURFACE") {
+    const turnDurationHours = turn.durationMinutes / 60;
+    const oxygenRemaining = unit.oxygenHoursRemaining ?? unit.unitClass.oxygenEnduranceHours ?? 48;
+    if (oxygenRemaining < turnDurationHours) {
+      throw new OrderValidationError(
+        `Autonomie en oxygène insuffisante pour rester immergé ce tour (${oxygenRemaining.toFixed(1)}h restantes) : il faut faire surface.`
+      );
+    }
+
+    const baselineHours = (unit.unitClass.submergedRangeNmAt4kt ?? 80) / BATTERY_REFERENCE_SPEED_KNOTS;
+    const consumptionRatio = Math.pow(Math.max(speedKnots, 0.1) / BATTERY_REFERENCE_SPEED_KNOTS, BATTERY_SPEED_EXPONENT);
+    const batteryNeededPercent = baselineHours > 0 ? ((turnDurationHours * consumptionRatio) / baselineHours) * 100 : 0;
+    const batteryRemaining = unit.batteryChargePercent ?? 100;
+    if (batteryRemaining < batteryNeededPercent) {
+      throw new OrderValidationError(
+        `Batterie insuffisante pour tenir ce tour immergé à ${speedKnots}nds (${batteryRemaining.toFixed(0)}% restants) : il faut faire surface ou ralentir.`
       );
     }
   }
@@ -348,6 +381,154 @@ export async function acknowledgeTacticalMode(detectionEventId: string) {
   });
 }
 
+export type TacticalFireResult = {
+  hit: boolean;
+  hitChancePercent: number;
+  hits: number;
+  damagePoints: number;
+  targetSunk: boolean;
+  targetHealthLeft: number;
+};
+
+/**
+ * Résout immédiatement un tir depuis le mode bataille tactique — pas
+ * d'attente de la publication du tour : l'observateur choisit son arme (et,
+ * pour les torpilles, son type) sur une détection déjà CONFIRMÉE/ADDED_MANUALLY
+ * par l'arbitre, et le résultat s'applique tout de suite (dégâts, coulage).
+ *
+ * La portée réelle est calculée à partir des positions actuelles en base
+ * (vérité serveur), alors que le joueur ne voit à l'écran que la dernière
+ * position connue de la cible (brouillard de guerre) : il tire sur la base
+ * d'une solution de tir approximative, pas d'une télémétrie parfaite.
+ */
+export async function fireTacticalWeapon(params: {
+  detectionEventId: string;
+  weaponType: WeaponType;
+  torpedoTypeId?: string;
+}): Promise<TacticalFireResult> {
+  const detection = await prisma.detectionEvent.findUniqueOrThrow({
+    where: { id: params.detectionEventId },
+    include: {
+      observerUnit: { include: { unitClass: true } },
+      targetUnit: { include: { unitClass: true } },
+    },
+  });
+
+  if (detection.arbiterStatus !== "CONFIRMED" && detection.arbiterStatus !== "ADDED_MANUALLY") {
+    throw new OrderValidationError("Cette détection n'est pas confirmée par l'arbitre.");
+  }
+
+  const attacker = detection.observerUnit;
+  const target = detection.targetUnit;
+  if (attacker.status === "SUNK") throw new OrderValidationError("Votre unité est coulée.");
+  if (target.status === "SUNK") throw new OrderValidationError("La cible est déjà coulée.");
+
+  const alreadyResolved = await prisma.combatEvent.findFirst({
+    where: { detectionEventId: detection.id, weaponType: params.weaponType },
+  });
+  if (alreadyResolved) {
+    throw new OrderValidationError("Un tir de ce type a déjà été résolu pour cet engagement ce tour-ci.");
+  }
+
+  if (params.weaponType === "TORPEDO" && attacker.unitClass.category === "SUBMARINE") {
+    if (attacker.depthBand === "MEDIUM" || attacker.depthBand === "DEEP") {
+      throw new OrderValidationError("Torpilles impossibles en immersion moyenne ou grande.");
+    }
+    if (attacker.torpedoesRemaining != null && attacker.torpedoesRemaining <= 0) {
+      throw new OrderValidationError("Plus aucune torpille à bord.");
+    }
+  }
+
+  const combatProfile = attacker.unitClass.combatProfile as CombatProfile | null;
+  const rangeM =
+    distanceNm({ lat: attacker.currentLat, lng: attacker.currentLng }, { lat: target.currentLat, lng: target.currentLng }) * NM_TO_M;
+
+  const targetOrder = await prisma.unitOrder.findUnique({
+    where: { turnId_unitId: { turnId: detection.turnId, unitId: target.id } },
+  });
+  const targetSpeedKnots = targetOrder?.speedKnots ?? 0;
+
+  const attackerHealthCurrent = attacker.healthCurrent ?? attacker.healthMax ?? 1;
+  const attackerHealthMax = attacker.healthMax ?? 1;
+
+  let engagement: { hitChancePercent: number; hit: boolean; hits: number; damagePoints: number } | null;
+
+  if (params.weaponType === "GUN") {
+    engagement = resolveGunEngagement({
+      attackerProfile: combatProfile,
+      attackerHealthCurrent,
+      attackerHealthMax,
+      targetLengthM: target.unitClass.lengthMeters ?? 100,
+      targetBeamM: target.unitClass.beamMeters ?? 12,
+      targetSpeedKnots,
+      rangeM,
+    });
+    if (!engagement) throw new OrderValidationError("Aucune batterie de canon à portée de cette distance.");
+  } else if (params.weaponType === "TORPEDO") {
+    const battery = selectTorpedoBattery(combatProfile, params.torpedoTypeId);
+    if (!battery) throw new OrderValidationError("Aucun tube lance-torpilles disponible.");
+    const lineOfFireBearing = bearingDeg(
+      { lat: target.currentLat, lng: target.currentLng },
+      { lat: attacker.currentLat, lng: attacker.currentLng }
+    );
+    const angleOfAttackDeg = lineOfFireBearing - (target.currentHeadingDeg ?? 0);
+    engagement = resolveTorpedoEngagement({
+      attackerProfile: { ...combatProfile, torpedoTubes: battery },
+      attackerHealthCurrent,
+      attackerHealthMax,
+      targetLengthM: target.unitClass.lengthMeters ?? 100,
+      targetBeamM: target.unitClass.beamMeters ?? 12,
+      targetSpeedKnots,
+      angleOfAttackDeg,
+      rangeM,
+    });
+    if (!engagement) throw new OrderValidationError("Cible hors de portée des torpilles.");
+  } else {
+    throw new OrderValidationError("Ce type d'arme ne peut pas être engagé en mode tactique.");
+  }
+
+  const targetHealthMax = target.healthMax ?? 1;
+  const targetHealthCurrent = target.healthCurrent ?? targetHealthMax;
+  const newHealth = engagement.hit ? Math.max(0, targetHealthCurrent - engagement.damagePoints) : targetHealthCurrent;
+  const targetSunk = newHealth <= 0;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.combatEvent.create({
+      data: {
+        turnId: detection.turnId,
+        detectionEventId: detection.id,
+        attackerUnitId: attacker.id,
+        targetUnitId: target.id,
+        weaponType: params.weaponType,
+        torpedoTypeId: params.weaponType === "TORPEDO" ? (params.torpedoTypeId ?? null) : null,
+        rangeNm: rangeM / NM_TO_M,
+        hitChancePercent: engagement!.hitChancePercent,
+        hits: engagement!.hits,
+        damagePoints: engagement!.damagePoints,
+        targetHealthLeft: newHealth,
+        targetSunk,
+        firedTactically: true,
+      },
+    });
+    await tx.unit.update({
+      where: { id: target.id },
+      data: { healthCurrent: newHealth, status: statusFromHealth(newHealth, targetHealthMax) },
+    });
+    if (params.weaponType === "TORPEDO" && attacker.torpedoesRemaining != null) {
+      await tx.unit.update({ where: { id: attacker.id }, data: { torpedoesRemaining: attacker.torpedoesRemaining - 1 } });
+    }
+  });
+
+  return {
+    hit: engagement.hit,
+    hitChancePercent: engagement.hitChancePercent,
+    hits: engagement.hits,
+    damagePoints: engagement.damagePoints,
+    targetSunk,
+    targetHealthLeft: newHealth,
+  };
+}
+
 export async function setDetectionStatus(detectionEventId: string, status: ArbiterStatus, note?: string) {
   await prisma.detectionEvent.update({
     where: { id: detectionEventId },
@@ -502,6 +683,49 @@ export async function publishTurn(turnId: string) {
         }
       }
 
+      // Autonomie sous-marine : dépend du palier d'immersion EFFECTIF de ce
+      // tour, déjà écrit ci-dessus (Unit.depthBand reflète maintenant le
+      // choix de ce tour, pas le précédent).
+      const submarineUnits = await tx.unit.findMany({
+        where: { scenarioId: turn.scenarioId, unitClass: { category: "SUBMARINE" }, status: { in: ["ACTIVE", "DAMAGED"] } },
+        select: {
+          id: true,
+          depthBand: true,
+          batteryChargePercent: true,
+          oxygenHoursRemaining: true,
+          unitClass: { select: { submergedRangeNmAt4kt: true, oxygenEnduranceHours: true } },
+        },
+      });
+      const orderByUnitId = new Map(orders.map((o) => [o.unitId, o]));
+      const turnDurationHours = turn.durationMinutes / 60;
+
+      for (const sub of submarineUnits) {
+        const oxygenMax = sub.unitClass.oxygenEnduranceHours ?? 48;
+
+        if (sub.depthBand === "SURFACE") {
+          // Recharge complète en surface : diesel pour la batterie, air frais pour l'équipage.
+          await tx.unit.update({
+            where: { id: sub.id },
+            data: { batteryChargePercent: 100, oxygenHoursRemaining: oxygenMax },
+          });
+          continue;
+        }
+
+        const speedKnots = orderByUnitId.get(sub.id)?.speedKnots ?? 0;
+        const baselineHours = (sub.unitClass.submergedRangeNmAt4kt ?? 80) / BATTERY_REFERENCE_SPEED_KNOTS;
+        const consumptionRatio = Math.pow(Math.max(speedKnots, 0.1) / BATTERY_REFERENCE_SPEED_KNOTS, BATTERY_SPEED_EXPONENT);
+        const hoursEquivalentUsed = turnDurationHours * consumptionRatio;
+        const batteryUsedPercent = baselineHours > 0 ? (hoursEquivalentUsed / baselineHours) * 100 : 0;
+
+        const newBattery = Math.max(0, (sub.batteryChargePercent ?? 100) - batteryUsedPercent);
+        const newOxygen = Math.max(0, (sub.oxygenHoursRemaining ?? oxygenMax) - turnDurationHours);
+
+        await tx.unit.update({
+          where: { id: sub.id },
+          data: { batteryChargePercent: newBattery, oxygenHoursRemaining: newOxygen },
+        });
+      }
+
       const pendingTransfers = await tx.unit.findMany({
         where: { scenarioId: turn.scenarioId, pendingFleetId: { not: null } },
         select: { id: true, pendingFleetId: true },
@@ -566,6 +790,18 @@ async function resolveCombat(tx: any, turnId: string) {
   });
   if (detections.length === 0) return;
 
+  // Un tir déjà résolu en mode tactique (ou par une passe automatique
+  // précédente) pour une paire (détection, type d'arme) ne doit pas l'être
+  // une seconde fois ici.
+  const alreadyFired = await tx.combatEvent.findMany({
+    where: { turnId, detectionEventId: { in: detections.map((d: { id: string }) => d.id) } },
+    select: { detectionEventId: true, weaponType: true },
+  });
+  const alreadyFiredSet = new Set(
+    alreadyFired.map((c: { detectionEventId: string | null; weaponType: string }) => `${c.detectionEventId}|${c.weaponType}`)
+  );
+  const hasBeenFired = (detectionId: string, weaponType: string) => alreadyFiredSet.has(`${detectionId}|${weaponType}`);
+
   const orders = await tx.unitOrder.findMany({
     where: { turnId },
     select: { unitId: true, speedKnots: true, depthBand: true },
@@ -595,6 +831,16 @@ async function resolveCombat(tx: any, turnId: string) {
     return charges.get(unit.id)!;
   };
 
+  // Torpilles restantes, même logique (une seule passe automatique par
+  // détection et par tour, mais un même attaquant peut torpiller plusieurs
+  // cibles ce tour-ci et doit voir son stock baisser à chaque tir).
+  const torpedoStock = new Map<string, number>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getTorpedoStock = (unit: any) => {
+    if (!torpedoStock.has(unit.id)) torpedoStock.set(unit.id, unit.torpedoesRemaining ?? Infinity);
+    return torpedoStock.get(unit.id)!;
+  };
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const combatRows: any[] = [];
 
@@ -619,7 +865,11 @@ async function resolveCombat(tx: any, turnId: string) {
       // Un sous-marin immergé échappe au canon et à la torpille classique :
       // seul un escorteur avec des grenades ASM en réserve, ayant repéré la
       // cible à l'oreille (hydrophone/ASDIC), peut l'attaquer.
-      if ((d.method === "HYDROPHONE" || d.method === "SONAR") && attacker.depthChargesRemaining != null) {
+      if (
+        !hasBeenFired(d.id, "DEPTH_CHARGE") &&
+        (d.method === "HYDROPHONE" || d.method === "SONAR") &&
+        attacker.depthChargesRemaining != null
+      ) {
         const chargesAvailable = getCharges(attacker);
         const dcResult = resolveDepthChargeAttack({
           chargesAvailable,
@@ -632,6 +882,7 @@ async function resolveCombat(tx: any, turnId: string) {
           if (dcResult.hit) targetHealth.current = Math.max(0, targetHealth.current - dcResult.damagePoints);
           combatRows.push({
             turnId,
+            detectionEventId: d.id,
             attackerUnitId: attacker.id,
             targetUnitId: target.id,
             weaponType: "DEPTH_CHARGE",
@@ -650,7 +901,7 @@ async function resolveCombat(tx: any, turnId: string) {
     const combatProfile = attacker.unitClass.combatProfile as CombatProfile | null;
     if (!combatProfile?.guns?.length && !combatProfile?.torpedoTubes) continue;
 
-    if (combatProfile.guns?.length) {
+    if (combatProfile.guns?.length && !hasBeenFired(d.id, "GUN")) {
       const gunResult = resolveGunEngagement({
         attackerProfile: combatProfile,
         attackerHealthCurrent: attackerHealth.current,
@@ -664,6 +915,7 @@ async function resolveCombat(tx: any, turnId: string) {
         if (gunResult.hit) targetHealth.current = Math.max(0, targetHealth.current - gunResult.damagePoints);
         combatRows.push({
           turnId,
+          detectionEventId: d.id,
           attackerUnitId: attacker.id,
           targetUnitId: target.id,
           weaponType: "GUN",
@@ -684,7 +936,15 @@ async function resolveCombat(tx: any, turnId: string) {
     const attackerCanTorpedo =
       attacker.unitClass.category !== "SUBMARINE" || attackerDepthBand === "SURFACE" || attackerDepthBand === "SHALLOW";
 
-    if (combatProfile.torpedoTubes && targetHealth.current > 0 && attackerCanTorpedo) {
+    const torpedoesLeft = getTorpedoStock(attacker);
+
+    if (
+      combatProfile.torpedoTubes &&
+      targetHealth.current > 0 &&
+      attackerCanTorpedo &&
+      torpedoesLeft > 0 &&
+      !hasBeenFired(d.id, "TORPEDO")
+    ) {
       // Angle entre le cap de la cible et la ligne de tir au moment du CPA
       // (les positions y sont déjà enregistrées pour la détection) —
       // « angle de tir » du livret (p. 6) : aigu si la cible approche,
@@ -706,9 +966,11 @@ async function resolveCombat(tx: any, turnId: string) {
         rangeM,
       });
       if (torpedoResult) {
+        torpedoStock.set(attacker.id, torpedoesLeft - 1);
         if (torpedoResult.hit) targetHealth.current = Math.max(0, targetHealth.current - torpedoResult.damagePoints);
         combatRows.push({
           turnId,
+          detectionEventId: d.id,
           attackerUnitId: attacker.id,
           targetUnitId: target.id,
           weaponType: "TORPEDO",
@@ -736,6 +998,12 @@ async function resolveCombat(tx: any, turnId: string) {
 
   for (const [unitId, remaining] of charges) {
     await tx.unit.update({ where: { id: unitId }, data: { depthChargesRemaining: remaining } });
+  }
+
+  for (const [unitId, remaining] of torpedoStock) {
+    if (Number.isFinite(remaining)) {
+      await tx.unit.update({ where: { id: unitId }, data: { torpedoesRemaining: remaining } });
+    }
   }
 }
 

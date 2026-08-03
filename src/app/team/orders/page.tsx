@@ -53,6 +53,7 @@ export default async function OrdersPage() {
             detectability: true,
             historicalNote: true,
             profileImageUrl: true,
+            oxygenEnduranceHours: true,
           },
         },
         fleet: { select: { name: true } },
@@ -130,6 +131,10 @@ export default async function OrdersPage() {
         currentHeadingDeg: u.currentHeadingDeg,
         depthBand: u.depthBand,
         depthChargesRemaining: u.depthChargesRemaining,
+        batteryChargePercent: u.batteryChargePercent,
+        oxygenHoursRemaining: u.oxygenHoursRemaining,
+        oxygenEnduranceHours: u.unitClass.oxygenEnduranceHours,
+        torpedoesRemaining: u.torpedoesRemaining,
         existingOrder:
           u.orders.length > 0
             ? {

@@ -18,10 +18,32 @@
 export type GunBattery = { calibreMm: number; count: number; rangeM: number };
 export type TorpedoBattery = { count: number; rangeM: number; speedKnots: number };
 
+/**
+ * Variante de torpille sélectionnable (sous-marins) : G7a à vapeur (44nds,
+ * sillage de bulles visible en surface — trahit la position du tireur) vs
+ * G7e électrique (30nds, sans sillage, mais plus lente donc plus facile à
+ * esquiver). Un choix tactique réel, pas juste un chiffre différent.
+ */
+export type TorpedoTypeSpec = { id: string; label: string; speedKnots: number; rangeM: number; wakeVisible: boolean };
+
 export type CombatProfile = {
   guns?: GunBattery[];
   torpedoTubes?: TorpedoBattery;
+  /** Types de torpilles au choix (sous-marins) ; absent = type unique de `torpedoTubes`. */
+  torpedoTypes?: TorpedoTypeSpec[];
 };
+
+/** Batterie de torpilles effective pour un tir : type choisi si fourni et disponible, sinon le tube par défaut. */
+export function selectTorpedoBattery(
+  profile: CombatProfile | null | undefined,
+  torpedoTypeId?: string | null
+): TorpedoBattery | null {
+  if (torpedoTypeId) {
+    const type = profile?.torpedoTypes?.find((t) => t.id === torpedoTypeId);
+    if (type) return { count: profile?.torpedoTubes?.count ?? 1, rangeM: type.rangeM, speedKnots: type.speedKnots };
+  }
+  return profile?.torpedoTubes ?? null;
+}
 
 /**
  * Dégâts moyens d'un coup de 380mm, calibrés sur l'indication du livret
