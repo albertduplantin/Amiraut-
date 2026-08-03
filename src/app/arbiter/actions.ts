@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
 import { assertArbiter, AccessDeniedError } from "@/lib/auth";
-import { setTurnWeather, setDetectionStatus, addManualDetection, publishTurn } from "@/lib/turnEngine";
+import { setTurnWeather, setDetectionStatus, addManualDetection, publishTurn, acknowledgeTacticalMode } from "@/lib/turnEngine";
 import { prisma } from "@/lib/prisma";
 
 export async function setWeatherAction(formData: FormData) {
@@ -75,6 +75,46 @@ export async function updateUnitPositionAction(params: {
   revalidatePath("/arbiter/positions");
   revalidatePath("/team/orders");
   return { ok: true };
+}
+
+/** Déplace toute une flotte d'un même écart (formation conservée). */
+export async function updateFleetPositionAction(params: {
+  fleetId: string;
+  deltaLat: number;
+  deltaLng: number;
+}): Promise<UpdatePositionResult> {
+  const session = await getSession();
+  try {
+    assertArbiter(session);
+  } catch (error) {
+    if (error instanceof AccessDeniedError) return { ok: false, error: error.message };
+    throw error;
+  }
+
+  const units = await prisma.unit.findMany({
+    where: { fleetId: params.fleetId, status: { in: ["ACTIVE", "DAMAGED"] } },
+    select: { id: true, currentLat: true, currentLng: true },
+  });
+
+  await prisma.$transaction(
+    units.map((u) =>
+      prisma.unit.update({
+        where: { id: u.id },
+        data: { currentLat: u.currentLat + params.deltaLat, currentLng: u.currentLng + params.deltaLng },
+      })
+    )
+  );
+
+  revalidatePath("/arbiter/positions");
+  revalidatePath("/team/orders");
+  return { ok: true };
+}
+
+export async function acknowledgeTacticalModeAction(formData: FormData) {
+  const session = await getSession();
+  assertArbiter(session);
+  await acknowledgeTacticalMode(String(formData.get("detectionId")));
+  revalidatePath("/arbiter");
 }
 
 export async function publishTurnAction(formData: FormData) {

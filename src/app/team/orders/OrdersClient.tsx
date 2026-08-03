@@ -44,6 +44,15 @@ type UnitDto = {
   existingOrder: { speedKnots: number; waypoints: LatLng[]; depthBand: string | null } | null;
 };
 
+/**
+ * Vitesse à laquelle un sous-marin patrouille en écoutant activement à
+ * l'hydrophone : historiquement, la portée utile de détection acoustique
+ * (GHG) restait significative jusqu'à ~4-6nds, puis chutait vite au-delà à
+ * cause du bruit propre (uboat.net/articles/id/52 : à 4nds, un U-Boot
+ * gardait encore 5-10nm sur un destroyer, 3.5-7.5nm sur un cargo).
+ */
+const LISTENING_SPEED_KNOTS = 4;
+
 const DEPTH_BAND_ORDER = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"] as const;
 type DepthBandKey = (typeof DEPTH_BAND_ORDER)[number];
 
@@ -617,6 +626,20 @@ export function OrdersClient(props: {
                   className="mt-1 w-full"
                 />
               </label>
+
+              {selectedUnit.category === "SUBMARINE" && (
+                <button
+                  onClick={() => updateUnitSpeed(LISTENING_SPEED_KNOTS)}
+                  className={`w-full rounded-md border px-3 py-1.5 text-xs transition ${
+                    selectedUnitDraft.speedKnots === LISTENING_SPEED_KNOTS
+                      ? "border-brass-500 bg-brass-900/50"
+                      : "border-slate-700 hover:bg-slate-900"
+                  }`}
+                  title="À cette vitesse, l'hydrophone reste efficace : au-delà, le bruit propre du sous-marin masque le signal (voir GHG, uboat.net/articles/id/52)."
+                >
+                  🎧 Vitesse d&apos;écoute ({LISTENING_SPEED_KNOTS} nds)
+                </button>
+              )}
 
               <div className="rounded-md bg-slate-900 p-3 text-sm">
                 <div>Budget : {unitBudgetNm.toFixed(1)} nm</div>

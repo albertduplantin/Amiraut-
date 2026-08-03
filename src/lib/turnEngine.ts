@@ -340,6 +340,14 @@ export async function requestTacticalMode(detectionEventId: string) {
   });
 }
 
+/** L'arbitre marque une demande de mode tactique comme traitée (elle disparaît de son tableau de bord). */
+export async function acknowledgeTacticalMode(detectionEventId: string) {
+  await prisma.detectionEvent.update({
+    where: { id: detectionEventId },
+    data: { tacticalModeAcknowledged: true },
+  });
+}
+
 export async function setDetectionStatus(detectionEventId: string, status: ArbiterStatus, note?: string) {
   await prisma.detectionEvent.update({
     where: { id: detectionEventId },

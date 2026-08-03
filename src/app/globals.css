@@ -79,3 +79,27 @@ body {
   bottom: 5px;
   right: 5px;
 }
+
+/* Panache de fumée (navire endommagé/coulé, voir shipSilhouettes.ts) : léger
+   mouvement vertical + variation d'opacité pour suggérer un panache vivant
+   plutôt qu'un motif figé. */
+@keyframes smoke-rise {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-3px) scale(1.04);
+    opacity: 0.85;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .smoke-plume {
+    animation: none !important;
+  }
+}

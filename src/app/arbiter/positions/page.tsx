@@ -15,7 +15,7 @@ export default async function PositionsPage() {
       where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } },
       include: {
         unitClass: { select: { name: true, category: true, lengthMeters: true } },
-        fleet: { select: { name: true, team: { select: { name: true, colorHex: true } } } },
+        fleet: { select: { id: true, name: true, team: { select: { name: true, colorHex: true } } } },
       },
       orderBy: [{ fleet: { team: { name: "asc" } } }, { fleet: { name: "asc" } }, { name: "asc" }],
     }),
@@ -33,6 +33,7 @@ export default async function PositionsPage() {
         lengthMeters: u.unitClass.lengthMeters,
         teamName: u.fleet.team.name,
         teamColor: u.fleet.team.colorHex,
+        fleetId: u.fleet.id,
         fleetName: u.fleet.name,
         currentLat: u.currentLat,
         currentLng: u.currentLng,

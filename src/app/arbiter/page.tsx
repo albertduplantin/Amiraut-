@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { setWeatherAction } from "./actions";
+import { setWeatherAction, acknowledgeTacticalModeAction } from "./actions";
 import { SubmitButton } from "./SubmitButton";
 
 export default async function ArbiterDashboardPage() {
@@ -44,10 +44,57 @@ export default async function ArbiterDashboardPage() {
       })
     : [];
 
+  // Cherchées indépendamment du tour actuellement en revue : une demande de
+  // mode tactique porte sur une détection déjà publiée (le joueur la voit
+  // dans son rapport), donc sur un tour différent de celui en cours.
+  const tacticalRequests = await prisma.detectionEvent.findMany({
+    where: {
+      tacticalModeRequested: true,
+      tacticalModeAcknowledged: false,
+      turn: { scenarioId: session.scenarioId },
+    },
+    include: {
+      turn: { select: { number: true } },
+      observerUnit: { select: { name: true, fleet: { select: { team: { select: { name: true } } } } } },
+      targetUnit: { select: { name: true, fleet: { select: { team: { select: { name: true } } } } } },
+    },
+    orderBy: { id: "asc" },
+  });
+
   return (
     <div className="chart-room-bg min-h-screen p-6 text-slate-100">
       <h1 className="font-display text-xl tracking-wide text-brass-300">{scenario.name}</h1>
       <p className="mt-1 text-sm text-slate-400">Tour {turn.number} — statut : {formatStatus(turn.status)}</p>
+
+      {tacticalRequests.length > 0 && (
+        <section className="panel-brass mt-4 max-w-2xl rounded-md border border-orange-800 bg-orange-950/30 p-4">
+          <h2 className="font-display mb-3 tracking-wide text-orange-300">
+            ⚔ Demandes de mode bataille tactique ({tacticalRequests.length})
+          </h2>
+          <ul className="space-y-2">
+            {tacticalRequests.map((d) => (
+              <li key={d.id} className="flex items-center justify-between gap-3 rounded-md bg-slate-950/60 px-3 py-2 text-sm">
+                <div>
+                  <span className="font-medium">{d.observerUnit.name}</span>{" "}
+                  <span className="text-xs text-slate-500">({d.observerUnit.fleet.team.name})</span> →{" "}
+                  <span className="font-medium">{d.targetUnit.name}</span>{" "}
+                  <span className="text-xs text-slate-500">({d.targetUnit.fleet.team.name})</span>
+                  <div className="text-xs text-slate-500">Détecté au tour {d.turn.number}</div>
+                </div>
+                <form action={acknowledgeTacticalModeAction}>
+                  <input type="hidden" name="detectionId" value={d.id} />
+                  <button
+                    type="submit"
+                    className="shrink-0 rounded-md border border-orange-700 px-2 py-1 text-xs hover:bg-orange-950/50"
+                  >
+                    Marquer comme vu
+                  </button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <Link
         href="/arbiter/positions"

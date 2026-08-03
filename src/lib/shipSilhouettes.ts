@@ -73,24 +73,49 @@ export const SILHOUETTE_PATHS: Record<SilhouetteKey, string> = {
 
 export type UnitVisualStatus = "ACTIVE" | "DAMAGED" | "SUNK";
 
+let smokeIdCounter = 0;
+
 /**
  * Panache de fumée superposé au-dessus de la silhouette (position absolue,
  * hors flux : ne modifie donc pas la boîte englobante que MapLibre utilise
  * pour ancrer le marqueur sur ses coordonnées réelles). `dense` = navire
  * coulé (fumée noire épaisse), sinon navire endommagé (fumée plus légère).
+ *
+ * Rendu par dégradés radiaux + flou gaussien (plutôt que des ronds nets) pour
+ * un aspect vaporeux : la base du panache est sombre et dense, il s'éclaircit
+ * et se disperse en montant, comme un vrai panache de fumée.
  */
 function buildSmokeOverlay(heightPx: number, dense: boolean): string {
   const scale = heightPx / 42;
-  const w = Math.round(24 * scale);
-  const h = Math.round(20 * scale);
-  const opacity = dense ? 0.8 : 0.5;
-  const color = dense ? "#1e293b" : "#94a3b8";
-  const puffs = dense
-    ? `<circle cx="12" cy="16" r="7" /><circle cx="6" cy="10" r="5" /><circle cx="18" cy="9" r="5.5" /><circle cx="11" cy="4" r="4" />`
-    : `<circle cx="12" cy="14" r="5" /><circle cx="7" cy="9" r="3.5" /><circle cx="17" cy="8" r="3.5" />`;
+  const w = Math.round(30 * scale);
+  const h = Math.round(38 * scale);
+  const id = `smoke${smokeIdCounter++}`;
+  const baseColor = dense ? "#151b26" : "#94a3b8";
+  const lightColor = dense ? "#57657a" : "#e2e8f0";
+  const opacity = dense ? 0.88 : 0.55;
+
   return `
-    <svg width="${w}" height="${h}" viewBox="0 0 24 20" style="position:absolute;left:50%;top:0;transform:translate(-50%,-85%);pointer-events:none;opacity:${opacity};">
-      <g fill="${color}">${puffs}</g>
+    <svg width="${w}" height="${h}" viewBox="0 0 30 38" style="position:absolute;left:50%;top:0;transform:translate(-50%,-90%);pointer-events:none;overflow:visible;">
+      <defs>
+        <filter id="${id}b" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="1.7" />
+        </filter>
+        <radialGradient id="${id}g1">
+          <stop offset="0%" stop-color="${baseColor}" stop-opacity="${opacity}" />
+          <stop offset="100%" stop-color="${baseColor}" stop-opacity="0" />
+        </radialGradient>
+        <radialGradient id="${id}g2">
+          <stop offset="0%" stop-color="${lightColor}" stop-opacity="${opacity * 0.7}" />
+          <stop offset="100%" stop-color="${lightColor}" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+      <g class="smoke-plume" filter="url(#${id}b)" style="animation: smoke-rise ${dense ? 5 : 6.5}s ease-in-out infinite; transform-origin: 15px 30px;">
+        <ellipse cx="15" cy="31" rx="7" ry="6" fill="url(#${id}g1)" />
+        <ellipse cx="10.5" cy="22" rx="6" ry="5.2" fill="url(#${id}g1)" />
+        <ellipse cx="19.5" cy="18" rx="5.4" ry="4.8" fill="url(#${id}g1)" />
+        <ellipse cx="12.5" cy="10" rx="4.6" ry="4" fill="url(#${id}g2)" />
+        <ellipse cx="20" cy="6.5" rx="3.6" ry="3.2" fill="url(#${id}g2)" />
+      </g>
     </svg>
   `;
 }

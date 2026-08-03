@@ -298,6 +298,10 @@ model DetectionEvent {
   // à l'arbitre, qui reste libre d'en tenir compte (ex: raccourcir le tour
   // suivant pour une résolution plus fine).
   tacticalModeRequested Boolean    @default(false)
+  // Vu par l'arbitre (voir arbiter/page.tsx) : permet de faire disparaître la
+  // demande une fois traitée, sans quoi elle resterait affichée pour toujours
+  // même une fois le tour concerné publié depuis longtemps.
+  tacticalModeAcknowledged Boolean @default(false)
 
   @@unique([turnId, observerUnitId, targetUnitId])
 }
