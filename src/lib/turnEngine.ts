@@ -3,10 +3,27 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { buildTimedTrack, distanceNm, pathLengthNm, speedBudgetNm, bearingDeg, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm } from "@/lib/weather";
-import { resolveGunEngagement, resolveTorpedoEngagement, type CombatProfile } from "@/lib/combat";
-import type { ArbiterStatus, SensorType } from "@/generated/prisma/client";
+import {
+  resolveGunEngagement,
+  resolveTorpedoEngagement,
+  resolveDepthChargeAttack,
+  type CombatProfile,
+  type DepthBand as CombatDepthBand,
+} from "@/lib/combat";
+import type { ArbiterStatus, SensorType, DepthBand } from "@/generated/prisma/client";
 
 const NM_TO_M = 1852;
+/** Portée effective d'une passe d'attaque aux grenades ASM (livret : ASDIC ~2000m). */
+const ASDIC_ATTACK_RANGE_M = 2000;
+
+/** Ordre des paliers d'immersion : un ordre ne peut déplacer l'unité que d'un cran. */
+const DEPTH_BAND_ORDER: DepthBand[] = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"];
+
+function isAdjacentDepthBand(current: DepthBand, requested: DepthBand): boolean {
+  const from = DEPTH_BAND_ORDER.indexOf(current);
+  const to = DEPTH_BAND_ORDER.indexOf(requested);
+  return Math.abs(from - to) <= 1;
+}
 
 const SensorSchema = z.object({
   type: z.enum(["RADAR", "VISUAL", "HYDROPHONE", "SONAR", "OTHER"]),
@@ -73,8 +90,9 @@ export async function saveUnitOrder(params: {
   submittedById: string;
   speedKnots: number;
   waypoints: LatLng[];
+  depthBand?: DepthBand;
 }) {
-  const { turnId, unitId, submittedById, speedKnots, waypoints } = params;
+  const { turnId, unitId, submittedById, speedKnots, waypoints, depthBand } = params;
 
   const [turn, unit] = await Promise.all([
     prisma.turn.findUniqueOrThrow({ where: { id: turnId } }),
@@ -96,6 +114,17 @@ export async function saveUnitOrder(params: {
     turnDurationMinutes: turn.durationMinutes,
   });
 
+  if (depthBand) {
+    if (unit.unitClass.category !== "SUBMARINE") {
+      throw new OrderValidationError("Seul un sous-marin peut changer de palier d'immersion.");
+    }
+    if (!isAdjacentDepthBand(unit.depthBand, depthBand)) {
+      throw new OrderValidationError(
+        `Changement d'immersion impossible en un tour : ${unit.depthBand} → ${depthBand} (un seul palier à la fois).`
+      );
+    }
+  }
+
   await prisma.$transaction(async (tx) => {
     const existing = await tx.unitOrder.findUnique({ where: { turnId_unitId: { turnId, unitId } } });
     if (existing) {
@@ -109,6 +138,7 @@ export async function saveUnitOrder(params: {
         unitId,
         submittedById,
         speedKnots,
+        depthBand,
         waypoints: {
           create: waypoints.map((wp, i) => ({ sequence: i, lat: wp.lat, lng: wp.lng })),
         },
@@ -235,9 +265,25 @@ export async function resolveTurnDetections(turnId: string) {
       }
 
       const sensors = parseSensors(observer.unitClass.sensors);
+      const observerSpeedKnots = observer.orders[0]?.speedKnots ?? 0;
+      // Palier effectif de la cible ce tour : l'ordre du joueur (ex: plonger
+      // en réaction à une détection précédente) prime sur la valeur figée du
+      // tour d'avant, puisqu'il est soumis avant la résolution de ce tour.
+      const targetDepthBand: DepthBand = target.orders[0]?.depthBand ?? target.depthBand;
+      const targetSubmerged = target.unitClass.category === "SUBMARINE" && targetDepthBand !== "SURFACE";
+
       let best: { type: SensorType; margin: number } | null = null;
       for (const sensor of sensors) {
-        const range = effectiveSensorRangeNm(sensor.type, sensor.rangeNm, turn.weather, target.unitClass.detectability);
+        // Un sous-marin immergé échappe entièrement au radar et au visuel :
+        // seule une détection acoustique (hydrophone/ASDIC) reste possible.
+        if (targetSubmerged && (sensor.type === "RADAR" || sensor.type === "VISUAL")) continue;
+        const range = effectiveSensorRangeNm(
+          sensor.type,
+          sensor.rangeNm,
+          turn.weather,
+          target.unitClass.detectability,
+          observerSpeedKnots
+        );
         const margin = range - cpa.distanceNm;
         if (margin >= 0 && (!best || margin > best.margin)) {
           best = { type: sensor.type, margin };
@@ -279,6 +325,19 @@ function buildSampleTimes(durationMinutes: number) {
   for (let m = 0; m <= durationMinutes; m += CPA_SAMPLE_STEP_MINUTES) times.add(m);
   times.add(durationMinutes);
   return Array.from(times).sort((a, b) => a - b);
+}
+
+/**
+ * Un joueur de l'équipe observatrice demande le mode bataille tactique pour
+ * cet engagement (vue rapprochée, voir /team/tactical/[id]) : ne fait rien
+ * d'autre que poser un signal pour l'arbitre, qui reste libre d'en tenir
+ * compte (ex: raccourcir le tour suivant pour une résolution plus fine).
+ */
+export async function requestTacticalMode(detectionEventId: string) {
+  await prisma.detectionEvent.update({
+    where: { id: detectionEventId },
+    data: { tacticalModeRequested: true },
+  });
 }
 
 export async function setDetectionStatus(detectionEventId: string, status: ArbiterStatus, note?: string) {
@@ -410,21 +469,29 @@ export async function publishTurn(turnId: string) {
   await prisma.$transaction(
     async (tx) => {
       for (const order of orders) {
-        if (order.waypoints.length === 0) continue;
-        const last = order.waypoints[order.waypoints.length - 1];
-        const secondToLast = order.waypoints.length > 1 ? order.waypoints[order.waypoints.length - 2] : null;
-        const current = currentPositions.get(order.unitId)!;
-        const from = secondToLast ?? { lat: current.currentLat, lng: current.currentLng };
+        const data: {
+          currentLat?: number;
+          currentLng?: number;
+          currentHeadingDeg?: number;
+          lastResolvedTurn?: number;
+          depthBand?: DepthBand;
+        } = {};
 
-        await tx.unit.update({
-          where: { id: order.unitId },
-          data: {
-            currentLat: last.lat,
-            currentLng: last.lng,
-            currentHeadingDeg: bearingDeg(from, last),
-            lastResolvedTurn: turn.number,
-          },
-        });
+        if (order.waypoints.length > 0) {
+          const last = order.waypoints[order.waypoints.length - 1];
+          const secondToLast = order.waypoints.length > 1 ? order.waypoints[order.waypoints.length - 2] : null;
+          const current = currentPositions.get(order.unitId)!;
+          const from = secondToLast ?? { lat: current.currentLat, lng: current.currentLng };
+          data.currentLat = last.lat;
+          data.currentLng = last.lng;
+          data.currentHeadingDeg = bearingDeg(from, last);
+          data.lastResolvedTurn = turn.number;
+        }
+        if (order.depthBand) data.depthBand = order.depthBand;
+
+        if (Object.keys(data).length > 0) {
+          await tx.unit.update({ where: { id: order.unitId }, data });
+        }
       }
 
       const pendingTransfers = await tx.unit.findMany({
@@ -493,10 +560,12 @@ async function resolveCombat(tx: any, turnId: string) {
 
   const orders = await tx.unitOrder.findMany({
     where: { turnId },
-    select: { unitId: true, speedKnots: true },
+    select: { unitId: true, speedKnots: true, depthBand: true },
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const speedByUnit = new Map(orders.map((o: any) => [o.unitId, o.speedKnots]));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const depthOrderByUnit = new Map(orders.map((o: any) => [o.unitId, o.depthBand]));
 
   // PV tenus en mémoire pendant la résolution : plusieurs détections du
   // même tour peuvent viser la même cible, il faut cumuler les dégâts.
@@ -509,6 +578,15 @@ async function resolveCombat(tx: any, turnId: string) {
     return health.get(unit.id)!;
   };
 
+  // Grenades ASM restantes tenues en mémoire pendant la résolution, pour le
+  // même motif que `health` (plusieurs passes possibles dans le même tour).
+  const charges = new Map<string, number>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getCharges = (unit: any) => {
+    if (!charges.has(unit.id)) charges.set(unit.id, unit.depthChargesRemaining ?? 0);
+    return charges.get(unit.id)!;
+  };
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const combatRows: any[] = [];
 
@@ -518,15 +596,51 @@ async function resolveCombat(tx: any, turnId: string) {
     const target = d.targetUnit;
     if (attacker.status === "SUNK" || target.status === "SUNK") continue;
 
-    const combatProfile = attacker.unitClass.combatProfile as CombatProfile | null;
-    if (!combatProfile?.guns?.length && !combatProfile?.torpedoTubes) continue;
-
     const attackerHealth = getHealth(attacker);
     const targetHealth = getHealth(target);
     if (attackerHealth.current <= 0 || targetHealth.current <= 0) continue;
 
     const targetSpeedKnots = (speedByUnit.get(target.id) as number | undefined) ?? 0;
     const rangeM = d.cpaDistanceNm * NM_TO_M;
+
+    const targetDepthBand: DepthBand = depthOrderByUnit.get(target.id) ?? target.depthBand;
+    const attackerDepthBand: DepthBand = depthOrderByUnit.get(attacker.id) ?? attacker.depthBand;
+    const targetSubmerged = target.unitClass.category === "SUBMARINE" && targetDepthBand !== "SURFACE";
+
+    if (targetSubmerged) {
+      // Un sous-marin immergé échappe au canon et à la torpille classique :
+      // seul un escorteur avec des grenades ASM en réserve, ayant repéré la
+      // cible à l'oreille (hydrophone/ASDIC), peut l'attaquer.
+      if ((d.method === "HYDROPHONE" || d.method === "SONAR") && attacker.depthChargesRemaining != null) {
+        const chargesAvailable = getCharges(attacker);
+        const dcResult = resolveDepthChargeAttack({
+          chargesAvailable,
+          rangeM,
+          maxRangeM: ASDIC_ATTACK_RANGE_M,
+          targetDepthBand: targetDepthBand as CombatDepthBand,
+        });
+        if (dcResult) {
+          charges.set(attacker.id, chargesAvailable - dcResult.chargesUsed);
+          if (dcResult.hit) targetHealth.current = Math.max(0, targetHealth.current - dcResult.damagePoints);
+          combatRows.push({
+            turnId,
+            attackerUnitId: attacker.id,
+            targetUnitId: target.id,
+            weaponType: "DEPTH_CHARGE",
+            rangeNm: d.cpaDistanceNm,
+            hitChancePercent: dcResult.hitChancePercent,
+            hits: dcResult.hit ? 1 : 0,
+            damagePoints: dcResult.damagePoints,
+            targetHealthLeft: targetHealth.current,
+            targetSunk: targetHealth.current <= 0,
+          });
+        }
+      }
+      continue;
+    }
+
+    const combatProfile = attacker.unitClass.combatProfile as CombatProfile | null;
+    if (!combatProfile?.guns?.length && !combatProfile?.torpedoTubes) continue;
 
     if (combatProfile.guns?.length) {
       const gunResult = resolveGunEngagement({
@@ -556,8 +670,13 @@ async function resolveCombat(tx: any, turnId: string) {
     }
 
     // Les torpilles suivent le tir de canon dans la même passe (une cible
-    // déjà coulée par l'artillerie n'est pas torpillée en plus).
-    if (combatProfile.torpedoTubes && targetHealth.current > 0) {
+    // déjà coulée par l'artillerie n'est pas torpillée en plus). Un
+    // sous-marin en immersion moyenne/grande ne peut pas utiliser ses
+    // torpilles (livret) — seuls SURFACE et SHALLOW le permettent.
+    const attackerCanTorpedo =
+      attacker.unitClass.category !== "SUBMARINE" || attackerDepthBand === "SURFACE" || attackerDepthBand === "SHALLOW";
+
+    if (combatProfile.torpedoTubes && targetHealth.current > 0 && attackerCanTorpedo) {
       // Angle entre le cap de la cible et la ligne de tir au moment du CPA
       // (les positions y sont déjà enregistrées pour la détection) —
       // « angle de tir » du livret (p. 6) : aigu si la cible approche,
@@ -606,6 +725,10 @@ async function resolveCombat(tx: any, turnId: string) {
       data: { healthCurrent: h.current, status: statusFromHealth(h.current, h.max) },
     });
   }
+
+  for (const [unitId, remaining] of charges) {
+    await tx.unit.update({ where: { id: unitId }, data: { depthChargesRemaining: remaining } });
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -639,6 +762,7 @@ async function generateReportForTeam(tx: any, turnId: string, teamId: string) {
   });
 
   const contacts = detections.map((d: (typeof detections)[number]) => ({
+    detectionEventId: d.id,
     targetUnitId: d.targetUnitId,
     targetName: d.targetUnit.name,
     unitClassName: d.targetUnit.unitClass.name,
@@ -649,6 +773,7 @@ async function generateReportForTeam(tx: any, turnId: string, teamId: string) {
     method: d.method,
     cpaMinutesIntoTurn: d.cpaMinutesIntoTurn,
     observedBy: d.observerUnit.name,
+    observerUnitId: d.observerUnitId,
   }));
 
   const combatEvents = await tx.combatEvent.findMany({

@@ -37,7 +37,8 @@ export function effectiveSensorRangeNm(
   sensorType: SensorType,
   baseRangeNm: number,
   weather: WeatherConditions,
-  targetDetectability: number
+  targetDetectability: number,
+  observerSpeedKnots = 0
 ): number {
   switch (sensorType) {
     case "VISUAL": {
@@ -61,7 +62,12 @@ export function effectiveSensorRangeNm(
     case "HYDROPHONE":
     case "SONAR": {
       const seaStateMultiplier = clamp(1 - weather.seaState * 0.08, 0.2, 1);
-      return baseRangeNm * seaStateMultiplier * targetDetectability;
+      // Le bruit propre de l'écouteur masque le signal à grande vitesse : les
+      // hydrophones allemands perdaient l'essentiel de leur portée au-delà de
+      // 15 nds (uboat.net/articles/id/52). Ne s'applique qu'à l'écoute, pas
+      // au radar/visuel.
+      const selfNoiseMultiplier = clamp(1 / (1 + observerSpeedKnots / 3), 0.05, 1);
+      return baseRangeNm * seaStateMultiplier * selfNoiseMultiplier * targetDetectability;
     }
     default:
       return baseRangeNm * targetDetectability;

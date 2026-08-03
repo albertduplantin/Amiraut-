@@ -220,6 +220,8 @@ function formatWeaponType(weaponType: string) {
       return "artillerie";
     case "TORPEDO":
       return "torpille";
+    case "DEPTH_CHARGE":
+      return "grenades ASM";
     default:
       return weaponType;
   }

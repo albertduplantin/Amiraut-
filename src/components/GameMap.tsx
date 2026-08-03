@@ -4,7 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { Map as MapLibreMap, Marker, LngLatBounds, setWorkerUrl, type GeoJSONSource, type MapMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { LatLng } from "@/lib/geo";
-import { buildSilhouetteElement, type SilhouetteKey } from "@/lib/shipSilhouettes";
+import { buildSilhouetteElement, type SilhouetteKey, type UnitVisualStatus } from "@/lib/shipSilhouettes";
 
 export type MapSourceConfig = {
   id: string;
@@ -36,6 +36,8 @@ export type ShipMarkerConfig = {
   /** Longueur hors-tout réelle en mètres, pour un rendu à l'échelle du zoom. */
   lengthMeters: number;
   label?: string;
+  /** Épave fumante (SUNK) / fumée (DAMAGED) superposées à la silhouette. */
+  status?: UnitVisualStatus;
 };
 
 type GameMapProps = {
@@ -56,6 +58,12 @@ type GameMapProps = {
   shipMarkers?: ShipMarkerConfig[];
   /** Niveau de zoom à partir duquel les silhouettes remplacent les points. */
   shipMarkersMinZoom?: number;
+  /**
+   * Si fourni, un clic direct sur une silhouette de navire appelle ce
+   * handler avec son id au lieu de laisser le clic traverser vers la carte
+   * (dessin de trajet) : rend les navires sélectionnables à la souris.
+   */
+  onShipMarkerClick?: (id: string) => void;
 };
 
 type ShipMarkerEntry = {
@@ -110,12 +118,13 @@ function onceStyleReady(map: MapLibreMap, callback: () => void): () => void {
 }
 
 export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
-  { center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint, shipMarkers, shipMarkersMinZoom = 7 },
+  { center, zoom = 5, sources, onClick, className, fitToPoints, flyToPoint, shipMarkers, shipMarkersMinZoom = 7, onShipMarkerClick },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const onClickRef = useRef(onClick);
+  const onShipMarkerClickRef = useRef(onShipMarkerClick);
   const fitToPointsRef = useRef(fitToPoints);
   const isFirstFlyRef = useRef(true);
   const lastFlownToRef = useRef<LatLng | null>(null);
@@ -124,6 +133,10 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   useEffect(() => {
     onClickRef.current = onClick;
   }, [onClick]);
+
+  useEffect(() => {
+    onShipMarkerClickRef.current = onShipMarkerClick;
+  }, [onShipMarkerClick]);
 
   useEffect(() => {
     fitToPointsRef.current = fitToPoints;
@@ -229,10 +242,11 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     }
 
     for (const config of incoming) {
-      const signature = `${config.silhouette}|${config.color}|${config.label ?? ""}`;
+      const signature = `${config.silhouette}|${config.color}|${config.label ?? ""}|${config.status ?? ""}`;
       const current = existing.get(config.id);
       if (!current) {
         const el = buildSilhouetteElement(config);
+        attachShipMarkerClick(el, config.id, onShipMarkerClickRef);
         const marker = new Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" })
           .setLngLat([config.lng, config.lat])
           .setRotation(config.headingDeg)
@@ -243,6 +257,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
       if (current.signature !== signature) {
         current.marker.remove();
         const el = buildSilhouetteElement(config);
+        attachShipMarkerClick(el, config.id, onShipMarkerClickRef);
         const marker = new Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" })
           .setLngLat([config.lng, config.lat])
           .setRotation(config.headingDeg)
@@ -282,6 +297,21 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
 
   return <div ref={containerRef} className={className ?? "h-full w-full"} />;
 });
+
+/**
+ * Les silhouettes sont créées avec `pointer-events: none` (pour laisser le
+ * clic de dessin de trajet traverser jusqu'à la carte) : ici on les rend
+ * cliquables et on empêche ce clic de aussi déclencher un point de trajet
+ * sous le navire.
+ */
+function attachShipMarkerClick(el: HTMLDivElement, id: string, handlerRef: { current: ((id: string) => void) | undefined }) {
+  el.style.pointerEvents = "auto";
+  el.style.cursor = "pointer";
+  el.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    handlerRef.current?.(id);
+  });
+}
 
 function fitMapToPoints(map: MapLibreMap, points: LatLng[]) {
   const bounds = points.reduce(

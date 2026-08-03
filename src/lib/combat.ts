@@ -231,3 +231,81 @@ export function resolveTorpedoEngagement(params: {
 
   return { battery, hitChancePercent, hitRoll, hit: true, hits, damagePoints };
 }
+
+// ── Grenades ASM (attaque en profondeur) ───────────────────
+//
+// Un sous-marin immergé (SHALLOW/MEDIUM/DEEP) échappe au canon et à la
+// torpille classique : seul un escorteur équipé d'ASDIC/hydrophone peut le
+// prendre en chasse et l'attaquer aux grenades sous-marines. Portée ASDIC
+// effective ~2000m (livret + doctrine réelle, cf. weather.ts) ; plus la
+// cible est profonde, plus le réglage de profondeur des grenades et le
+// temps de plongée avant explosion laissent de marge d'évasion — d'où une
+// difficulté croissante avec le palier.
+
+export type DepthBand = "SHALLOW" | "MEDIUM" | "DEEP";
+
+/** Nombre de grenades consommées par passe d'attaque (livret : ~10 par passe, stock total 40-80). */
+export const DEPTH_CHARGES_PER_ATTACK = 10;
+
+const DEPTH_BAND_HIT_FACTOR: Record<DepthBand, number> = {
+  SHALLOW: 1,
+  MEDIUM: 0.6,
+  DEEP: 0.35,
+};
+
+const REFERENCE_DAMAGE_PER_DEPTH_CHARGE_ATTACK = 30;
+
+export function depthChargeHitChancePercent(params: {
+  rangeM: number;
+  maxRangeM: number;
+  targetDepthBand: DepthBand;
+}): number {
+  const rangeRatio = clamp(params.rangeM / params.maxRangeM, 0, 1);
+  const rangeFactor = Math.pow(1 - rangeRatio, 1.2);
+  const baseAccuracy = 0.45;
+  return clamp(baseAccuracy * rangeFactor * DEPTH_BAND_HIT_FACTOR[params.targetDepthBand] * 100, 0, 80);
+}
+
+function depthChargeDamage(rng: () => number): number {
+  const variability = 0.7 + rng() * 0.6; // 0.7x à 1.3x
+  return REFERENCE_DAMAGE_PER_DEPTH_CHARGE_ATTACK * variability;
+}
+
+export type DepthChargeAttackResult = {
+  hitChancePercent: number;
+  hitRoll: number;
+  hit: boolean;
+  damagePoints: number;
+  chargesUsed: number;
+};
+
+/**
+ * Résout une passe d'attaque aux grenades ASM. Retourne `null` si
+ * l'escorteur n'a plus assez de grenades pour une passe complète.
+ */
+export function resolveDepthChargeAttack(params: {
+  chargesAvailable: number;
+  rangeM: number;
+  maxRangeM: number;
+  targetDepthBand: DepthBand;
+  rng?: () => number;
+}): DepthChargeAttackResult | null {
+  if (params.chargesAvailable < DEPTH_CHARGES_PER_ATTACK) return null;
+  const rng = params.rng ?? Math.random;
+
+  const hitChancePercent = depthChargeHitChancePercent({
+    rangeM: params.rangeM,
+    maxRangeM: params.maxRangeM,
+    targetDepthBand: params.targetDepthBand,
+  });
+  const hitRoll = rng() * 100;
+  const hit = hitRoll < hitChancePercent;
+
+  return {
+    hitChancePercent,
+    hitRoll,
+    hit,
+    damagePoints: hit ? depthChargeDamage(rng) : 0,
+    chargesUsed: DEPTH_CHARGES_PER_ATTACK,
+  };
+}

@@ -332,10 +332,13 @@ async function main() {
       sensors: [
         { type: "RADAR", rangeNm: 15 },
         { type: "VISUAL", rangeNm: 10 },
-        { type: "SONAR", rangeNm: 3 },
+        // ASDIC : portée réelle ~2000m (jusqu'à 3500yd en conditions
+        // idéales), inefficace au-delà de ~15nds — cf. weather.ts.
+        { type: "SONAR", rangeNm: 1.1 },
       ],
       detectability: 0.85,
       iconKey: "destroyer",
+      depthChargeStock: 60,
       historicalNote:
         "HMS Milne, Matchless, Meteor, Musketeer : 1 925t, armés de 6 canons de 120mm et 4 tubes lance-torpilles de 533mm.",
       weaponSystems: {
@@ -364,10 +367,11 @@ async function main() {
       sensors: [
         { type: "RADAR", rangeNm: 15 },
         { type: "VISUAL", rangeNm: 10 },
-        { type: "SONAR", rangeNm: 3 },
+        { type: "SONAR", rangeNm: 1.1 },
       ],
       detectability: 0.9,
       iconKey: "destroyer",
+      depthChargeStock: 60,
       historicalNote:
         "HMS Ashanti : 1 960t, fortement armé pour un destroyer (8 canons de 120mm), moins de tubes lance-torpilles que la moyenne (4 x 533mm).",
       weaponSystems: {
@@ -396,10 +400,11 @@ async function main() {
       sensors: [
         { type: "RADAR", rangeNm: 16 },
         { type: "VISUAL", rangeNm: 10 },
-        { type: "SONAR", rangeNm: 3 },
+        { type: "SONAR", rangeNm: 1.1 },
       ],
       detectability: 0.85,
       iconKey: "destroyer",
+      depthChargeStock: 60,
       historicalNote:
         "HMS Saumarez, Savage, Scorpion, HNoMS Stord : 1 800t, les plus récents et rapides destroyers de la force de couverture, 8 tubes lance-torpilles de 533mm.",
       weaponSystems: {
@@ -426,11 +431,12 @@ async function main() {
         torpedoTubes: { count: 6, rangeM: 9000, speedKnots: 25 },
       },
       sensors: [
-        { type: "SONAR", rangeNm: 3 },
+        { type: "SONAR", rangeNm: 1.1 },
         { type: "VISUAL", rangeNm: 9 },
       ],
       detectability: 0.75,
       iconKey: "escort",
+      depthChargeStock: 50,
       profileImageUrl:
         "https://ia800801.us.archive.org/BookReader/BookReaderImages.php?zip=/26/items/FM30-51/FM30-51_jp2.zip&file=FM30-51_jp2/FM30-51_0166.jp2&id=FM30-51&scale=2&rotate=0",
       historicalNote:
@@ -551,7 +557,12 @@ async function main() {
         torpedoTubes: { count: 5, rangeM: 5000, speedKnots: 40 },
       },
       sensors: [
-        { type: "HYDROPHONE", rangeNm: 4 },
+        // GHG (Gruppenhorchgerät) : portée réelle ~3.5-10nm sur un navire
+        // isolé selon l'état de mer (uboat.net/articles/id/52) ; ici prise à
+        // l'écoute à vitesse quasi nulle — le bruit propre du sous-marin
+        // dégrade fortement cette portée dès qu'il prend de la vitesse (cf.
+        // effectiveSensorRangeNm dans weather.ts).
+        { type: "HYDROPHONE", rangeNm: 8 },
         { type: "VISUAL", rangeNm: 6 },
       ],
       detectability: 0.5,
@@ -705,7 +716,7 @@ async function main() {
 async function createUnit(
   scenarioId: string,
   fleetId: string,
-  unitClass: { id: string; weaponSystems: unknown },
+  unitClass: { id: string; weaponSystems: unknown; depthChargeStock?: number | null },
   name: string,
   position: { lat: number; lng: number },
   historicalNote?: string
@@ -728,6 +739,7 @@ async function createUnit(
       historicalNote,
       healthMax,
       healthCurrent: healthMax,
+      depthChargesRemaining: unitClass.depthChargeStock ?? undefined,
     },
   });
 }

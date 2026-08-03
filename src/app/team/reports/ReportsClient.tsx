@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { GameMap, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { pointsFeatureCollection } from "@/lib/mapData";
 import type { LatLng } from "@/lib/geo";
@@ -30,6 +31,7 @@ type CombatLogEntry = {
 };
 
 type Contact = {
+  detectionEventId: string;
   targetUnitId: string;
   targetName: string;
   unitClassName: string;
@@ -93,6 +95,7 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
           color: "#38bdf8",
           silhouette,
           lengthMeters: u.unitClass.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+          status: u.status as "ACTIVE" | "DAMAGED" | "SUNK",
         };
       }),
     [report]
@@ -182,7 +185,17 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
             <ul className="space-y-1 text-sm">
               {report.contacts.map((c, i) => (
                 <li key={i} className="rounded-md bg-orange-950/40 px-2 py-1">
-                  <span className="font-medium">{c.unitClassName}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{c.unitClassName}</span>
+                    {turnIndex === 0 && (
+                      <Link
+                        href={`/team/tactical/${c.detectionEventId}`}
+                        className="shrink-0 rounded border border-orange-800 px-1.5 py-0.5 text-[10px] text-orange-300 hover:bg-orange-950/50"
+                      >
+                        Mode tactique
+                      </Link>
+                    )}
+                  </div>
                   <div className="text-xs text-slate-400">
                     repéré par {c.observedBy} ({formatMethod(c.method)}), +{Math.round(c.cpaMinutesIntoTurn)} min
                   </div>
@@ -228,6 +241,8 @@ function formatWeapon(weaponType: string) {
       return "artillerie";
     case "TORPEDO":
       return "torpille";
+    case "DEPTH_CHARGE":
+      return "grenades ASM";
     default:
       return weaponType;
   }

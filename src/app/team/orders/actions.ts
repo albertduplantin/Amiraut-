@@ -6,6 +6,7 @@ import { assertPlayer, assertCanOrderUnit, assertCanOrderFleet, AccessDeniedErro
 import { saveUnitOrder, requestFleetTransfer, cancelFleetTransfer, OrderValidationError } from "@/lib/turnEngine";
 import { prisma } from "@/lib/prisma";
 import type { LatLng } from "@/lib/geo";
+import type { DepthBand } from "@/generated/prisma/client";
 
 export type SubmitOrderResult = { ok: true } | { ok: false; error: string };
 
@@ -14,6 +15,7 @@ export async function submitOrderAction(params: {
   unitId: string;
   speedKnots: number;
   waypoints: LatLng[];
+  depthBand?: DepthBand;
 }): Promise<SubmitOrderResult> {
   const session = await getSession();
 
@@ -26,6 +28,7 @@ export async function submitOrderAction(params: {
       submittedById: session.participantId,
       speedKnots: params.speedKnots,
       waypoints: params.waypoints,
+      depthBand: params.depthBand,
     });
   } catch (error) {
     if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {

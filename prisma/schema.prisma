@@ -79,6 +79,7 @@ model UnitClass {
   enduranceMinutes Int? // réservé phase 2 (autonomie/carburant), inutilisé en V1
   weaponSystems    Json? // fiche d'armement historique affichée aux joueurs (texte libre)
   combatProfile    Json? // armement structuré utilisé par le moteur de combat, voir CombatProfile dans combat.ts
+  depthChargeStock Int? // stock initial de grenades ASM (escorteurs uniquement), voir Unit.depthChargesRemaining
 
   units Unit[]
 }
@@ -114,6 +115,11 @@ model Unit {
   currentLng        Float
   currentHeadingDeg Float?
   lastResolvedTurn  Int        @default(0)
+  // Palier d'immersion courant (sous-marins uniquement ; toujours SURFACE
+  // pour les autres catégories). Changé par ordre, un seul palier adjacent
+  // à la fois — voir UnitOrder.depthBand et resolveTurnDetections/resolveCombat.
+  depthBand           DepthBand @default(SURFACE)
+  depthChargesRemaining Int? // grenades ASM restantes (escorteurs uniquement, null sinon)
 
   orders          UnitOrder[]
   detectedAs      DetectionEvent[] @relation("TargetUnit")
@@ -129,6 +135,16 @@ enum UnitStatus {
   DAMAGED
   SUNK
   WITHDRAWN
+}
+
+// Immersion faible ≤30m / moyenne 31-80m / grande >80m (livret original) :
+// SHALLOW permet encore le tir de torpilles, MEDIUM/DEEP non ; seul HYDROPHONE/
+// SONAR peut détecter un sous-marin hors SURFACE (voir weather.ts/turnEngine.ts).
+enum DepthBand {
+  SURFACE
+  SHALLOW
+  MEDIUM
+  DEEP
 }
 
 // ── Accès (pas de comptes — token d'invitation opaque) ────
@@ -234,6 +250,10 @@ model UnitOrder {
   submittedById String
   submittedBy   Participant @relation(fields: [submittedById], references: [id])
   speedKnots    Float
+  // Palier d'immersion demandé pour ce tour (sous-marins uniquement) ; null =
+  // pas de changement, l'unité garde son Unit.depthBand actuel. Doit être
+  // adjacent au palier courant (un seul changement de palier par tour).
+  depthBand     DepthBand?
   submittedAt   DateTime    @default(now())
 
   waypoints Waypoint[]
@@ -273,6 +293,11 @@ model DetectionEvent {
   arbiterStatus      ArbiterStatus @default(PROPOSED)
   arbiterNote        String?
   decidedById        String?
+  // Un joueur d'un des deux camps a demandé le mode bataille tactique pour
+  // cet engagement (vue rapprochée dédiée, voir /team/tactical/[id]) : signal
+  // à l'arbitre, qui reste libre d'en tenir compte (ex: raccourcir le tour
+  // suivant pour une résolution plus fine).
+  tacticalModeRequested Boolean    @default(false)
 
   @@unique([turnId, observerUnitId, targetUnitId])
 }
@@ -321,6 +346,7 @@ model CombatEvent {
 enum WeaponType {
   GUN
   TORPEDO
+  DEPTH_CHARGE
 }
 
 // ── Rapport publié, filtré par équipe ────────────────────────

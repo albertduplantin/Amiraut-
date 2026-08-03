@@ -71,24 +71,57 @@ export const SILHOUETTE_PATHS: Record<SilhouetteKey, string> = {
   `,
 };
 
+export type UnitVisualStatus = "ACTIVE" | "DAMAGED" | "SUNK";
+
+/**
+ * Panache de fumée superposé au-dessus de la silhouette (position absolue,
+ * hors flux : ne modifie donc pas la boîte englobante que MapLibre utilise
+ * pour ancrer le marqueur sur ses coordonnées réelles). `dense` = navire
+ * coulé (fumée noire épaisse), sinon navire endommagé (fumée plus légère).
+ */
+function buildSmokeOverlay(heightPx: number, dense: boolean): string {
+  const scale = heightPx / 42;
+  const w = Math.round(24 * scale);
+  const h = Math.round(20 * scale);
+  const opacity = dense ? 0.8 : 0.5;
+  const color = dense ? "#1e293b" : "#94a3b8";
+  const puffs = dense
+    ? `<circle cx="12" cy="16" r="7" /><circle cx="6" cy="10" r="5" /><circle cx="18" cy="9" r="5.5" /><circle cx="11" cy="4" r="4" />`
+    : `<circle cx="12" cy="14" r="5" /><circle cx="7" cy="9" r="3.5" /><circle cx="17" cy="8" r="3.5" />`;
+  return `
+    <svg width="${w}" height="${h}" viewBox="0 0 24 20" style="position:absolute;left:50%;top:0;transform:translate(-50%,-85%);pointer-events:none;opacity:${opacity};">
+      <g fill="${color}">${puffs}</g>
+    </svg>
+  `;
+}
+
 export function buildSilhouetteElement(params: {
   silhouette: SilhouetteKey;
   color: string;
   heightPx?: number;
   label?: string;
+  status?: UnitVisualStatus;
 }): HTMLDivElement {
   const heightPx = params.heightPx ?? 42;
   const widthPx = Math.round((heightPx * 24) / 48);
+  const isSunk = params.status === "SUNK";
+  const isDamaged = params.status === "DAMAGED";
+  // Épave : coque grisée/assombrie (plus la couleur d'équipe, qui n'a plus de
+  // sens pour un navire hors de combat) et croix rouge marquant la perte.
+  const hullColor = isSunk ? "#475569" : params.color;
+  const hullOpacity = isSunk ? 0.6 : 1;
 
   const wrapper = document.createElement("div");
+  wrapper.style.position = "relative";
   wrapper.style.display = "flex";
   wrapper.style.flexDirection = "column";
   wrapper.style.alignItems = "center";
   wrapper.style.pointerEvents = "none";
 
   wrapper.innerHTML = `
-    <svg width="${widthPx}" height="${heightPx}" viewBox="0 0 24 48" fill="${params.color}" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round">
+    <svg width="${widthPx}" height="${heightPx}" viewBox="0 0 24 48" fill="${hullColor}" stroke="#0f172a" stroke-width="1.5" stroke-linejoin="round" style="opacity:${hullOpacity}">
       ${SILHOUETTE_PATHS[params.silhouette]}
+      ${isSunk ? '<path d="M5 18 L19 34 M19 18 L5 34" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" />' : ""}
     </svg>
     ${
       params.label
@@ -97,6 +130,7 @@ export function buildSilhouetteElement(params: {
           )}</span>`
         : ""
     }
+    ${isSunk || isDamaged ? buildSmokeOverlay(heightPx, isSunk) : ""}
   `;
   return wrapper;
 }

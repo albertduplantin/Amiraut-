@@ -44,3 +44,21 @@ export async function assertCanOrderFleet(session: Session & { teamId: string },
     throw new AccessDeniedError("Cette flotte n'est pas dans votre périmètre.");
   }
 }
+
+/**
+ * Vérifie que le joueur en session a le droit de voir cette détection.
+ * Seule l'équipe observatrice y a accès (même règle que la génération des
+ * contacts de rapport) : une équipe ne doit jamais apprendre par ce biais
+ * qu'elle a elle-même été repérée — ce serait une fuite du brouillard de
+ * guerre.
+ */
+export async function assertCanViewDetection(session: Session & { teamId: string }, detectionEventId: string) {
+  const detection = await prisma.detectionEvent.findUnique({
+    where: { id: detectionEventId },
+    select: { observerUnit: { select: { fleet: { select: { teamId: true } } } } },
+  });
+  if (!detection) throw new AccessDeniedError("Détection introuvable.");
+  if (detection.observerUnit.fleet.teamId !== session.teamId) {
+    throw new AccessDeniedError("Cette détection n'appartient pas à votre équipe.");
+  }
+}

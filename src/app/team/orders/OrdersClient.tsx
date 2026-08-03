@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import {
   budgetCircleFeatureCollection,
@@ -38,13 +39,32 @@ type UnitDto = {
   currentLat: number;
   currentLng: number;
   currentHeadingDeg: number | null;
-  existingOrder: { speedKnots: number; waypoints: LatLng[] } | null;
+  depthBand: string;
+  depthChargesRemaining: number | null;
+  existingOrder: { speedKnots: number; waypoints: LatLng[]; depthBand: string | null } | null;
 };
 
-type UnitDraft = { speedKnots: number; waypoints: LatLng[]; saved: boolean };
+const DEPTH_BAND_ORDER = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"] as const;
+type DepthBandKey = (typeof DEPTH_BAND_ORDER)[number];
+
+type UnitDraft = { speedKnots: number; waypoints: LatLng[]; saved: boolean; depthBand: DepthBandKey | null };
 type FleetDraft = { speedKnots: number; waypoints: LatLng[] };
 type Mode = "unit" | "fleet";
 type SortMode = "fleet" | "type" | "name";
+
+type LastContact = {
+  detectionEventId: string;
+  targetUnitId: string;
+  targetName: string;
+  unitClassName: string;
+  category: string;
+  iconKey: string;
+  lat: number;
+  lng: number;
+  method: string;
+  cpaMinutesIntoTurn: number;
+  observedBy: string;
+};
 
 export function OrdersClient(props: {
   turnId: string;
@@ -56,9 +76,11 @@ export function OrdersClient(props: {
   teamProgress: { submitted: number; total: number };
   globalProgress: { submitted: number; total: number };
   teamFleets: { id: string; name: string }[];
+  lastReportTurnNumber: number | null;
+  lastContacts: LastContact[];
   units: UnitDto[];
 }) {
-  const { turnId, turnNumber, turnDurationMinutes, weather, units, teamFleets } = props;
+  const { turnId, turnNumber, turnDurationMinutes, weather, units, teamFleets, lastContacts, lastReportTurnNumber } = props;
 
   const fleets = useMemo(() => {
     const byFleet = new Map<string, UnitDto[]>();
@@ -79,9 +101,12 @@ export function OrdersClient(props: {
     }));
   }, [units]);
 
-  const allUnitPositions = useMemo(() => units.map((u) => ({ lat: u.currentLat, lng: u.currentLng })), [units]);
+  const allUnitPositions = useMemo(
+    () => [...units.map((u) => ({ lat: u.currentLat, lng: u.currentLng })), ...lastContacts.map((c) => ({ lat: c.lat, lng: c.lng }))],
+    [units, lastContacts]
+  );
 
-  const [mode, setMode] = useState<Mode>("unit");
+  const [mode, setMode] = useState<Mode>("fleet");
   const [sortMode, setSortMode] = useState<SortMode>("fleet");
   const sortedUnits = useMemo(() => {
     const copy = [...units];
@@ -104,8 +129,13 @@ export function OrdersClient(props: {
     const initial: Record<string, UnitDraft> = {};
     for (const unit of units) {
       initial[unit.id] = unit.existingOrder
-        ? { speedKnots: unit.existingOrder.speedKnots, waypoints: unit.existingOrder.waypoints, saved: true }
-        : { speedKnots: defaultSpeed(unit.maxSpeedKnots), waypoints: [], saved: false };
+        ? {
+            speedKnots: unit.existingOrder.speedKnots,
+            waypoints: unit.existingOrder.waypoints,
+            saved: true,
+            depthBand: (unit.existingOrder.depthBand as DepthBandKey | null) ?? null,
+          }
+        : { speedKnots: defaultSpeed(unit.maxSpeedKnots), waypoints: [], saved: false, depthBand: null };
     }
     return initial;
   });
@@ -206,6 +236,11 @@ export function OrdersClient(props: {
     });
   }
 
+  function updateUnitDepthBand(depthBand: DepthBandKey) {
+    if (!selectedUnit) return;
+    setUnitDrafts((prev) => ({ ...prev, [selectedUnit.id]: { ...prev[selectedUnit.id], depthBand, saved: false } }));
+  }
+
   function clearUnitPath() {
     if (!selectedUnit) return;
     setUnitDrafts((prev) => ({ ...prev, [selectedUnit.id]: { ...prev[selectedUnit.id], waypoints: [], saved: false } }));
@@ -225,6 +260,7 @@ export function OrdersClient(props: {
         unitId: selectedUnit.id,
         speedKnots: selectedUnitDraft.speedKnots,
         waypoints: selectedUnitDraft.waypoints,
+        depthBand: selectedUnitDraft.depthBand ?? undefined,
       });
       if (!result.ok) {
         setError(result.error);
@@ -253,7 +289,7 @@ export function OrdersClient(props: {
         for (const unit of selectedFleet.units) {
           const offset = { lat: unit.currentLat - selectedFleet.centroid.lat, lng: unit.currentLng - selectedFleet.centroid.lng };
           const translated = selectedFleetDraft.waypoints.map((w) => ({ lat: w.lat + offset.lat, lng: w.lng + offset.lng }));
-          next[unit.id] = { speedKnots: selectedFleetDraft.speedKnots, waypoints: translated, saved: true };
+          next[unit.id] = { speedKnots: selectedFleetDraft.speedKnots, waypoints: translated, saved: true, depthBand: prev[unit.id]?.depthBand ?? null };
         }
         return next;
       });
@@ -287,11 +323,31 @@ export function OrdersClient(props: {
     setSelectedUnitId(unitId);
   }
 
+  function handleShipMarkerClick(unitId: string) {
+    const unit = units.find((u) => u.id === unitId);
+    if (!unit) return;
+    setMode("fleet");
+    setSelectedFleetId(unit.fleetId);
+  }
+
   const flyToPoint =
     mode === "unit" ? (selectedUnit ? { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng } : null) : (selectedFleet?.centroid ?? null);
 
   const sources = useMemo<MapSourceConfig[]>(() => {
     const list: MapSourceConfig[] = [
+      {
+        // Derniers contacts confirmés (tour précédent) : dernière position
+        // connue, pas la position réelle actuelle de l'ennemi — c'est du
+        // brouillard de guerre, pas un suivi en direct.
+        id: "last-known-contacts",
+        kind: "points",
+        data: pointsFeatureCollection(
+          lastContacts.map((c) => ({ lat: c.lat, lng: c.lng, properties: { name: `${c.unitClassName} (dernier contact)` } }))
+        ),
+        color: "#f97316",
+        radius: 6,
+        showLabels: true,
+      },
       {
         id: "own-units",
         kind: "points",
@@ -374,7 +430,7 @@ export function OrdersClient(props: {
 
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [units, unitDrafts, mode, selectedUnitId, selectedUnitDraft, unitRemainingNm, selectedFleetId, selectedFleetDraft, fleetRemainingNm]);
+  }, [units, unitDrafts, mode, selectedUnitId, selectedUnitDraft, unitRemainingNm, selectedFleetId, selectedFleetDraft, fleetRemainingNm, lastContacts]);
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(
     () =>
@@ -388,6 +444,7 @@ export function OrdersClient(props: {
           color: "#38bdf8",
           silhouette,
           lengthMeters: u.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+          status: u.status as "ACTIVE" | "DAMAGED" | "SUNK",
         };
       }),
     [units]
@@ -532,11 +589,14 @@ export function OrdersClient(props: {
             fitToPoints={allUnitPositions}
             flyToPoint={flyToPoint}
             shipMarkers={shipMarkers}
+            onShipMarkerClick={handleShipMarkerClick}
             className="h-full w-full"
           />
         </main>
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-800 p-4">
+          <LastContactsPanel lastReportTurnNumber={lastReportTurnNumber} lastContacts={lastContacts} />
+
           {mode === "unit" && selectedUnit && selectedUnitDraft ? (
             <div className="space-y-4">
               <div>
@@ -563,6 +623,14 @@ export function OrdersClient(props: {
                 <div>Utilisé : {unitUsedNm.toFixed(1)} nm</div>
                 <div>Restant : {unitRemainingNm.toFixed(1)} nm</div>
               </div>
+
+              {selectedUnit.category === "SUBMARINE" && (
+                <DepthBandControl
+                  currentDepthBand={selectedUnit.depthBand as DepthBandKey}
+                  draftDepthBand={selectedUnitDraft.depthBand}
+                  onChange={updateUnitDepthBand}
+                />
+              )}
 
               <div className="flex gap-2">
                 <button onClick={clearUnitPath} className="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-900">
@@ -703,6 +771,118 @@ export function OrdersClient(props: {
   );
 }
 
+const DEPTH_BAND_LABELS: Record<DepthBandKey, string> = {
+  SURFACE: "Surface",
+  SHALLOW: "Immersion faible",
+  MEDIUM: "Immersion moyenne",
+  DEEP: "Grande immersion",
+};
+
+/**
+ * Un seul palier adjacent par tour (livret original) : les boutons hors
+ * portée d'un cran depuis le palier actuel sont désactivés. `draftDepthBand`
+ * (nul tant que le joueur n'a rien changé) reflète le choix de ce tour ;
+ * `currentDepthBand` est le palier figé du tour précédent, base de la
+ * contrainte d'adjacence.
+ */
+function DepthBandControl({
+  currentDepthBand,
+  draftDepthBand,
+  onChange,
+}: {
+  currentDepthBand: DepthBandKey;
+  draftDepthBand: DepthBandKey | null;
+  onChange: (band: DepthBandKey) => void;
+}) {
+  const selected = draftDepthBand ?? currentDepthBand;
+  const currentIndex = DEPTH_BAND_ORDER.indexOf(currentDepthBand);
+
+  return (
+    <div className="rounded-md bg-slate-900 p-3 text-sm">
+      <div className="mb-2 text-xs font-semibold text-slate-400">Immersion (1 palier par tour)</div>
+      <div className="flex flex-col gap-1">
+        {DEPTH_BAND_ORDER.map((band, i) => {
+          const adjacent = Math.abs(i - currentIndex) <= 1;
+          return (
+            <button
+              key={band}
+              disabled={!adjacent}
+              onClick={() => onChange(band)}
+              className={`rounded-md px-2 py-1 text-left text-xs transition ${
+                selected === band
+                  ? "bg-brass-900/50 ring-1 ring-brass-500"
+                  : adjacent
+                    ? "hover:bg-slate-800"
+                    : "cursor-not-allowed opacity-30"
+              }`}
+            >
+              {DEPTH_BAND_LABELS[band]}
+              {band === currentDepthBand && <span className="text-slate-500"> (actuel)</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Derniers contacts confirmés par l'arbitre au tour précédent : sans ça, le
+ * joueur dessine ses ordres à l'aveugle malgré les détections déjà connues
+ * de son camp (elles n'apparaissaient auparavant que dans l'écran des
+ * rapports, séparé de celui des ordres).
+ */
+function LastContactsPanel({
+  lastReportTurnNumber,
+  lastContacts,
+}: {
+  lastReportTurnNumber: number | null;
+  lastContacts: LastContact[];
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  if (lastReportTurnNumber === null) return null;
+
+  return (
+    <div className="mb-4 rounded-md border border-orange-900/50 bg-orange-950/20">
+      <button
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-orange-300"
+      >
+        <span>
+          Derniers contacts connus (tour {lastReportTurnNumber}) — {lastContacts.length}
+        </span>
+        <span className="text-xs text-orange-400">{collapsed ? "▸" : "▾"}</span>
+      </button>
+      {!collapsed && (
+        <div className="border-t border-orange-900/50 px-3 py-2">
+          {lastContacts.length === 0 ? (
+            <p className="text-xs text-slate-500">Aucun contact ennemi au dernier tour publié.</p>
+          ) : (
+            <ul className="space-y-1 text-xs">
+              {lastContacts.map((c, i) => (
+                <li key={i} className="rounded bg-slate-900/60 px-2 py-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-slate-200">{c.unitClassName}</span>
+                    <Link
+                      href={`/team/tactical/${c.detectionEventId}`}
+                      className="shrink-0 rounded border border-orange-800 px-1.5 py-0.5 text-[10px] text-orange-300 hover:bg-orange-950/50"
+                    >
+                      Mode tactique
+                    </Link>
+                  </div>
+                  <div className="text-slate-500">
+                    repéré par {c.observedBy} ({formatSensor(c.method)}), +{Math.round(c.cpaMinutesIntoTurn)} min
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ShipDetailPanel({ unit }: { unit: UnitDto }) {
   const healthRatio = unit.healthMax && unit.healthMax > 0 ? clamp01((unit.healthCurrent ?? 0) / unit.healthMax) : null;
   return (
@@ -762,6 +942,12 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
             <td className="py-0.5 pr-2 text-slate-500">Détectabilité</td>
             <td>{unit.detectability.toFixed(2)}×</td>
           </tr>
+          {unit.depthChargesRemaining != null && (
+            <tr>
+              <td className="py-0.5 pr-2 text-slate-500">Grenades ASM</td>
+              <td>{unit.depthChargesRemaining}</td>
+            </tr>
+          )}
         </tbody>
       </table>
       {unit.historicalNote && <p className="text-xs italic text-slate-400">{unit.historicalNote}</p>}

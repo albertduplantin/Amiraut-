@@ -19,6 +19,16 @@ export default async function OrdersPage() {
     redirect("/team/waiting");
   }
 
+  const lastPublishedTurn = await prisma.turn.findFirst({
+    where: { scenarioId: session.scenarioId, status: "PUBLISHED" },
+    orderBy: { number: "desc" },
+  });
+  const lastReport = lastPublishedTurn
+    ? await prisma.report.findUnique({
+        where: { turnId_teamId: { turnId: lastPublishedTurn.id, teamId: session.teamId } },
+      })
+    : null;
+
   const [scenario, units, teamFleets, teamUnitCount, teamOrderCount, allActiveUnitCount, allOrderCount] = await Promise.all([
     prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
     prisma.unit.findMany({
@@ -92,6 +102,9 @@ export default async function OrdersPage() {
       teamProgress={{ submitted: teamOrderCount, total: teamUnitCount }}
       globalProgress={{ submitted: allOrderCount, total: allActiveUnitCount }}
       teamFleets={teamFleets}
+      lastReportTurnNumber={lastPublishedTurn?.number ?? null}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      lastContacts={(lastReport?.contacts as any[] | undefined) ?? []}
       units={units.map((u) => ({
         id: u.id,
         name: u.name,
@@ -115,11 +128,14 @@ export default async function OrdersPage() {
         currentLat: u.currentLat,
         currentLng: u.currentLng,
         currentHeadingDeg: u.currentHeadingDeg,
+        depthBand: u.depthBand,
+        depthChargesRemaining: u.depthChargesRemaining,
         existingOrder:
           u.orders.length > 0
             ? {
                 speedKnots: u.orders[0].speedKnots,
                 waypoints: u.orders[0].waypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
+                depthBand: u.orders[0].depthBand,
               }
             : null,
       }))}

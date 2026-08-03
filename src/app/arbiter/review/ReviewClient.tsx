@@ -66,6 +66,7 @@ type UnitDto = {
   className: string;
   category: string;
   lengthMeters: number | null;
+  status: string;
   teamId: string;
   teamName: string;
   currentLat: number;
@@ -91,6 +92,7 @@ type DetectionDto = {
   targetLngAtCpa: number;
   arbiterStatus: string;
   systemProposed: boolean;
+  tacticalModeRequested: boolean;
 };
 
 export function ReviewClient(props: {
@@ -104,6 +106,7 @@ export function ReviewClient(props: {
   detections: DetectionDto[];
 }) {
   const { units, detections, teams } = props;
+  const [hoveredDetectionId, setHoveredDetectionId] = useState<string | null>(null);
 
   const sources = useMemo<MapSourceConfig[]>(() => {
     const byTeam = (teamId: string) => units.filter((u) => u.teamId === teamId);
@@ -153,8 +156,56 @@ export function ReviewClient(props: {
       radius: 4,
     });
 
+    // Détection survolée dans la liste : ligne/points CPA en surbrillance +
+    // halo autour de la position actuelle des deux unités impliquées, pour
+    // que l'arbitre voie sans ambiguïté de quelle détection il s'agit.
+    const hovered = detections.find((d) => d.id === hoveredDetectionId) ?? null;
+    const hoveredUnits = hovered
+      ? units.filter((u) => u.id === hovered.observerUnitId || u.id === hovered.targetUnitId)
+      : [];
+
+    list.push({
+      id: "detection-highlight-line",
+      kind: "line",
+      data: multiLineFeatureCollection(
+        hovered
+          ? [
+              [
+                { lat: hovered.observerLatAtCpa, lng: hovered.observerLngAtCpa },
+                { lat: hovered.targetLatAtCpa, lng: hovered.targetLngAtCpa },
+              ],
+            ]
+          : []
+      ),
+      color: "#facc15",
+      width: 4,
+    });
+
+    list.push({
+      id: "detection-highlight-points",
+      kind: "points",
+      data: pointsFeatureCollection(
+        hovered
+          ? [
+              { lat: hovered.observerLatAtCpa, lng: hovered.observerLngAtCpa, properties: { name: hovered.observerName } },
+              { lat: hovered.targetLatAtCpa, lng: hovered.targetLngAtCpa, properties: { name: hovered.targetName } },
+            ]
+          : []
+      ),
+      color: "#facc15",
+      radius: 8,
+    });
+
+    list.push({
+      id: "detection-highlight-units",
+      kind: "points",
+      data: pointsFeatureCollection(hoveredUnits.map((u) => ({ lat: u.currentLat, lng: u.currentLng, properties: { name: u.name } }))),
+      color: "#fde68a",
+      radius: 16,
+    });
+
     return list;
-  }, [units, detections, teams]);
+  }, [units, detections, teams, hoveredDetectionId]);
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(() => {
     const colorByTeam = new Map(teams.map((t) => [t.id, t.colorHex]));
@@ -168,6 +219,7 @@ export function ReviewClient(props: {
         color: colorByTeam.get(u.teamId) ?? "#38bdf8",
         silhouette,
         lengthMeters: u.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+        status: u.status as "ACTIVE" | "DAMAGED" | "SUNK",
       };
     });
   }, [units, teams]);
@@ -200,7 +252,14 @@ export function ReviewClient(props: {
           <h2 className="mb-2 text-sm font-semibold text-slate-400">Détections proposées ({detections.length})</h2>
           <ul className="space-y-2">
             {detections.map((d) => (
-              <li key={d.id} className="rounded-md border border-slate-800 bg-slate-900 p-2 text-sm">
+              <li
+                key={d.id}
+                onMouseEnter={() => setHoveredDetectionId(d.id)}
+                onMouseLeave={() => setHoveredDetectionId((current) => (current === d.id ? null : current))}
+                className={`rounded-md border p-2 text-sm transition-colors ${
+                  hoveredDetectionId === d.id ? "border-yellow-400 bg-slate-800" : "border-slate-800 bg-slate-900"
+                }`}
+              >
                 <div>
                   <span className="font-medium">{d.observerName}</span> ({d.observerTeam}) →{" "}
                   <span className="font-medium">{d.targetName}</span> ({d.targetTeam})
@@ -209,6 +268,11 @@ export function ReviewClient(props: {
                   {formatMethod(d.method)} · CPA {d.cpaDistanceNm.toFixed(1)}nm à +{Math.round(d.cpaMinutesIntoTurn)}min ·{" "}
                   {statusLabel(d.arbiterStatus)}
                 </div>
+                {d.tacticalModeRequested && (
+                  <div className="mt-1 inline-block rounded bg-orange-950/50 px-1.5 py-0.5 text-[10px] text-orange-300">
+                    ⚔ Bataille tactique demandée
+                  </div>
+                )}
                 <div className="mt-1 flex gap-2">
                   <form action={confirmDetectionAction}>
                     <input type="hidden" name="detectionId" value={d.id} />

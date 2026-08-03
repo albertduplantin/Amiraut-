@@ -61,6 +61,7 @@ export default async function ReviewPage() {
         className: u.unitClass.name,
         category: u.unitClass.category,
         lengthMeters: u.unitClass.lengthMeters,
+        status: u.status,
         teamId: u.fleet.teamId,
         teamName: u.fleet.team.name,
         currentLat: u.currentLat,
@@ -88,6 +89,7 @@ export default async function ReviewPage() {
         targetLngAtCpa: d.targetLngAtCpa,
         arbiterStatus: d.arbiterStatus,
         systemProposed: d.systemProposed,
+        tacticalModeRequested: d.tacticalModeRequested,
       }))}
     />
   );
