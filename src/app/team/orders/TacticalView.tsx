@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
-import { budgetCircleFeatureCollection, lineFeatureCollection, multiLineFeatureCollection, pointsFeatureCollection } from "@/lib/mapData";
+import {
+  budgetCircleFeatureCollection,
+  lineFeatureCollection,
+  multiLineFeatureCollection,
+  multiLineFeatureCollectionColored,
+  pointsFeatureCollection,
+} from "@/lib/mapData";
 import { clampPathToBudget, destinationPoint, pathLengthNm, speedBudgetNm, turnPenaltyNm, bearingDeg, type LatLng } from "@/lib/geo";
 import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 import {
@@ -22,6 +28,27 @@ import {
 } from "./tacticalActions";
 
 const NM_TO_M = 1852;
+
+/** Bruits de départ de coup de canon, alternés à chaque tir — voir playGunSound. */
+const GUN_SOUND_URLS = [
+  "/sounds/guns/gun-01.mp3",
+  "/sounds/guns/gun-02.mp3",
+  "/sounds/guns/gun-03.mp3",
+  "/sounds/guns/gun-04.mp3",
+  "/sounds/guns/gun-05.mp3",
+];
+
+/** Teintes du sillage estompé, du segment le plus récent (le plus visible) au plus ancien — au-delà, plus rien ne s'affiche. */
+const TRAIL_SHADES = ["#0f172a", "#334155", "#64748b"];
+
+/** Découpe un historique de positions (le plus ancien en premier) en segments consécutifs, du plus récent au plus ancien, colorés en dégradé — au plus TRAIL_SHADES.length segments. */
+function buildTrailSegments(trail: LatLng[]): { points: LatLng[]; color: string }[] {
+  const segments: { points: LatLng[]; color: string }[] = [];
+  for (let i = trail.length - 1; i > 0 && segments.length < TRAIL_SHADES.length; i--) {
+    segments.push({ points: [trail[i - 1], trail[i]], color: TRAIL_SHADES[segments.length] });
+  }
+  return segments;
+}
 
 type OwnUnit = {
   id: string;
@@ -149,6 +176,10 @@ export function TacticalView(props: {
   contacts: Contact[];
   ownFireActionsThisRound: FireAction[];
   ownMovementActionsThisRound: MovementAction[];
+  /** Sillage estompé (jusqu'à 4 points, donc 3 segments) des dernières manches — navires propres, positions certaines. */
+  ownTrailByUnit: Record<string, LatLng[]>;
+  /** Même principe pour les contacts ennemis, mais uniquement leurs positions relevées (jamais leur position réelle non détectée). */
+  enemyTrailByTarget: Record<string, LatLng[]>;
   battleLog: LogEntry[];
   messages: BattleMessage[];
 }) {
@@ -157,6 +188,22 @@ export function TacticalView(props: {
   const [error, setError] = useState<string | null>(null);
   const [chatBody, setChatBody] = useState("");
   const gameMapRef = useRef<GameMapHandle>(null);
+  const lastGunSoundIndexRef = useRef<number | null>(null);
+
+  /** Joue un bruit de canon au hasard parmi GUN_SOUND_URLS, sans rejouer deux fois de suite le même. */
+  function playGunSound() {
+    if (GUN_SOUND_URLS.length === 0) return;
+    let index = Math.floor(Math.random() * GUN_SOUND_URLS.length);
+    if (GUN_SOUND_URLS.length > 1 && index === lastGunSoundIndexRef.current) {
+      index = (index + 1) % GUN_SOUND_URLS.length;
+    }
+    lastGunSoundIndexRef.current = index;
+    const audio = new Audio(GUN_SOUND_URLS[index]);
+    audio.volume = 0.6;
+    // Les navigateurs peuvent refuser la lecture (politique d'autoplay) : un
+    // tir sans son n'est pas bloquant, on ignore silencieusement l'échec.
+    audio.play().catch(() => {});
+  }
 
   const livingOwnUnits = props.ownUnits.filter((u) => u.status !== "SUNK");
   const liveContacts = props.contacts.filter((c) => c.status !== "SUNK");
@@ -403,6 +450,7 @@ export function TacticalView(props: {
         setError(result.error);
         return;
       }
+      if (weaponType === "GUN") playGunSound();
       setFreshResults((prev) => ({
         ...prev,
         [`${selectedShip.id}|${selectedWeaponSlot}`]: {
@@ -504,6 +552,19 @@ export function TacticalView(props: {
       }
     }
 
+    const trailSegments: { points: LatLng[]; color: string }[] = [];
+    for (const u of livingOwnUnits) {
+      const trail = props.ownTrailByUnit[u.id];
+      if (trail && trail.length > 0) trailSegments.push(...buildTrailSegments([...trail, { lat: u.currentLat, lng: u.currentLng }]));
+    }
+    for (const c of liveContacts) {
+      const trail = props.enemyTrailByTarget[c.targetUnitId];
+      if (trail && trail.length > 0) trailSegments.push(...buildTrailSegments([...trail, { lat: c.lat, lng: c.lng }]));
+    }
+    if (trailSegments.length > 0) {
+      list.push({ id: "unit-trails", kind: "line", data: multiLineFeatureCollectionColored(trailSegments), colorByFeature: true, width: 3 });
+    }
+
     if (isMovementPhase && showEnemyProjection) {
       const projections = liveContacts
         .filter((c) => c.estimatedHeadingDeg != null && c.estimatedSpeedKnots != null)
@@ -529,6 +590,8 @@ export function TacticalView(props: {
     budgetNm,
     showEnemyProjection,
     props.roundMinutes,
+    props.ownTrailByUnit,
+    props.enemyTrailByTarget,
   ]);
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(() => {

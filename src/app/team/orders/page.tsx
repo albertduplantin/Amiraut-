@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { bearingDeg, distanceNm } from "@/lib/geo";
+import { bearingDeg, distanceNm, type LatLng } from "@/lib/geo";
 import { getLastKnownSpeedsByUnit, defaultTurningRadiusM, defaultAccelerationKnotsPerMin } from "@/lib/tacticalEngine";
 import { OrdersClient } from "./OrdersClient";
 import { TacticalView } from "./TacticalView";
@@ -62,6 +62,48 @@ async function renderTacticalView(engagementId: string, teamId: string) {
   for (const c of contacts) {
     const existing = bestContactByTarget.get(c.targetUnitId);
     if (!existing || c.distanceNm < existing.distanceNm) bestContactByTarget.set(c.targetUnitId, c);
+  }
+
+  // Sillage estompé des dernières manches (retour joueur : "voir la
+  // trajectoire" sans encombrer la carte indéfiniment) : jusqu'à 3 segments
+  // entre positions de fin de manche consécutives, le plus récent le plus
+  // sombre — voir TRAIL_ROUNDS_BACK dans TacticalView.tsx pour les teintes.
+  // Navires propres : positions certaines (dernier point du trajet soumis
+  // chaque manche). Contacts ennemis : uniquement leurs positions RELEVÉES
+  // (TacticalContact.targetLatSnapshot), jamais leur position réelle non
+  // détectée — même prudence de brouillard de guerre que pour le vecteur.
+  const TRAIL_ROUNDS_TO_FETCH = 6;
+  const trailFromRound = Math.max(1, engagement.roundNumber - TRAIL_ROUNDS_TO_FETCH);
+
+  const ownMovementHistory = await prisma.tacticalAction.findMany({
+    where: { engagementId, phase: "MOVEMENT", teamId, roundNumber: { gte: trailFromRound, lt: engagement.roundNumber } },
+    orderBy: { roundNumber: "asc" },
+  });
+  const ownTrailByUnit = new Map<string, LatLng[]>();
+  for (const a of ownMovementHistory) {
+    const path = Array.isArray(a.movementPath) ? (a.movementPath as unknown as LatLng[]) : [];
+    const lastPoint = path[path.length - 1];
+    if (!lastPoint) continue; // manche sans déplacement (garde sa position) : aucun nouveau point de sillage
+    const trail = ownTrailByUnit.get(a.unitId) ?? [];
+    trail.push(lastPoint);
+    ownTrailByUnit.set(a.unitId, trail.slice(-4));
+  }
+
+  const enemyContactHistory = await prisma.tacticalContact.findMany({
+    where: { engagementId, observerTeamId: teamId, roundNumber: { gte: trailFromRound, lt: engagement.roundNumber } },
+    orderBy: { roundNumber: "asc" },
+  });
+  const enemyTrailByTarget = new Map<string, { roundNumber: number; point: LatLng }[]>();
+  for (const c of enemyContactHistory) {
+    if (c.targetLatSnapshot == null || c.targetLngSnapshot == null) continue;
+    const trail = enemyTrailByTarget.get(c.targetUnitId) ?? [];
+    // Un même ennemi peut être relevé par plusieurs de nos unités la même
+    // manche : ne garder qu'un point par manche (le plus récent suffit, la
+    // précision du meilleur relevé n'est pas l'enjeu ici).
+    if (trail.length === 0 || trail[trail.length - 1].roundNumber !== c.roundNumber) {
+      trail.push({ roundNumber: c.roundNumber, point: { lat: c.targetLatSnapshot, lng: c.targetLngSnapshot } });
+      enemyTrailByTarget.set(c.targetUnitId, trail.slice(-4));
+    }
   }
 
   const ownFireActionsThisRound = await prisma.tacticalAction.findMany({
@@ -247,6 +289,10 @@ async function renderTacticalView(engagementId: string, teamId: string) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         movementPath: (a.movementPath as any) ?? null,
       }))}
+      ownTrailByUnit={Object.fromEntries(ownTrailByUnit)}
+      enemyTrailByTarget={Object.fromEntries(
+        Array.from(enemyTrailByTarget.entries()).map(([targetUnitId, trail]) => [targetUnitId, trail.map((t) => t.point)])
+      )}
       battleLog={battleLog.map((a) => ({
         roundNumber: a.roundNumber,
         targetUnitId: a.targetUnitId,

@@ -610,10 +610,14 @@ export async function publishTurn(turnId: string) {
         await tx.unit.update({ where: { id: u.id }, data: { fleetId: u.pendingFleetId!, pendingFleetId: null } });
       }
 
-      // Combat : suit directement la confirmation de détection par
-      // l'arbitre (arbitrage hybride). Doit s'exécuter avant la génération
-      // des rapports pour que les navires coulés/endommagés y apparaissent.
-      await resolveCombat(tx, turnId);
+      // Pas de combat automatique à la publication : une détection
+      // confirmée par l'arbitre ouvre seulement la possibilité de
+      // s'engager (voir team/battle/open/[detectionId]) — c'est aux
+      // joueurs de choisir d'ouvrir le feu, manuellement, en mode
+      // tactique (voir tacticalEngine.ts). resolveCombat() ci-dessous
+      // reste dans le fichier mais n'est plus appelée : conservée pour
+      // référence/l'historique des CombatEvent déjà en base, pas comme
+      // code mort à réactiver par erreur.
 
       const teams = await tx.team.findMany({ where: { scenarioId: turn.scenarioId } });
       for (const team of teams) {
@@ -654,8 +658,16 @@ function statusFromHealth(current: number, max: number): "ACTIVE" | "DAMAGED" | 
  * coulé plus tôt dans la passe ne riposte pas à une détection le visant
  * plus loin dans la liste, même si elle date du même tour. À affiner si le
  * jeu montre que l'ordre de résolution donne un avantage perceptible.
+ *
+ * N'EST PLUS APPELÉE depuis publishTurn (retour joueur : le premier tir ne
+ * doit jamais partir tout seul à la confirmation d'une détection — c'est au
+ * joueur de choisir de s'engager, manuellement, en mode tactique). Gardée
+ * ici pour référence et parce que Report.combats (voir generateReportForTeam)
+ * lit encore les CombatEvent qu'elle produisait ; à retirer si on décide un
+ * jour de faire remonter les résultats d'un engagement tactique dans le
+ * rapport stratégique par un autre mécanisme.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
 async function resolveCombat(tx: any, turnId: string) {
   const detections = await tx.detectionEvent.findMany({
     where: { turnId, arbiterStatus: { in: ["CONFIRMED", "ADDED_MANUALLY"] } },
