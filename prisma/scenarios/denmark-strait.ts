@@ -55,6 +55,8 @@ export const denmarkStrait: ScenarioDefinition = {
       detectability: 1.25,
       iconKey: "battleship",
       resistancePoints: 41,
+      // Silhouette de profil : Shipbucket (CC BY-NC 4.0, www.shipbucket.com), fournie par l'utilisateur.
+      profileImageUrl: "/ships/hood.webp",
       historicalNote:
         "48 360 t. « The Mighty Hood », fierté de la Royal Navy pendant vingt ans, mais un croiseur de bataille de 1916 : blindage de pont insuffisant contre le tir plongeant moderne. Il explose à 06h00 le 24 mai 1941 ; 3 survivants sur 1 418 hommes.",
       combatProfile: {
@@ -89,6 +91,8 @@ export const denmarkStrait: ScenarioDefinition = {
       detectability: 1.2,
       iconKey: "battleship",
       resistancePoints: 48,
+      // Silhouette de profil : Shipbucket (CC BY-NC 4.0, www.shipbucket.com), fournie par l'utilisateur.
+      profileImageUrl: "/ships/prince-of-wales.png",
       historicalNote:
         "43 786 t. Tout juste sorti de chantier : des ouvriers de Vickers étaient encore à bord pendant la bataille, et ses tourelles quadruples de 356mm s'enrayèrent à répétition. Il place malgré tout le coup qui perce les soutes du Bismarck et le contraint à renoncer à sa croisière.",
       combatProfile: {
@@ -123,6 +127,8 @@ export const denmarkStrait: ScenarioDefinition = {
       detectability: 1.3,
       iconKey: "battleship",
       resistancePoints: 55,
+      // Silhouette de profil : Shipbucket (CC BY-NC 4.0, www.shipbucket.com), fournie par l'utilisateur.
+      profileImageUrl: "/ships/bismarck.png",
       historicalNote:
         "50 300 t, le plus puissant cuirassé européen de son temps. Conduite de tir remarquable : il encadre le Hood dès la troisième salve et le détruit à la cinquième. Touché aux soutes par le Prince of Wales, il devra renoncer à l'Atlantique et sera coulé trois jours plus tard.",
       combatProfile: {
@@ -157,6 +163,11 @@ export const denmarkStrait: ScenarioDefinition = {
       detectability: 1.0,
       iconKey: "cruiser",
       resistancePoints: 19,
+      // Silhouette de profil : Shipbucket (CC BY-NC 4.0, www.shipbucket.com), fournie par l'utilisateur.
+      // Pas de dessin Prinz Eugen disponible dans le lot fourni : on utilise
+      // celui de l'Admiral Hipper (navire tête de série de la même classe,
+      // conception quasi identique) en attendant un dessin dédié.
+      profileImageUrl: "/ships/prinz-eugen.png",
       historicalNote:
         "16 970 t. Il ouvre le feu en même temps que le Bismarck et allume l'incendie de roquettes qui ravage la plage arrière du Hood juste avant son explosion. Seul grand bâtiment allemand de surface à survivre à la guerre.",
       combatProfile: {

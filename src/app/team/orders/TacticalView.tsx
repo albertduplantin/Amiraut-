@@ -735,8 +735,11 @@ export function TacticalView(props: {
               {hoveredOwn && (
                 <>
                   {hoveredOwn.profileImageUrl && (
-                    // eslint-disable-next-line @next/next/no-img-element -- source externe (silhouette de profil), pas un asset local optimisable par next/image.
-                    <img src={hoveredOwn.profileImageUrl} alt={hoveredOwn.className} className="mb-1 max-h-16 w-full object-contain" />
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element -- source externe (silhouette de profil), pas un asset local optimisable par next/image. */}
+                      <img src={hoveredOwn.profileImageUrl} alt={hoveredOwn.className} className="mb-0.5 max-h-16 w-full object-contain" />
+                      <div className="mb-1 text-right text-[9px] text-slate-600">silhouette : shipbucket.com (CC BY-NC 4.0)</div>
+                    </>
                   )}
                   <div className="font-semibold text-sky-300">{hoveredOwn.name}</div>
                   <div className="text-slate-400">{hoveredOwn.className}</div>
@@ -762,8 +765,11 @@ export function TacticalView(props: {
               {hoveredContact && (
                 <>
                   {hoveredContact.profileImageUrl && (
-                    // eslint-disable-next-line @next/next/no-img-element -- source externe (silhouette de profil), pas un asset local optimisable par next/image.
-                    <img src={hoveredContact.profileImageUrl} alt={hoveredContact.className} className="mb-1 max-h-16 w-full object-contain" />
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element -- source externe (silhouette de profil), pas un asset local optimisable par next/image. */}
+                      <img src={hoveredContact.profileImageUrl} alt={hoveredContact.className} className="mb-0.5 max-h-16 w-full object-contain" />
+                      <div className="mb-1 text-right text-[9px] text-slate-600">silhouette : shipbucket.com (CC BY-NC 4.0)</div>
+                    </>
                   )}
                   <div className="font-semibold text-orange-300">{hoveredContact.className}</div>
                   <div className="text-slate-400">
