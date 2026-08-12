@@ -48,6 +48,13 @@ export function isInGunArc(arc: GunArc, relativeBearingDeg: number): boolean {
       return angleDiff(b, 0) > 30; // aveugle pile devant
     case "BROADSIDE":
       return angleDiff(b, 0) > 30 && angleDiff(b, 180) > 30; // aveugle devant ET derrière
+    default:
+      // Défensif : une classe d'unité instanciée avant l'ajout des arcs de
+      // tir au modèle peut porter un profil de combat sans ce champ. Sans
+      // repli, la pièce serait silencieusement exclue de tout tir — on
+      // préfère la traiter comme tout-azimut (comportement d'avant l'ajout
+      // des arcs) plutôt que désarmer discrètement le navire.
+      return true;
   }
 }
 

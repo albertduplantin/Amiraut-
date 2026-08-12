@@ -121,15 +121,30 @@ async function computeNextRoundMinutes(engagementId: string, contactRoundNumber:
   for (const c of contacts) {
     const observer = byUnitId.get(c.observerUnitId);
     const profile = observer?.unitClass.combatProfile as CombatProfile | null;
+    const guns = profile?.guns ?? [];
+    if (guns.length === 0) continue;
     const rangeM = c.distanceNm * NM_TO_M;
-    for (const gun of profile?.guns ?? []) {
+    // Seule la pièce principale (le plus gros calibre du bord) fixe le
+    // rythme des manches : une DCA à 10 coups/minute donnerait des manches
+    // de quelques secondes, injouables.
+    const mainCalibreMm = Math.max(...guns.map((g) => g.calibreMm));
+    for (const gun of guns) {
+      if (gun.calibreMm !== mainCalibreMm) continue;
+      // Défensif : une classe d'unité instanciée avant l'ajout de la cadence
+      // de tir (`roundsPerMinute`) au modèle peut encore porter un profil de
+      // combat sans ce champ — l'ignorer plutôt que propager un NaN jusqu'à
+      // l'écriture en base (Prisma rejette alors la valeur comme "manquante").
+      if (typeof gun.roundsPerMinute !== "number" || !Number.isFinite(gun.roundsPerMinute) || gun.roundsPerMinute <= 0) continue;
       if (gun.rangeM >= rangeM && (fastestRpm === null || gun.roundsPerMinute > fastestRpm)) {
         fastestRpm = gun.roundsPerMinute;
       }
     }
   }
   if (fastestRpm === null || fastestRpm <= 0) return fallback;
-  return Math.max(MIN_ROUND_MINUTES, Math.min(MAX_ROUND_MINUTES, 60 / fastestRpm));
+  // `roundMinutes` est un Int en base : on arrondit ici plutôt que de risquer
+  // une valeur fractionnaire (ex. 60/7 ≈ 8,57) rejetée par Prisma.
+  const minutes = Math.round(Math.max(MIN_ROUND_MINUTES, Math.min(MAX_ROUND_MINUTES, 60 / fastestRpm)));
+  return Number.isFinite(minutes) ? minutes : fallback;
 }
 
 /**
