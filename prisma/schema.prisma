@@ -500,9 +500,13 @@ model TacticalAction {
   teamId       String
 
   // Phase MOUVEMENT
-  headingDeg Float?
-  speedKnots Float?
-  depthBand  DepthBand?
+  headingDeg   Float? // cap final, dérivé du dernier segment de movementPath au moment de la résolution
+  speedKnots   Float?
+  /// Tracé complet choisi par le joueur pour cette manche (clic à clic sur
+  /// la carte, comme en mode stratégique) : [{lat,lng}, ...], budgété par
+  /// speedKnots × durée de la manche. Absent = l'unité reste sur place.
+  movementPath Json?
+  depthBand    DepthBand?
 
   // Phase TIR
   targetUnitId  String?

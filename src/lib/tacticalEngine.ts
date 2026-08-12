@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { distanceNm, bearingDeg, destinationPoint } from "@/lib/geo";
+import { distanceNm, bearingDeg, pathLengthNm, speedBudgetNm, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm, type WeatherConditions } from "@/lib/weather";
 import {
   resolveGunEngagement,
@@ -8,6 +8,7 @@ import {
   resolveDepthChargeAttack,
   selectGunBattery,
   selectTorpedoBattery,
+  isTorpedoArcClear,
   type CombatProfile,
   type DepthBand as CombatDepthBand,
 } from "@/lib/combat";
@@ -20,6 +21,9 @@ const ASDIC_ATTACK_RANGE_M = 2000;
 
 /** Deux manches consécutives sans le moindre contact = rupture de contact. */
 const ROUNDS_WITHOUT_CONTACT_TO_END = 2;
+
+/** Repli quand aucune pièce principale n'est encore à portée de rien. */
+const DEFAULT_ROUND_MINUTES = 5;
 
 type SensorSpec = { type: SensorType; rangeNm: number };
 
@@ -82,7 +86,50 @@ export async function openTacticalEngagement(params: {
 
   // Contacts de départ : ce que chaque camp voit dès l'ouverture.
   await recomputeContacts(engagement.id, 1);
-  return engagement;
+
+  // La durée par défaut passée en paramètre ne sert que de repli si aucune
+  // pièce principale n'est encore à portée à l'ouverture.
+  const roundMinutes = await computeNextRoundMinutes(engagement.id, 1, params.roundMinutes ?? DEFAULT_ROUND_MINUTES);
+  if (roundMinutes !== engagement.roundMinutes) {
+    await prisma.tacticalEngagement.update({ where: { id: engagement.id }, data: { roundMinutes } });
+  }
+  return { ...engagement, roundMinutes };
+}
+
+/**
+ * Durée de la manche à venir : le temps que met la pièce principale la plus
+ * rapide actuellement à portée (chez n'importe quel participant) pour
+ * boucler un cycle de tir complet. Seule la batterie principale compte —
+ * une DCA à 10 coups/minute donnerait des manches de quelques secondes,
+ * injouables — plancher à 1 min pour rester jouable, plafond à 10 min
+ * quand rien n'est encore à portée.
+ */
+const MIN_ROUND_MINUTES = 1;
+const MAX_ROUND_MINUTES = 10;
+
+async function computeNextRoundMinutes(engagementId: string, contactRoundNumber: number, fallback: number): Promise<number> {
+  const contacts = await prisma.tacticalContact.findMany({ where: { engagementId, roundNumber: contactRoundNumber } });
+  if (contacts.length === 0) return fallback;
+
+  const participants = await prisma.tacticalParticipant.findMany({
+    where: { engagementId },
+    include: { unit: { include: { unitClass: true } } },
+  });
+  const byUnitId = new Map(participants.map((p) => [p.unitId, p.unit]));
+
+  let fastestRpm: number | null = null;
+  for (const c of contacts) {
+    const observer = byUnitId.get(c.observerUnitId);
+    const profile = observer?.unitClass.combatProfile as CombatProfile | null;
+    const rangeM = c.distanceNm * NM_TO_M;
+    for (const gun of profile?.guns ?? []) {
+      if (gun.rangeM >= rangeM && (fastestRpm === null || gun.roundsPerMinute > fastestRpm)) {
+        fastestRpm = gun.roundsPerMinute;
+      }
+    }
+  }
+  if (fastestRpm === null || fastestRpm <= 0) return fallback;
+  return Math.max(MIN_ROUND_MINUTES, Math.min(MAX_ROUND_MINUTES, 60 / fastestRpm));
 }
 
 /**
@@ -247,7 +294,7 @@ export async function recomputeContacts(engagementId: string, roundNumber: numbe
 export async function submitTacticalMovement(params: {
   engagementId: string;
   teamId: string;
-  moves: { unitId: string; headingDeg: number; speedKnots: number; depthBand?: DepthBand }[];
+  moves: { unitId: string; speedKnots: number; path: LatLng[]; depthBand?: DepthBand }[];
 }) {
   const engagement = await assertEngagementOpen(params.engagementId, "AWAITING_MOVEMENT");
 
@@ -263,6 +310,15 @@ export async function submitTacticalMovement(params: {
       throw new OrderValidationError(
         `${participant.unit.name} : vitesse ${m.speedKnots} nds hors limites (max ${participant.unit.unitClass.maxSpeedKnots}).`
       );
+    }
+    if (m.path.length > 0) {
+      const budgetNm = speedBudgetNm(m.speedKnots, engagement.roundMinutes);
+      const usedNm = pathLengthNm([{ lat: participant.unit.currentLat, lng: participant.unit.currentLng }, ...m.path]);
+      if (usedNm > budgetNm * 1.01) {
+        throw new OrderValidationError(
+          `${participant.unit.name} : tracé de ${usedNm.toFixed(2)}nm, budget ${budgetNm.toFixed(2)}nm à ${m.speedKnots}nds sur ${engagement.roundMinutes.toFixed(1)}min.`
+        );
+      }
     }
 
     await prisma.tacticalAction.upsert({
@@ -280,11 +336,11 @@ export async function submitTacticalMovement(params: {
         phase: "MOVEMENT",
         unitId: m.unitId,
         teamId: params.teamId,
-        headingDeg: m.headingDeg,
         speedKnots: m.speedKnots,
+        movementPath: m.path,
         depthBand: m.depthBand,
       },
-      update: { headingDeg: m.headingDeg, speedKnots: m.speedKnots, depthBand: m.depthBand },
+      update: { speedKnots: m.speedKnots, movementPath: m.path, depthBand: m.depthBand },
     });
   }
 
@@ -405,26 +461,30 @@ export async function resolveMovementPhase(engagementId: string) {
     where: { engagementId, roundNumber: engagement.roundNumber, phase: "MOVEMENT" },
   });
   const moveByUnit = new Map(moves.map((m) => [m.unitId, m]));
-  const hours = engagement.roundMinutes / 60;
 
   for (const p of engagement.participants) {
     if (p.unit.status === "SUNK") continue;
     const move = moveByUnit.get(p.unitId);
     if (!move) continue; // sans ordre : maintient sa position
 
-    const heading = move.headingDeg ?? p.unit.currentHeadingDeg ?? 0;
-    const distance = (move.speedKnots ?? 0) * hours;
-    const next = destinationPoint({ lat: p.unit.currentLat, lng: p.unit.currentLng }, heading, distance);
-
-    await prisma.unit.update({
-      where: { id: p.unitId },
-      data: {
-        currentLat: next.lat,
-        currentLng: next.lng,
-        currentHeadingDeg: heading,
-        ...(move.depthBand ? { depthBand: move.depthBand } : {}),
-      },
-    });
+    const path = Array.isArray(move.movementPath) ? (move.movementPath as unknown as LatLng[]) : [];
+    if (path.length > 0) {
+      const last = path[path.length - 1];
+      const secondToLast = path.length > 1 ? path[path.length - 2] : { lat: p.unit.currentLat, lng: p.unit.currentLng };
+      const heading = bearingDeg(secondToLast, last);
+      await prisma.unit.update({
+        where: { id: p.unitId },
+        data: {
+          currentLat: last.lat,
+          currentLng: last.lng,
+          currentHeadingDeg: heading,
+          ...(move.depthBand ? { depthBand: move.depthBand } : {}),
+        },
+      });
+    } else if (move.depthBand) {
+      // Pas de mouvement mais changement d'immersion (ex: un sous-marin qui plonge sur place).
+      await prisma.unit.update({ where: { id: p.unitId }, data: { depthBand: move.depthBand } });
+    }
   }
 
   await prisma.tacticalAction.updateMany({
@@ -512,8 +572,16 @@ export async function resolveFirePhase(engagementId: string) {
       });
     } else if (shot.weaponType === "GUN") {
       if (targetSubmerged) continue; // un immergé n'est pas canonnable
-      const battery = selectGunBattery(profile, rangeM);
+      // Relèvement de la cible par rapport à la proue de l'attaquant : une
+      // tourelle avant ne peut pas viser pile derrière, et inversement.
+      const bearingToTarget = bearingDeg(
+        { lat: attacker.currentLat, lng: attacker.currentLng },
+        { lat: target.currentLat, lng: target.currentLng }
+      );
+      const relativeBearing = bearingToTarget - (attacker.currentHeadingDeg ?? 0);
+      const battery = selectGunBattery(profile, rangeM, relativeBearing);
       calibreMm = battery?.calibreMm ?? null;
+      if (!battery) continue; // à portée mais hors arc : aucune pièce ne peut viser
       const r = resolveGunEngagement({
         attackerProfile: profile,
         attackerHealthCurrent: attackerHealth.current,
@@ -522,6 +590,7 @@ export async function resolveFirePhase(engagementId: string) {
         targetBeamM: target.unitClass.beamMeters ?? 12,
         targetSpeedKnots: 0,
         rangeM,
+        relativeBearingDeg: relativeBearing,
       });
       if (!r) continue;
       outcome = r;
@@ -531,6 +600,13 @@ export async function resolveFirePhase(engagementId: string) {
       if (attacker.torpedoesRemaining != null && attacker.torpedoesRemaining <= 0) continue;
       const battery = selectTorpedoBattery(profile, shot.torpedoTypeId);
       if (!battery) continue;
+      // Tubes montés sur l'axe du navire : pas de tir devant/derrière (ou
+      // uniquement devant pour un sous-marin, cf. arc "FORWARD" du U-Boot).
+      const bearingToTarget = bearingDeg(
+        { lat: attacker.currentLat, lng: attacker.currentLng },
+        { lat: target.currentLat, lng: target.currentLng }
+      );
+      if (!isTorpedoArcClear(battery, bearingToTarget - (attacker.currentHeadingDeg ?? 0))) continue;
       wakeVisible = profile?.torpedoTypes?.find((t) => t.id === shot.torpedoTypeId)?.wakeVisible ?? true;
       const lineOfFire = bearingDeg(
         { lat: target.currentLat, lng: target.currentLng },
@@ -646,9 +722,13 @@ async function advanceOrEnd(engagementId: string) {
     return endEngagement(engagementId, "OUT_OF_AMMUNITION");
   }
 
+  // Durée de la manche à venir, sur la base de la portée déjà connue à
+  // l'issue de la manche qui vient de se résoudre.
+  const nextRoundMinutes = await computeNextRoundMinutes(engagementId, engagement.roundNumber, engagement.roundMinutes);
+
   await prisma.tacticalEngagement.update({
     where: { id: engagementId },
-    data: { roundNumber: engagement.roundNumber + 1, status: "AWAITING_MOVEMENT" },
+    data: { roundNumber: engagement.roundNumber + 1, status: "AWAITING_MOVEMENT", roundMinutes: nextRoundMinutes },
   });
   await recomputeContacts(engagementId, engagement.roundNumber + 1);
 }

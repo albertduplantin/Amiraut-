@@ -158,9 +158,11 @@ async function main() {
       lengthMeters: 227.1,
       beamMeters: 31.4,
       combatProfile: {
+        // 2 tourelles quadruples avant (A, B) + 1 tourelle double arrière (Y).
         guns: [
-          { calibreMm: 356, count: 10, rangeM: 37000 },
-          { calibreMm: 133, count: 16, rangeM: 23400 },
+          { calibreMm: 356, count: 8, rangeM: 37000, roundsPerMinute: 2, arc: "FORWARD" },
+          { calibreMm: 356, count: 2, rangeM: 37000, roundsPerMinute: 2, arc: "AFT" },
+          { calibreMm: 133, count: 16, rangeM: 23400, roundsPerMinute: 10, arc: "ALL_ROUND" },
         ],
       },
       sensors: [
@@ -194,8 +196,12 @@ async function main() {
       lengthMeters: 180.3,
       beamMeters: 18.9,
       combatProfile: {
-        guns: [{ calibreMm: 152, count: 12, rangeM: 22500 }],
-        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30 },
+        // 4 tourelles triples : A, B avant, X, Y arrière.
+        guns: [
+          { calibreMm: 152, count: 6, rangeM: 22500, roundsPerMinute: 6, arc: "FORWARD" },
+          { calibreMm: 152, count: 6, rangeM: 22500, roundsPerMinute: 6, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "RADAR", rangeNm: 18 },
@@ -227,8 +233,11 @@ async function main() {
       lengthMeters: 187,
       beamMeters: 19.3,
       combatProfile: {
-        guns: [{ calibreMm: 152, count: 12, rangeM: 22600 }],
-        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30 },
+        guns: [
+          { calibreMm: 152, count: 6, rangeM: 22600, roundsPerMinute: 6, arc: "FORWARD" },
+          { calibreMm: 152, count: 6, rangeM: 22600, roundsPerMinute: 6, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "RADAR", rangeNm: 19 },
@@ -260,8 +269,11 @@ async function main() {
       lengthMeters: 169.3,
       beamMeters: 18.9,
       combatProfile: {
-        guns: [{ calibreMm: 152, count: 12, rangeM: 22600 }],
-        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30 },
+        guns: [
+          { calibreMm: 152, count: 6, rangeM: 22600, roundsPerMinute: 6, arc: "FORWARD" },
+          { calibreMm: 152, count: 6, rangeM: 22600, roundsPerMinute: 6, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 6, rangeM: 11000, speedKnots: 30, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "RADAR", rangeNm: 17 },
@@ -292,8 +304,12 @@ async function main() {
       lengthMeters: 192.9,
       beamMeters: 20.1,
       combatProfile: {
-        guns: [{ calibreMm: 203, count: 8, rangeM: 19200 }],
-        torpedoTubes: { count: 8, rangeM: 11000, speedKnots: 30 },
+        // 4 tourelles doubles : A, B avant, X, Y arrière.
+        guns: [
+          { calibreMm: 203, count: 4, rangeM: 19200, roundsPerMinute: 4.5, arc: "FORWARD" },
+          { calibreMm: 203, count: 4, rangeM: 19200, roundsPerMinute: 4.5, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 8, rangeM: 11000, speedKnots: 30, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "RADAR", rangeNm: 18 },
@@ -326,8 +342,12 @@ async function main() {
       lengthMeters: 100.3,
       beamMeters: 10.4,
       combatProfile: {
-        guns: [{ calibreMm: 120, count: 6, rangeM: 18200 }],
-        torpedoTubes: { count: 4, rangeM: 11000, speedKnots: 30 },
+        // 3 tourelles simples : A, B avant, X arrière.
+        guns: [
+          { calibreMm: 120, count: 4, rangeM: 18200, roundsPerMinute: 8, arc: "FORWARD" },
+          { calibreMm: 120, count: 2, rangeM: 18200, roundsPerMinute: 8, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 4, rangeM: 11000, speedKnots: 30, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "RADAR", rangeNm: 15 },
@@ -361,8 +381,12 @@ async function main() {
       lengthMeters: 114.9,
       beamMeters: 11.1,
       combatProfile: {
-        guns: [{ calibreMm: 120, count: 8, rangeM: 18200 }],
-        torpedoTubes: { count: 4, rangeM: 11000, speedKnots: 30 },
+        // 4 tourelles simples : A, B avant, X, Y arrière.
+        guns: [
+          { calibreMm: 120, count: 4, rangeM: 18200, roundsPerMinute: 8, arc: "FORWARD" },
+          { calibreMm: 120, count: 4, rangeM: 18200, roundsPerMinute: 8, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 4, rangeM: 11000, speedKnots: 30, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "RADAR", rangeNm: 15 },
@@ -394,8 +418,12 @@ async function main() {
       lengthMeters: 100.3,
       beamMeters: 10.2,
       combatProfile: {
-        guns: [{ calibreMm: 120, count: 4, rangeM: 18200 }],
-        torpedoTubes: { count: 8, rangeM: 11000, speedKnots: 30 },
+        // 2 tourelles simples : A avant, X arrière.
+        guns: [
+          { calibreMm: 120, count: 2, rangeM: 18200, roundsPerMinute: 8, arc: "FORWARD" },
+          { calibreMm: 120, count: 2, rangeM: 18200, roundsPerMinute: 8, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 8, rangeM: 11000, speedKnots: 30, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "RADAR", rangeNm: 16 },
@@ -427,8 +455,11 @@ async function main() {
       lengthMeters: 95.1,
       beamMeters: 9.35,
       combatProfile: {
-        guns: [{ calibreMm: 102, count: 4, rangeM: 12500 }],
-        torpedoTubes: { count: 6, rangeM: 9000, speedKnots: 25 },
+        guns: [
+          { calibreMm: 102, count: 2, rangeM: 12500, roundsPerMinute: 10, arc: "FORWARD" },
+          { calibreMm: 102, count: 2, rangeM: 12500, roundsPerMinute: 10, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 6, rangeM: 9000, speedKnots: 25, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "SONAR", rangeNm: 1.1 },
@@ -480,10 +511,12 @@ async function main() {
       lengthMeters: 234.9,
       beamMeters: 30,
       combatProfile: {
+        // 3 tourelles triples : Anton, Bruno avant, Caesar arrière.
         guns: [
-          { calibreMm: 283, count: 9, rangeM: 41000 },
-          { calibreMm: 149, count: 12, rangeM: 22000 },
-          { calibreMm: 105, count: 14, rangeM: 17700 },
+          { calibreMm: 283, count: 6, rangeM: 41000, roundsPerMinute: 3.5, arc: "FORWARD" },
+          { calibreMm: 283, count: 3, rangeM: 41000, roundsPerMinute: 3.5, arc: "AFT" },
+          { calibreMm: 149, count: 12, rangeM: 22000, roundsPerMinute: 6, arc: "ALL_ROUND" },
+          { calibreMm: 105, count: 14, rangeM: 17700, roundsPerMinute: 10, arc: "ALL_ROUND" },
         ],
       },
       sensors: [
@@ -517,8 +550,15 @@ async function main() {
       lengthMeters: 127,
       beamMeters: 12,
       combatProfile: {
-        guns: [{ calibreMm: 149, count: 5, rangeM: 22000 }],
-        torpedoTubes: { count: 8, rangeM: 12500, speedKnots: 30 },
+        // Une seule pièce avant (A) : la place réservée au deuxième affût
+        // avant servait à la chaufferie surdimensionnée de ces destroyers
+        // — connus pour être « très mouillés » par gros temps, cf. note
+        // historique. Les 4 autres pièces sont massées à l'arrière.
+        guns: [
+          { calibreMm: 149, count: 1, rangeM: 22000, roundsPerMinute: 6, arc: "FORWARD" },
+          { calibreMm: 149, count: 4, rangeM: 22000, roundsPerMinute: 6, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 8, rangeM: 12500, speedKnots: 30, arc: "BROADSIDE" },
       },
       sensors: [
         { type: "RADAR", rangeNm: 8 },
@@ -556,7 +596,12 @@ async function main() {
       // qui trahit la position du tireur ; la G7e électrique est plus lente
       // (donc plus facile à esquiver) mais reste invisible.
       combatProfile: {
-        torpedoTubes: { count: 5, rangeM: 5000, speedKnots: 40 },
+        // Contrairement aux navires de surface, les tubes lance-torpilles
+        // d'un sous-marin sont fixes à l'avant (4 tubes) et à l'arrière (1
+        // tube) de la coque, pas trainables au travers : c'est le sous-marin
+        // entier qu'il faut pointer vers la cible. Simplifié en un seul arc
+        // avant, l'écrasante majorité des tubes.
+        torpedoTubes: { count: 5, rangeM: 5000, speedKnots: 40, arc: "FORWARD" },
         torpedoTypes: [
           { id: "g7a", label: "G7a (à vapeur)", speedKnots: 44, rangeM: 7500, wakeVisible: true },
           { id: "g7e", label: "G7e (électrique)", speedKnots: 30, rangeM: 5000, wakeVisible: false },

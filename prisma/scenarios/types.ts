@@ -9,8 +9,16 @@
 
 export type ScenarioSensor = { type: "RADAR" | "VISUAL" | "HYDROPHONE" | "SONAR"; rangeNm: number };
 
-export type ScenarioGunBattery = { calibreMm: number; count: number; rangeM: number };
-export type ScenarioTorpedoTubes = { count: number; rangeM: number; speedKnots: number };
+export type ScenarioGunArc = "FORWARD" | "AFT" | "ALL_ROUND" | "BROADSIDE";
+export type ScenarioGunBattery = {
+  calibreMm: number;
+  count: number;
+  rangeM: number;
+  /** Coups par minute et par pièce (cadence réelle du modèle). */
+  roundsPerMinute: number;
+  arc: ScenarioGunArc;
+};
+export type ScenarioTorpedoTubes = { count: number; rangeM: number; speedKnots: number; arc?: ScenarioGunArc };
 export type ScenarioTorpedoType = {
   id: string;
   label: string;

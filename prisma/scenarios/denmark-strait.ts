@@ -56,9 +56,11 @@ export const denmarkStrait: ScenarioDefinition = {
       historicalNote:
         "48 360 t. « The Mighty Hood », fierté de la Royal Navy pendant vingt ans, mais un croiseur de bataille de 1916 : blindage de pont insuffisant contre le tir plongeant moderne. Il explose à 06h00 le 24 mai 1941 ; 3 survivants sur 1 418 hommes.",
       combatProfile: {
+        // 4 tourelles doubles : A, B avant, X, Y arrière.
         guns: [
-          { calibreMm: 381, count: 8, rangeM: 26500 },
-          { calibreMm: 102, count: 14, rangeM: 15000 },
+          { calibreMm: 381, count: 4, rangeM: 26500, roundsPerMinute: 2, arc: "FORWARD" },
+          { calibreMm: 381, count: 4, rangeM: 26500, roundsPerMinute: 2, arc: "AFT" },
+          { calibreMm: 102, count: 14, rangeM: 15000, roundsPerMinute: 10, arc: "ALL_ROUND" },
         ],
       },
       weaponSystems: {
@@ -86,9 +88,11 @@ export const denmarkStrait: ScenarioDefinition = {
       historicalNote:
         "43 786 t. Tout juste sorti de chantier : des ouvriers de Vickers étaient encore à bord pendant la bataille, et ses tourelles quadruples de 356mm s'enrayèrent à répétition. Il place malgré tout le coup qui perce les soutes du Bismarck et le contraint à renoncer à sa croisière.",
       combatProfile: {
+        // 2 tourelles quadruples avant (A, B) + 1 tourelle double arrière (Y).
         guns: [
-          { calibreMm: 356, count: 10, rangeM: 35000 },
-          { calibreMm: 133, count: 16, rangeM: 21000 },
+          { calibreMm: 356, count: 8, rangeM: 35000, roundsPerMinute: 2, arc: "FORWARD" },
+          { calibreMm: 356, count: 2, rangeM: 35000, roundsPerMinute: 2, arc: "AFT" },
+          { calibreMm: 133, count: 16, rangeM: 21000, roundsPerMinute: 10, arc: "ALL_ROUND" },
         ],
       },
       weaponSystems: {
@@ -116,9 +120,11 @@ export const denmarkStrait: ScenarioDefinition = {
       historicalNote:
         "50 300 t, le plus puissant cuirassé européen de son temps. Conduite de tir remarquable : il encadre le Hood dès la troisième salve et le détruit à la cinquième. Touché aux soutes par le Prince of Wales, il devra renoncer à l'Atlantique et sera coulé trois jours plus tard.",
       combatProfile: {
+        // 4 tourelles doubles : Anton, Bruno avant, Caesar, Dora arrière.
         guns: [
-          { calibreMm: 380, count: 8, rangeM: 36500 },
-          { calibreMm: 150, count: 12, rangeM: 23000 },
+          { calibreMm: 380, count: 4, rangeM: 36500, roundsPerMinute: 2.5, arc: "FORWARD" },
+          { calibreMm: 380, count: 4, rangeM: 36500, roundsPerMinute: 2.5, arc: "AFT" },
+          { calibreMm: 150, count: 12, rangeM: 23000, roundsPerMinute: 6, arc: "ALL_ROUND" },
         ],
       },
       weaponSystems: {
@@ -146,11 +152,13 @@ export const denmarkStrait: ScenarioDefinition = {
       historicalNote:
         "16 970 t. Il ouvre le feu en même temps que le Bismarck et allume l'incendie de roquettes qui ravage la plage arrière du Hood juste avant son explosion. Seul grand bâtiment allemand de surface à survivre à la guerre.",
       combatProfile: {
+        // 4 tourelles doubles : Anton, Bruno avant, Caesar, Dora arrière.
         guns: [
-          { calibreMm: 203, count: 8, rangeM: 33500 },
-          { calibreMm: 105, count: 12, rangeM: 17700 },
+          { calibreMm: 203, count: 4, rangeM: 33500, roundsPerMinute: 4.5, arc: "FORWARD" },
+          { calibreMm: 203, count: 4, rangeM: 33500, roundsPerMinute: 4.5, arc: "AFT" },
+          { calibreMm: 105, count: 12, rangeM: 17700, roundsPerMinute: 10, arc: "ALL_ROUND" },
         ],
-        torpedoTubes: { count: 12, rangeM: 6000, speedKnots: 40 },
+        torpedoTubes: { count: 12, rangeM: 6000, speedKnots: 40, arc: "BROADSIDE" },
         torpedoTypes: [
           { id: "g7a", label: "G7a (à vapeur)", speedKnots: 44, rangeM: 6000, wakeVisible: true },
           { id: "g7e", label: "G7e (électrique)", speedKnots: 30, rangeM: 5000, wakeVisible: false },

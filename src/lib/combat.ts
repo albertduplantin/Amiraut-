@@ -15,8 +15,52 @@
  * appel »).
  */
 
-export type GunBattery = { calibreMm: number; count: number; rangeM: number };
-export type TorpedoBattery = { count: number; rangeM: number; speedKnots: number };
+/**
+ * Arc de tir d'une pièce, en fonction de son emplacement à bord : une
+ * tourelle avant ne peut pas tirer pile derrière (masquée par sa propre
+ * passerelle/cheminées), et inversement pour une tourelle arrière ; les
+ * tubes lance-torpilles, montés sur l'axe du navire, ne portent qu'au
+ * travers, ni pile devant ni pile derrière. Simplification en quatre
+ * catégories plutôt qu'un degré exact par modèle de tourelle, rarement
+ * documenté avec cette précision.
+ */
+export type GunArc = "FORWARD" | "AFT" | "ALL_ROUND" | "BROADSIDE";
+
+/** Angle absolu entre deux gisements (0-180°). */
+function angleDiff(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+/**
+ * Vrai si une cible au relèvement donné (par rapport à la proue du navire,
+ * 0° = droit devant, 180° = droit derrière) est dans l'arc de tir de la
+ * pièce. Le secteur aveugle fait 60° (30° de chaque côté de l'axe masqué).
+ */
+export function isInGunArc(arc: GunArc, relativeBearingDeg: number): boolean {
+  const b = ((relativeBearingDeg % 360) + 360) % 360;
+  switch (arc) {
+    case "ALL_ROUND":
+      return true;
+    case "FORWARD":
+      return angleDiff(b, 180) > 30; // aveugle pile derrière
+    case "AFT":
+      return angleDiff(b, 0) > 30; // aveugle pile devant
+    case "BROADSIDE":
+      return angleDiff(b, 0) > 30 && angleDiff(b, 180) > 30; // aveugle devant ET derrière
+  }
+}
+
+export type GunBattery = {
+  calibreMm: number;
+  count: number;
+  rangeM: number;
+  /** Coups par minute et par pièce (cadence réelle du modèle, pas un idéal théorique). */
+  roundsPerMinute: number;
+  arc: GunArc;
+};
+/** Les tubes lance-torpilles sont montés sur l'axe du navire : arc au travers uniquement, par défaut. */
+export type TorpedoBattery = { count: number; rangeM: number; speedKnots: number; arc?: GunArc };
 
 /**
  * Variante de torpille sélectionnable (sous-marins) : G7a à vapeur (44nds,
@@ -45,6 +89,11 @@ export function selectTorpedoBattery(
   return profile?.torpedoTubes ?? null;
 }
 
+/** Les tubes torpilles n'ont pas de champ `arc` obligatoire (héritage) : travers par défaut, la configuration la plus courante. */
+export function isTorpedoArcClear(battery: TorpedoBattery, relativeBearingDeg: number): boolean {
+  return isInGunArc(battery.arc ?? "BROADSIDE", relativeBearingDeg);
+}
+
 /**
  * Dégâts moyens d'un coup de 380mm, calibrés sur l'indication du livret
  * qu'un croiseur lourd bien protégé encaisse 4 à 5 obus de 380 avant de
@@ -63,11 +112,34 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /** Meilleure batterie utilisable à la distance donnée (la plus grosse dont la portée couvre `rangeM`). */
-export function selectGunBattery(profile: CombatProfile | null | undefined, rangeM: number): GunBattery | null {
+/**
+ * `relativeBearingDeg`, si fourni, exclut aussi les pièces dont l'arc de
+ * tir ne couvre pas le relèvement de la cible (une tourelle avant ne peut
+ * pas viser pile derrière, par exemple).
+ */
+export function selectGunBattery(
+  profile: CombatProfile | null | undefined,
+  rangeM: number,
+  relativeBearingDeg?: number
+): GunBattery | null {
   if (!profile?.guns || profile.guns.length === 0) return null;
-  const usable = profile.guns.filter((g) => g.rangeM >= rangeM);
+  const usable = profile.guns.filter(
+    (g) => g.rangeM >= rangeM && (relativeBearingDeg === undefined || isInGunArc(g.arc, relativeBearingDeg))
+  );
   if (usable.length === 0) return null;
   return usable.reduce((best, g) => (g.calibreMm > best.calibreMm ? g : best));
+}
+
+/** Toutes les pièces à portée et dans l'arc, pas seulement la plus grosse — pour lister les options au joueur. */
+export function listUsableGunBatteries(
+  profile: CombatProfile | null | undefined,
+  rangeM: number,
+  relativeBearingDeg?: number
+): GunBattery[] {
+  if (!profile?.guns) return [];
+  return profile.guns.filter(
+    (g) => g.rangeM >= rangeM && (relativeBearingDeg === undefined || isInGunArc(g.arc, relativeBearingDeg))
+  );
 }
 
 export function gunHitChancePercent(params: {
@@ -133,10 +205,12 @@ export function resolveGunEngagement(params: {
   targetBeamM: number;
   targetSpeedKnots: number;
   rangeM: number;
+  /** Relèvement de la cible relatif à la proue : exclut les pièces hors arc. */
+  relativeBearingDeg?: number;
   rng?: () => number;
 }): GunEngagementResult | null {
   const rng = params.rng ?? Math.random;
-  const battery = selectGunBattery(params.attackerProfile, params.rangeM);
+  const battery = selectGunBattery(params.attackerProfile, params.rangeM, params.relativeBearingDeg);
   if (!battery) return null;
 
   const hitChancePercent = gunHitChancePercent({

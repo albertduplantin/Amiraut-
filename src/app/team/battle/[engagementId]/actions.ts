@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { submitTacticalMovement, submitTacticalFire, postTacticalMessage } from "@/lib/tacticalEngine";
 import { OrderValidationError } from "@/lib/turnEngine";
 import type { DepthBand, WeaponType } from "@/generated/prisma/client";
+import type { LatLng } from "@/lib/geo";
 
 export type BattleActionResult = { ok: true } | { ok: false; error: string };
 
@@ -17,7 +18,7 @@ async function assertOwnsUnits(teamId: string, unitIds: string[]) {
 
 export async function submitMovementAction(params: {
   engagementId: string;
-  moves: { unitId: string; headingDeg: number; speedKnots: number; depthBand?: DepthBand }[];
+  moves: { unitId: string; speedKnots: number; path: LatLng[]; depthBand?: DepthBand }[];
 }): Promise<BattleActionResult> {
   const session = await getSession();
   try {

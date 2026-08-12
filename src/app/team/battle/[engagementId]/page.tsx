@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { bearingDeg } from "@/lib/geo";
+import { bearingDeg, destinationPoint } from "@/lib/geo";
 import { BattleClient } from "./BattleClient";
 
 export default async function BattlePage({ params }: { params: Promise<{ engagementId: string }> }) {
@@ -15,6 +15,7 @@ export default async function BattlePage({ params }: { params: Promise<{ engagem
     where: { id: engagementId },
     include: {
       participants: { select: { unitId: true, teamId: true } },
+      scenario: { select: { mapCenterLat: true, mapCenterLng: true, mapDefaultZoom: true } },
     },
   });
   if (!engagement || !engagement.participants.some((p) => p.teamId === session.teamId)) {
@@ -86,18 +87,23 @@ export default async function BattlePage({ params }: { params: Promise<{ engagem
       endReason={engagement.endReason}
       teamId={session.teamId}
       teams={teams}
+      mapCenter={{ lat: engagement.scenario.mapCenterLat, lng: engagement.scenario.mapCenterLng }}
+      mapZoom={engagement.scenario.mapDefaultZoom}
       submittedTeamIds={submissions.map((s) => s.teamId)}
       ownUnits={ownUnits.map((u) => ({
         id: u.id,
         name: u.name,
         className: u.unitClass.name,
         category: u.unitClass.category,
+        lengthMeters: u.unitClass.lengthMeters,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         combatProfile: u.unitClass.combatProfile as any,
         maxSpeedKnots: u.unitClass.maxSpeedKnots,
         healthCurrent: u.healthCurrent,
         healthMax: u.healthMax,
         status: u.status,
+        currentLat: u.currentLat,
+        currentLng: u.currentLng,
         headingDeg: u.currentHeadingDeg,
         depthBand: u.depthBand,
         batteryChargePercent: u.batteryChargePercent,
@@ -112,6 +118,13 @@ export default async function BattlePage({ params }: { params: Promise<{ engagem
           observer && enemy
             ? bearingDeg({ lat: observer.currentLat, lng: observer.currentLng }, { lat: enemy.currentLat, lng: enemy.currentLng })
             : 0;
+        const normalizedBearing = ((relBearing % 360) + 360) % 360;
+        // Position du marqueur reconstruite depuis le relèvement/distance
+        // déjà partagés (pas une nouvelle fuite d'information) : nécessaire
+        // pour placer le contact sur la carte.
+        const markerPos = observer
+          ? destinationPoint({ lat: observer.currentLat, lng: observer.currentLng }, normalizedBearing, c.distanceNm)
+          : { lat: 0, lng: 0 };
         return {
           targetUnitId: c.targetUnitId,
           name: c.targetUnit.name,
@@ -122,7 +135,9 @@ export default async function BattlePage({ params }: { params: Promise<{ engagem
           maxSpeedKnots: c.targetUnit.unitClass.maxSpeedKnots,
           method: c.method,
           distanceNm: c.distanceNm,
-          bearingDeg: ((relBearing % 360) + 360) % 360,
+          bearingDeg: normalizedBearing,
+          lat: markerPos.lat,
+          lng: markerPos.lng,
           status: enemy?.status ?? "ACTIVE",
         };
       })}
@@ -142,6 +157,8 @@ export default async function BattlePage({ params }: { params: Promise<{ engagem
         phase: a.phase,
         headingDeg: a.headingDeg,
         speedKnots: a.speedKnots,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        movementPath: (a.movementPath as any) ?? null,
         depthBand: a.depthBand,
         targetUnitId: a.targetUnitId,
         weaponType: a.weaponType,
