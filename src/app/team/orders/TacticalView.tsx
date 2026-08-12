@@ -128,6 +128,8 @@ export function TacticalView(props: {
     return map;
   }, [props.ownFireActionsThisRound, freshResults]);
 
+  const unfiredShips = useMemo(() => livingOwnUnits.filter((u) => !firedByUnit[u.id]), [livingOwnUnits, firedByUnit]);
+
   // Rafraîchit automatiquement en attendant l'autre camp.
   useEffect(() => {
     if (props.status === "RESOLVED") return;
@@ -412,7 +414,7 @@ export function TacticalView(props: {
           <h1 className="font-display text-lg tracking-wide text-brass-300">
             Tour {props.turnNumber} — Combat rapproché
             <span className="ml-2 text-xs font-normal text-slate-500">
-              manche {props.roundNumber} · {formatDuration(props.roundMinutes)} · {isMovementPhase ? "mouvement" : "tir"}
+              manche {props.roundNumber} · {formatDuration(props.roundMinutes)}
             </span>
           </h1>
           {props.arbiterPaused && <p className="text-xs text-amber-400">⏸ suspendu par l&apos;arbitre</p>}
@@ -430,6 +432,24 @@ export function TacticalView(props: {
           ))}
         </div>
       </header>
+
+      <div
+        className={`flex items-center gap-2 border-b px-4 py-2 text-sm font-medium ${
+          isMovementPhase ? "border-sky-800 bg-sky-950/40 text-sky-200" : "border-red-800 bg-red-950/40 text-red-200"
+        }`}
+      >
+        {isMovementPhase ? (
+          <>
+            <span className="text-base">🧭</span>
+            <span>PHASE DE MOUVEMENT — tracez le trajet de chaque navire (cap et vitesse), puis validez.</span>
+          </>
+        ) : (
+          <>
+            <span className="text-base">🎯</span>
+            <span>PHASE DE TIR — sélectionnez un navire, une arme, une cible, puis tirez. Une salve par navire.</span>
+          </>
+        )}
+      </div>
 
       <div className="flex flex-1 overflow-hidden">
         <aside className="w-64 shrink-0 overflow-y-auto border-r border-slate-800 p-3">
@@ -585,13 +605,23 @@ export function TacticalView(props: {
             </button>
           )}
           {!hasSubmittedThisPhase && !props.arbiterPaused && !isMovementPhase && (
-            <button
-              onClick={finishFiring}
-              disabled={isPending}
-              className="mt-3 w-full rounded-md bg-red-800 px-3 py-2 font-medium hover:bg-red-700 disabled:opacity-50"
-            >
-              {isPending ? "Envoi…" : "Passer à la phase de mouvement suivante"}
-            </button>
+            <>
+              {unfiredShips.length > 0 && (
+                <p className="mt-3 rounded-md border border-amber-800 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+                  {unfiredShips.length === 1
+                    ? `${unfiredShips[0].name} n'a pas encore tiré.`
+                    : `${unfiredShips.length} navires n'ont pas encore tiré : ${unfiredShips.map((u) => u.name).join(", ")}.`}{" "}
+                  Vous pouvez garder le feu volontairement.
+                </p>
+              )}
+              <button
+                onClick={finishFiring}
+                disabled={isPending}
+                className="mt-3 w-full rounded-md bg-red-800 px-3 py-2 font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {isPending ? "Envoi…" : "Mettre fin à la phase de tir"}
+              </button>
+            </>
           )}
 
           {props.battleLog.length > 0 && (
@@ -797,14 +827,20 @@ function FireDashboard({
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="font-semibold">{ship.name}</h2>
-        <p className="text-xs text-slate-500">{ship.className}</p>
+        <h2 className="flex items-center font-semibold">
+          <StepBadge n={1} state="done" />
+          {ship.name}
+        </h2>
+        <p className="pl-5 text-xs text-slate-500">{ship.className} — navire tireur</p>
       </div>
       <HealthBar unit={ship} />
       {ship.category === "SUBMARINE" && <p className="text-xs text-slate-500">Immersion : {formatDepthBand(ship.depthBand)}</p>}
 
       <div>
-        <h3 className="mb-1 text-xs font-semibold text-slate-400">Armement</h3>
+        <h3 className="mb-1 flex items-center text-xs font-semibold text-slate-300">
+          <StepBadge n={2} state={selectedWeaponIndex !== null ? "done" : "active"} />
+          Choisissez une arme
+        </h3>
         <ul className="space-y-1">
           {allGuns.map((g, i) => {
             const usable = target ? usableGuns.includes(g) : true;
@@ -878,40 +914,67 @@ function FireDashboard({
         </div>
       )}
 
-      {selectedWeaponIndex === null && <p className="text-xs text-slate-500">Choisissez une arme ci-dessus.</p>}
-
-      {selectedWeaponIndex !== null && !target && (
-        <button
-          onClick={onStartPicking}
-          className={`w-full rounded-md px-3 py-2 text-sm font-medium transition ${
-            pickingTarget ? "bg-orange-800 hover:bg-orange-700" : "bg-slate-700 hover:bg-slate-600"
-          }`}
-        >
-          {pickingTarget ? "Cliquez une cible sur la carte…" : "Sélectionner une cible"}
-        </button>
-      )}
-
-      {selectedWeaponIndex !== null && target && (
-        <div className="rounded-md bg-slate-950/60 p-2 text-xs">
-          <div className="mb-2 flex items-center justify-between">
-            <div>
-              Cible : {target.className} — {target.distanceNm.toFixed(1)}nm, gis. {Math.round(target.bearingDeg)}°
+      <div className={selectedWeaponIndex === null ? "pointer-events-none opacity-40" : ""}>
+        <h3 className="mb-1 flex items-center text-xs font-semibold text-slate-300">
+          <StepBadge n={3} state={target ? "done" : selectedWeaponIndex !== null ? "active" : "upcoming"} />
+          Choisissez une cible
+        </h3>
+        {!target ? (
+          <button
+            onClick={onStartPicking}
+            disabled={selectedWeaponIndex === null}
+            className={`w-full rounded-md px-3 py-2 text-sm font-medium transition ${
+              pickingTarget ? "bg-orange-800 hover:bg-orange-700" : "bg-slate-700 hover:bg-slate-600"
+            }`}
+          >
+            {pickingTarget ? "Cliquez une cible sur la carte ou dans la liste…" : "Sélectionner une cible"}
+          </button>
+        ) : (
+          <div className="rounded-md bg-slate-950/60 p-2 text-xs">
+            <div className="flex items-center justify-between">
+              <div>
+                Cible : {target.className} — {target.distanceNm.toFixed(1)}nm, gis. {Math.round(target.bearingDeg)}°
+              </div>
+              <button onClick={onStartPicking} className="text-slate-400 underline hover:text-slate-200">
+                changer
+              </button>
             </div>
-            <button onClick={onStartPicking} className="text-slate-400 underline hover:text-slate-200">
-              changer
+          </div>
+        )}
+      </div>
+
+      <div className={!target || selectedWeaponIndex === null ? "pointer-events-none opacity-40" : ""}>
+        <h3 className="mb-1 flex items-center text-xs font-semibold text-slate-300">
+          <StepBadge n={4} state={target && selectedWeaponIndex !== null ? "active" : "upcoming"} />
+          Tirez
+        </h3>
+        {target && selectedWeaponIndex !== null && (
+          <div className="rounded-md bg-slate-950/60 p-2 text-xs">
+            {estimate !== null ? <div>Chance de toucher : ~{estimate.toFixed(0)}%</div> : <div className="text-amber-400">Ce tir n&apos;est pas possible.</div>}
+            <button
+              onClick={onValidate}
+              disabled={estimate === null || isPending}
+              className="mt-2 w-full rounded-md bg-red-800 px-2 py-1.5 text-sm font-medium hover:bg-red-700 disabled:opacity-40"
+            >
+              {isPending ? "Envoi…" : "Tirer !"}
             </button>
           </div>
-          {estimate !== null ? <div>Chance de toucher : ~{estimate.toFixed(0)}%</div> : <div className="text-amber-400">Ce tir n&apos;est pas possible.</div>}
-          <button
-            onClick={onValidate}
-            disabled={estimate === null || isPending}
-            className="mt-2 w-full rounded-md bg-red-800 px-2 py-1.5 text-sm font-medium hover:bg-red-700 disabled:opacity-40"
-          >
-            {isPending ? "Envoi…" : "Valider le tir"}
-          </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
+  );
+}
+
+/** Puce numérotée du guide pas-à-pas (tireur → arme → cible → tir) : verte une fois franchie, dorée pour l'étape en cours, grise pour ce qui n'est pas encore accessible. */
+function StepBadge({ n, state }: { n: number; state: "done" | "active" | "upcoming" }) {
+  return (
+    <span
+      className={`mr-1.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+        state === "done" ? "bg-emerald-600 text-white" : state === "active" ? "bg-brass-500 text-slate-900" : "bg-slate-700 text-slate-500"
+      }`}
+    >
+      {state === "done" ? "✓" : n}
+    </span>
   );
 }
 
