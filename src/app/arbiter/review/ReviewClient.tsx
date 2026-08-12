@@ -350,6 +350,8 @@ function formatMethod(method: string) {
       return "hydrophone";
     case "SONAR":
       return "sonar";
+    case "HF_DF":
+      return "goniométrie HF";
     default:
       return method;
   }

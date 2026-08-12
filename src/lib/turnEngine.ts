@@ -10,7 +10,7 @@ import {
   type CombatProfile,
   type DepthBand as CombatDepthBand,
 } from "@/lib/combat";
-import type { ArbiterStatus, SensorType, DepthBand } from "@/generated/prisma/client";
+import type { ArbiterStatus, SensorType, DepthBand, SignalChannel } from "@/generated/prisma/client";
 
 const NM_TO_M = 1852;
 /** Portée effective d'une passe d'attaque aux grenades ASM (livret : ASDIC ~2000m). */
@@ -26,6 +26,15 @@ const ASDIC_ATTACK_RANGE_M = 2000;
  */
 const BATTERY_SPEED_EXPONENT = 4;
 const BATTERY_REFERENCE_SPEED_KNOTS = 4;
+
+/**
+ * Un Kurzsignal (~20s d'antenne) réduit la portée effective de goniométrie
+ * par rapport à un message long en Morse (conçu précisément pour passer
+ * sous le temps nécessaire à un relèvement précis — voir la recherche
+ * historique du projet, uboat.net/Kurzsignale). Modélisé comme une portée
+ * d'interception réduite plutôt qu'une précision de relèvement séparée.
+ */
+const KURZSIGNAL_INTERCEPT_RANGE_RATIO = 0.35;
 
 /**
  * Durée d'un tour en mode bataille tactique. Le livret original résout le
@@ -65,7 +74,7 @@ function isAdjacentDepthBand(current: DepthBand, requested: DepthBand): boolean 
 }
 
 const SensorSchema = z.object({
-  type: z.enum(["RADAR", "VISUAL", "HYDROPHONE", "SONAR", "OTHER"]),
+  type: z.enum(["RADAR", "VISUAL", "HYDROPHONE", "SONAR", "HF_DF", "OTHER"]),
   rangeNm: z.number().positive(),
 });
 const SensorsSchema = z.array(SensorSchema);
@@ -308,6 +317,67 @@ export async function cancelStandingOrder(unitId: string) {
       airPatrolLat: null,
       airPatrolLng: null,
       fuelMinutesRemaining: null,
+    },
+  });
+}
+
+/** Longueur maximale d'un message en texte libre (visuel, TBS, W-T long). */
+const SIGNAL_BODY_MAX_LENGTH = 500;
+/** Un Kurzsignal est un code comprimé : quelques dizaines de caractères, pas un message rédigé. */
+const KURZSIGNAL_BODY_MAX_LENGTH = 80;
+const KURZSIGNAL_TYPES = ["CONTACT", "POSITION", "WEATHER"] as const;
+
+/**
+ * Envoie un message (bloc 4). Aucune validation de portée à l'émission : le
+ * risque d'interception (goniométrie HF) se calcule à la résolution du tour
+ * (voir resolveTurnDetections), pas ici — un joueur ne doit pas apprendre à
+ * l'avance s'il va être repéré, sans quoi le choix du canal perdrait tout
+ * son enjeu.
+ */
+export async function sendSignal(params: {
+  turnId: string;
+  teamId: string;
+  senderUnitId: string;
+  channel: SignalChannel;
+  body: string;
+  kurzsignalType?: string;
+}) {
+  const { turnId, teamId, senderUnitId, channel, body, kurzsignalType } = params;
+
+  const [turn, unit] = await Promise.all([
+    prisma.turn.findUniqueOrThrow({ where: { id: turnId } }),
+    prisma.unit.findUniqueOrThrow({ where: { id: senderUnitId }, include: { fleet: true } }),
+  ]);
+
+  if (turn.status !== "PENDING_ORDERS") throw new OrderValidationError("Ce tour n'accepte plus de messages.");
+  if (!turn.weatherId) throw new OrderValidationError("La météo du tour n'a pas encore été définie par l'arbitre.");
+  if (unit.fleet.teamId !== teamId) throw new OrderValidationError("Cette unité n'appartient pas à votre équipe.");
+  if (unit.status === "SUNK") throw new OrderValidationError("Cette unité a été coulée : elle ne peut plus émettre.");
+
+  const trimmed = body.trim();
+  if (trimmed.length === 0) throw new OrderValidationError("Le message est vide.");
+
+  if (channel === "HF_KURZSIGNAL") {
+    if (!kurzsignalType || !(KURZSIGNAL_TYPES as readonly string[]).includes(kurzsignalType)) {
+      throw new OrderValidationError("Choisissez une forme standard pour un Kurzsignal (contact, position ou météo).");
+    }
+    if (trimmed.length > KURZSIGNAL_BODY_MAX_LENGTH) {
+      throw new OrderValidationError(
+        `Un Kurzsignal tient en ${KURZSIGNAL_BODY_MAX_LENGTH} caractères maximum (code comprimé) : ${trimmed.length} envoyés.`
+      );
+    }
+  } else if (trimmed.length > SIGNAL_BODY_MAX_LENGTH) {
+    throw new OrderValidationError(`Message trop long (${SIGNAL_BODY_MAX_LENGTH} caractères maximum) : ${trimmed.length} envoyés.`);
+  }
+
+  await prisma.signal.create({
+    data: {
+      turnId,
+      teamId,
+      senderUnitId,
+      channel,
+      kurzsignalType: channel === "HF_KURZSIGNAL" ? kurzsignalType : null,
+      body: trimmed,
     },
   });
 }
@@ -618,6 +688,10 @@ export async function resolveTurnDetections(turnId: string) {
 
       let best: { type: SensorType; margin: number } | null = null;
       for (const sensor of sensors) {
+        // La goniométrie HF (HF_DF) ne se déclenche jamais par simple
+        // proximité : seulement par une émission radio adverse ce tour-ci
+        // (voir la passe dédiée à la suite de cette boucle, sur Signal).
+        if (sensor.type === "HF_DF") continue;
         // Un sous-marin immergé échappe entièrement au radar et au visuel :
         // seule une détection acoustique (hydrophone/ASDIC) reste possible.
         if (targetSubmerged && (sensor.type === "RADAR" || sensor.type === "VISUAL")) continue;
@@ -653,9 +727,56 @@ export async function resolveTurnDetections(turnId: string) {
     }
   }
 
+  // Goniométrie HF (bloc 4) : contrairement aux autres capteurs, ne dépend
+  // pas d'une trajectoire mais d'un événement discret — une émission HF ce
+  // tour-ci (voir Signal). Position des deux unités approximée par leur
+  // position en DÉBUT de tour (units[].currentLat/Lng, pas encore mise à
+  // jour par le mouvement de ce tour) : un signal est envoyé au moment de
+  // la composition des ordres, avant que quiconque ait bougé.
+  const hfSignals = await prisma.signal.findMany({
+    where: { turnId, channel: { in: ["HF_LONG", "HF_KURZSIGNAL"] } },
+    include: { senderUnit: { select: { currentLat: true, currentLng: true, fleet: { select: { teamId: true } } } } },
+  });
+  const interceptedSignalIds = new Set<string>();
+  if (hfSignals.length > 0) {
+    for (const signal of hfSignals) {
+      const senderPos = { lat: signal.senderUnit.currentLat, lng: signal.senderUnit.currentLng };
+      const senderTeamId = signal.senderUnit.fleet.teamId;
+
+      for (const observer of units) {
+        if (observer.fleet.teamId === senderTeamId) continue; // pas d'auto-interception côté allié
+        const dfSensor = parseSensors(observer.unitClass.sensors).find((s) => s.type === "HF_DF");
+        if (!dfSensor) continue;
+
+        const rangeMultiplier = signal.channel === "HF_KURZSIGNAL" ? KURZSIGNAL_INTERCEPT_RANGE_RATIO : 1;
+        const d = distanceNm({ lat: observer.currentLat, lng: observer.currentLng }, senderPos);
+        if (d > dfSensor.rangeNm * rangeMultiplier) continue;
+
+        interceptedSignalIds.add(signal.id);
+        detectionRows.push({
+          turnId,
+          observerUnitId: observer.id,
+          targetUnitId: signal.senderUnitId,
+          method: "HF_DF",
+          cpaDistanceNm: d,
+          cpaMinutesIntoTurn: 0,
+          observerLatAtCpa: observer.currentLat,
+          observerLngAtCpa: observer.currentLng,
+          targetLatAtCpa: senderPos.lat,
+          targetLngAtCpa: senderPos.lng,
+          systemProposed: true,
+          arbiterStatus: "PROPOSED",
+        });
+      }
+    }
+  }
+
   await prisma.$transaction([
     ...(detectionRows.length > 0
       ? [prisma.detectionEvent.createMany({ data: detectionRows, skipDuplicates: true })]
+      : []),
+    ...(interceptedSignalIds.size > 0
+      ? [prisma.signal.updateMany({ where: { id: { in: Array.from(interceptedSignalIds) } }, data: { intercepted: true } })]
       : []),
     prisma.turn.update({
       where: { id: turnId },

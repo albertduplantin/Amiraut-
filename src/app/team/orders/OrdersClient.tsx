@@ -606,13 +606,19 @@ export function OrdersClient(props: {
           Tour {turnNumber} — Ordres de mouvement (
           {turnDurationMinutes < 60 ? `${turnDurationMinutes} min` : `${turnDurationMinutes / 60} h`})
         </h1>
-        <div className="flex gap-4 text-sm text-slate-400">
+        <div className="flex items-center gap-4 text-sm text-slate-400">
           <span>
             Votre équipe : {props.teamProgress.submitted}/{props.teamProgress.total} ordres
           </span>
           <span>
             Total partie : {props.globalProgress.submitted}/{props.globalProgress.total}
           </span>
+          <Link href="/team/comms" className="rounded-md border border-slate-700 px-2 py-1 text-xs hover:bg-slate-900">
+            📡 Communications
+          </Link>
+          <Link href="/team/reports" className="rounded-md border border-slate-700 px-2 py-1 text-xs hover:bg-slate-900">
+            Rapports
+          </Link>
         </div>
       </header>
 
@@ -1337,6 +1343,8 @@ function formatSensor(type: string) {
       return "hydrophone";
     case "SONAR":
       return "sonar";
+    case "HF_DF":
+      return "goniométrie HF";
     default:
       return type;
   }

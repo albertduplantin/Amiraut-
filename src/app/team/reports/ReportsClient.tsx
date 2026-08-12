@@ -106,17 +106,25 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
     <div className="chart-room-bg flex h-screen w-full flex-col text-slate-100">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
         <h1 className="font-display text-lg tracking-wide text-brass-300">Rapport de renseignement — Tour {report.turnNumber}</h1>
-        <select
-          value={turnIndex}
-          onChange={(e) => setTurnIndex(Number(e.target.value))}
-          className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
-        >
-          {props.reports.map((r, i) => (
-            <option key={r.turnNumber} value={i}>
-              Tour {r.turnNumber} — {new Date(r.gameStartAt).toLocaleDateString("fr-FR")}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-3">
+          <select
+            value={turnIndex}
+            onChange={(e) => setTurnIndex(Number(e.target.value))}
+            className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+          >
+            {props.reports.map((r, i) => (
+              <option key={r.turnNumber} value={i}>
+                Tour {r.turnNumber} — {new Date(r.gameStartAt).toLocaleDateString("fr-FR")}
+              </option>
+            ))}
+          </select>
+          <Link href="/team/orders" className="rounded-md border border-slate-700 px-2 py-1 text-xs hover:bg-slate-900">
+            Ordres
+          </Link>
+          <Link href="/team/comms" className="rounded-md border border-slate-700 px-2 py-1 text-xs hover:bg-slate-900">
+            📡 Communications
+          </Link>
+        </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -260,6 +268,8 @@ function formatMethod(method: string) {
       return "hydrophone";
     case "SONAR":
       return "sonar";
+    case "HF_DF":
+      return "goniométrie HF";
     default:
       return method;
   }

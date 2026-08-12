@@ -59,6 +59,12 @@ export function effectiveSensorRangeNm(
         targetDetectability
       );
     }
+    case "HF_DF":
+      // Goniométrie radio : la portée dépend de la sensibilité de
+      // l'équipement d'écoute, pas de la météo ni du profil de la cible
+      // (contrairement au visuel/radar/hydrophone). Voir Signal et
+      // resolveTurnDetections pour le déclenchement.
+      return baseRangeNm;
     case "HYDROPHONE":
     case "SONAR": {
       const seaStateMultiplier = clamp(1 - weather.seaState * 0.08, 0.2, 1);

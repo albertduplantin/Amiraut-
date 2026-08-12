@@ -35,11 +35,16 @@ export default async function WaitingPage() {
           ? "Tous les ordres ont été soumis. L'arbitre est en train de résoudre les détections du tour."
           : "L'arbitre n'a pas encore ouvert les ordres de ce tour (météo à définir)."}
       </p>
-      {latestPublished && (
-        <Link href="/team/reports" className="rounded-md bg-brass-600 px-4 py-2 text-sm font-medium hover:bg-brass-500">
-          Voir le dernier rapport de renseignement (tour {latestPublished.number})
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        {latestPublished && (
+          <Link href="/team/reports" className="rounded-md bg-brass-600 px-4 py-2 text-sm font-medium hover:bg-brass-500">
+            Voir le dernier rapport de renseignement (tour {latestPublished.number})
+          </Link>
+        )}
+        <Link href="/team/comms" className="rounded-md border border-slate-700 px-4 py-2 text-sm hover:bg-slate-900">
+          📡 Communications
         </Link>
-      )}
+      </div>
     </div>
   );
 }

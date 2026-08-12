@@ -47,6 +47,7 @@ model Team {
   fleets       Fleet[]
   participants Participant[]
   reports      Report[]
+  signals      Signal[]
 
   tacticalParticipants TacticalParticipant[]
 
@@ -191,6 +192,7 @@ model Unit {
   observedFrom     DetectionEvent[] @relation("ObserverUnit")
   combatAsTarget   CombatEvent[]    @relation("CombatTarget")
   combatAsAttacker CombatEvent[]    @relation("CombatAttacker")
+  signalsSent      Signal[]
 
   tacticalParticipations TacticalParticipant[]
   tacticalActions        TacticalAction[]
@@ -287,6 +289,7 @@ model Turn {
   detectionEvents DetectionEvent[]
   combatEvents    CombatEvent[]
   reports         Report[]
+  signals         Signal[]
 
   tacticalEngagements TacticalEngagement[]
 
@@ -397,6 +400,11 @@ enum SensorType {
   VISUAL
   HYDROPHONE
   SONAR
+  // Goniométrie HF ("Huff-Duff") : relèvement radio, pas un capteur physique
+  // classique — voir Signal et resolveTurnDetections. Uniquement déclenché
+  // par une émission HF adverse (HF_LONG/HF_KURZSIGNAL), jamais par le
+  // déplacement d'une unité comme les autres capteurs.
+  HF_DF
   OTHER
 }
 
@@ -465,6 +473,45 @@ model Report {
   narrative   String?
 
   @@unique([turnId, teamId])
+}
+
+// ── Communications (bloc 4) ───────────────────────────────────
+//
+// Quatre canaux, quatre compromis portée/discrétion (voir la recherche
+// historique dans la mémoire du projet) : le visuel et la TBS sont sûrs
+// mais courte portée, le W-T HF porte à l'infini mais expose à la
+// goniométrie adverse (voir resolveTurnDetections, méthode HF_DF) — le
+// Kurzsignal réduit ce risque en réduisant le temps d'antenne, au prix
+// d'un contenu limité à des formes standard.
+
+model Signal {
+  id            String        @id @default(cuid())
+  turnId        String
+  turn          Turn          @relation(fields: [turnId], references: [id])
+  teamId        String
+  team          Team          @relation(fields: [teamId], references: [id])
+  senderUnitId  String
+  senderUnit    Unit          @relation(fields: [senderUnitId], references: [id])
+  channel       SignalChannel
+  // Forme standard du message si canal = HF_KURZSIGNAL (CONTACT / POSITION /
+  // MÉTÉO) — null pour les trois autres canaux, en texte libre.
+  kurzsignalType String?
+  body          String
+  // Vrai dès qu'au moins une détection HF_DF a été calculée à partir de ce
+  // message (voir resolveTurnDetections) — feedback pour le joueur sur la
+  // discipline radio, indépendant de la confirmation arbitre de cette
+  // détection.
+  intercepted   Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+
+  @@index([turnId, teamId])
+}
+
+enum SignalChannel {
+  VISUAL // lampe Aldis, pavillons, sémaphore : vue directe, quelques nm, aucune émission radio.
+  TBS // Talk Between Ships (VHF voix) : ~25nm, portée optique, quasi indétectable au-delà de l'horizon.
+  HF_LONG // message long en Morse, portée illimitée, forte exposition à la goniométrie.
+  HF_KURZSIGNAL // code comprimé (~20s d'antenne), portée illimitée, exposition réduite — formes standard uniquement.
 }
 
 // ── Bataille tactique ────────────────────────────────────────
