@@ -137,7 +137,13 @@ export function buildSilhouetteElement(params: {
   const hullOpacity = isSunk ? 0.6 : 1;
 
   const wrapper = document.createElement("div");
-  wrapper.style.position = "relative";
+  // Pas de `position` ici : MapLibre applique déjà `position: absolute` via sa
+  // propre classe `.maplibregl-marker` (nécessaire pour que le marqueur se
+  // positionne par transform ET pour qu'il se redimensionne à son contenu —
+  // un style inline l'écraserait et ferait déborder l'élément à toute la
+  // largeur de la carte, créant des zones de survol/clic qui se chevauchent
+  // entre navires proches). `position: absolute` reste un contexte de
+  // positionnement valable pour l'overlay de fumée ci-dessous.
   wrapper.style.display = "flex";
   wrapper.style.flexDirection = "column";
   wrapper.style.alignItems = "center";
