@@ -206,6 +206,41 @@ export function describeShot(input: NarrativeInput): string {
   );
 }
 
+// ── Dégâts localisés ────────────────────────────────────────
+//
+// Phrase factuelle ajoutée après le récit aléatoire habituel quand un coup a
+// réellement handicapé un système (voir combat.ts, rollLocalizedDamage) —
+// contrairement au récit aléatoire, celle-ci correspond toujours à un effet
+// mécanique réel appliqué au navire.
+
+export type LocalizedEffectStored =
+  | { type: "WEAPON_DISABLED"; slot: string }
+  | { type: "ENGINE"; speedReductionRatio: number }
+  | { type: "RUDDER" }
+  | { type: "FIRE_CONTROL" }
+  | { type: "MAGAZINE" };
+
+/** Récit dédié pour un coup qui atteint un magasin (cas Hood, 24 mai 1941) — remplace le récit aléatoire habituel plutôt que de s'y ajouter. */
+export function describeMagazineHit(attackerName: string, targetName: string): string {
+  return `Un coup plongeant perce le pont blindé de ${targetName} et gagne un magasin : l'explosion casse le navire en deux, presque instantanément. À bord de ${attackerName}, personne ne s'attendait à un résultat aussi brutal.`;
+}
+
+/** Phrase ajoutée au récit du coup pour les autres dégâts localisés (tourelle, machines, gouvernail, télépointage). */
+export function describeLocalizedEffect(effect: LocalizedEffectStored, targetName: string): string {
+  switch (effect.type) {
+    case "WEAPON_DISABLED":
+      return `Une pièce de ${targetName} est réduite au silence — elle ne tirera plus ce combat.`;
+    case "ENGINE":
+      return `La salle des machines de ${targetName} encaisse le choc : sa vitesse maximale chute durablement.`;
+    case "RUDDER":
+      return `Le gouvernail de ${targetName} se bloque — il ne peut plus manœuvrer, cap maintenu.`;
+    case "FIRE_CONTROL":
+      return `Le télépointage de ${targetName} est balayé : sa précision va en souffrir.`;
+    default:
+      return "";
+  }
+}
+
 /** Compte rendu de la phase de mouvement (nouveaux contacts, contacts perdus). */
 export function describeContactChange(params: {
   newContacts: { name: string; method: string; distanceNm: number }[];

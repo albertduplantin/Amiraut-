@@ -15,6 +15,8 @@
  * appel »).
  */
 
+import type { WeaponType } from "@/generated/prisma/client";
+
 /**
  * Arc de tir d'une pièce, en fonction de son emplacement à bord : une
  * tourelle avant ne peut pas tirer pile derrière (masquée par sa propre
@@ -156,6 +158,8 @@ export function gunHitChancePercent(params: {
   targetLengthM: number;
   targetBeamM: number;
   targetSpeedKnots: number;
+  /** Télépointage endommagé côté tireur (voir rollLocalizedDamage) : multiplie la précision brute. 1 = intact. */
+  accuracyMultiplier?: number;
 }): number {
   const rangeRatio = clamp(params.rangeM / params.maxRangeM, 0, 1);
   const rangeFactor = Math.pow(1 - rangeRatio, 1.6);
@@ -164,7 +168,7 @@ export function gunHitChancePercent(params: {
   const sizeFactor = clamp(targetArea / 1800, 0.15, 2.2);
   const speedFactor = 1 / (1 + params.targetSpeedKnots / 22);
   const baseAccuracy = params.calibreMm >= 280 ? 0.6 : params.calibreMm >= 150 ? 0.72 : 0.85;
-  return clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * 100, 0, 95);
+  return clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * (params.accuracyMultiplier ?? 1) * 100, 0, 95);
 }
 
 function gunDamagePerHit(calibreMm: number, rng: () => number): number {
@@ -222,6 +226,8 @@ export function resolveGunEngagement(params: {
    * meilleure").
    */
   forcedBattery?: GunBattery;
+  /** Télépointage endommagé côté tireur (voir rollLocalizedDamage) : multiplie la précision brute. 1 = intact. */
+  accuracyMultiplier?: number;
   rng?: () => number;
 }): GunEngagementResult | null {
   const rng = params.rng ?? Math.random;
@@ -235,6 +241,7 @@ export function resolveGunEngagement(params: {
     targetLengthM: params.targetLengthM,
     targetBeamM: params.targetBeamM,
     targetSpeedKnots: params.targetSpeedKnots,
+    accuracyMultiplier: params.accuracyMultiplier,
   });
 
   const hitRoll = rng() * 100;
@@ -279,6 +286,8 @@ export function torpedoHitChancePercent(params: {
   targetBeamM: number;
   targetSpeedKnots: number;
   angleOfAttackDeg: number;
+  /** Télépointage endommagé côté tireur (voir rollLocalizedDamage) : multiplie la précision brute. 1 = intact. */
+  accuracyMultiplier?: number;
 }): number {
   const rangeRatio = clamp(params.rangeM / params.maxRangeM, 0, 1);
   const rangeFactor = Math.pow(1 - rangeRatio, 1.3);
@@ -293,7 +302,7 @@ export function torpedoHitChancePercent(params: {
   // une torpille rapide en laisse moins besoin.
   const speedFactor = params.torpedoSpeedKnots / (params.torpedoSpeedKnots + params.targetSpeedKnots * 1.5);
   const baseAccuracy = 0.55;
-  return clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * 100, 0, 90);
+  return clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * (params.accuracyMultiplier ?? 1) * 100, 0, 90);
 }
 
 function torpedoDamagePerHit(rng: () => number): number {
@@ -324,6 +333,8 @@ export function resolveTorpedoEngagement(params: {
   targetSpeedKnots: number;
   angleOfAttackDeg: number;
   rangeM: number;
+  /** Télépointage endommagé côté tireur (voir rollLocalizedDamage) : multiplie la précision brute. 1 = intact. */
+  accuracyMultiplier?: number;
   rng?: () => number;
 }): TorpedoEngagementResult | null {
   const rng = params.rng ?? Math.random;
@@ -338,6 +349,7 @@ export function resolveTorpedoEngagement(params: {
     targetBeamM: params.targetBeamM,
     targetSpeedKnots: params.targetSpeedKnots,
     angleOfAttackDeg: params.angleOfAttackDeg,
+    accuracyMultiplier: params.accuracyMultiplier,
   });
 
   const hitRoll = rng() * 100;
@@ -398,6 +410,113 @@ export function depthChargeHitChancePercent(params: {
 function depthChargeDamage(rng: () => number): number {
   const variability = 0.7 + rng() * 0.6; // 0.7x à 1.3x
   return REFERENCE_DAMAGE_PER_DEPTH_CHARGE_ATTACK * variability;
+}
+
+// ── Dégâts localisés ─────────────────────────────────────────
+//
+// Au-delà de la perte de PV, un coup au but "solide" pouvait handicaper
+// durablement un système précis du navire — c'est souvent ce qui a décidé
+// l'issue d'un combat plus que le total de dégâts encaissé. Quatre cas
+// documentés de cette période inspirent la table ci-dessous :
+//   - Bismarck, 24 mai 1941 : une seule torpille aérienne (Swordfish de
+//     l'Ark Royal) bloque son gouvernail à 12° à bâbord — il ne peut plus
+//     gouverner et se fait rattraper.
+//   - Bismarck, 27 mai 1941 : sa tourelle avant "Anton" est détruite tôt
+//     dans son dernier combat, puis son télépointage avant est balayé peu
+//     après — sa riposte devient erratique avant même la perte de toutes
+//     ses pièces.
+//   - Scharnhorst, 26 déc. 1943 (bataille du cap Nord) : un obus de 356mm
+//     du Duke of York touche sa salle des chaudières, sa vitesse tombe de
+//     30 à ~22 nds — décisif pour qu'il se fasse rattraper et coulé.
+//   - Hood, 24 mai 1941 : un coup plongeant à longue portée perce le pont
+//     blindé et gagne un magasin — explosion, le navire coule en ~3 minutes.
+// Ne s'applique qu'aux bâtiments de surface (tourelles/gouvernail/salle des
+// machines n'ont pas de sens pour un sous-marin dans ce modèle) et
+// seulement aux coups assez solides pour plausiblement toucher autre chose
+// que la coque ; une éraflure ne désactive rien.
+
+export type LocalizedDamageEffect =
+  | { type: "NONE" }
+  | { type: "MAGAZINE" }
+  | { type: "TURRET" }
+  | { type: "ENGINE"; speedReductionRatio: number }
+  | { type: "RUDDER" }
+  | { type: "FIRE_CONTROL" };
+
+/** Un coup retirant moins de 10% du potentiel max de la cible est une éraflure : jamais de dégât localisé. */
+export const LOCALIZED_DAMAGE_THRESHOLD = 0.1;
+
+type LocalizedDamageType = LocalizedDamageEffect["type"];
+
+/**
+ * Tire un type dans la table sans construire les effets candidats à
+ * l'avance : un littéral `[{...}, poids]` évaluerait tous ses éléments
+ * immédiatement, y compris un `rng()` supplémentaire pour un effet qui
+ * n'est finalement pas retenu — en ne manipulant que des chaînes ici,
+ * `rng()` n'est appelé qu'une fois pour le tirage lui-même.
+ */
+function weightedPick(table: [LocalizedDamageType, number][], rng: () => number): LocalizedDamageType {
+  const total = table.reduce((sum, [, weight]) => sum + weight, 0);
+  let r = rng() * total;
+  for (const [type, weight] of table) {
+    if (r < weight) return type;
+    r -= weight;
+  }
+  return table[table.length - 1][0];
+}
+
+/**
+ * Localise un coup au but "solide". `damageRatio` est la part du potentiel
+ * max de la cible retirée par CE coup (pas le total de la manche) : plus le
+ * coup est lourd, plus le seuil est franchi nettement, mais la table de
+ * répartition ne varie pas au-delà — un coup deux fois plus fort n'a pas
+ * deux fois plus de chances de toucher un organe vital, il est juste plus
+ * susceptible d'avoir dépassé le seuil.
+ */
+export function rollLocalizedDamage(params: {
+  weaponType: WeaponType;
+  damageRatio: number;
+  rng?: () => number;
+}): LocalizedDamageEffect {
+  if (params.damageRatio < LOCALIZED_DAMAGE_THRESHOLD) return { type: "NONE" };
+  const rng = params.rng ?? Math.random;
+
+  let type: LocalizedDamageType;
+  if (params.weaponType === "TORPEDO") {
+    // Coup sous la flottaison : la salle des machines et le gouvernail sont
+    // les organes exposés (cas Bismarck) ; les tourelles, topside, sont
+    // pratiquement hors de cause.
+    type = weightedPick(
+      [
+        ["MAGAZINE", 6],
+        ["ENGINE", 34],
+        ["RUDDER", 26],
+        ["FIRE_CONTROL", 4],
+        ["NONE", 30],
+      ],
+      rng
+    );
+  } else if (params.weaponType === "GUN") {
+    type = weightedPick(
+      [
+        ["MAGAZINE", 4],
+        ["TURRET", 22],
+        ["ENGINE", 20],
+        ["RUDDER", 16],
+        ["FIRE_CONTROL", 14],
+        ["NONE", 24],
+      ],
+      rng
+    );
+  } else {
+    return { type: "NONE" }; // grenades ASM : voie d'eau seulement, pas de table dédiée.
+  }
+
+  // Cas Scharnhorst (cap Nord, 30 -> ~22 nds) : une avarie de machines
+  // retranche 15 à 35% de la vitesse max courante, tirée seulement pour
+  // l'effet réellement retenu.
+  if (type === "ENGINE") return { type: "ENGINE", speedReductionRatio: 0.15 + rng() * 0.2 };
+  return { type } as LocalizedDamageEffect;
 }
 
 export type DepthChargeAttackResult = {

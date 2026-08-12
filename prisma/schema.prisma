@@ -148,6 +148,21 @@ model Unit {
   oxygenHoursRemaining  Float?
   torpedoesRemaining    Int? // torpilles restantes (sous-marins), tous types confondus
 
+  // ── Dégâts localisés (mode tactique, bâtiments de surface) ──────────
+  // Au-delà de la simple perte de PV, un coup au but "solide" peut
+  // handicaper durablement un système précis — cas historiques qui
+  // inspirent le modèle (voir combat.ts, rollLocalizedDamage) : le
+  // gouvernail du Bismarck bloqué par une torpille aérienne (24 mai 1941),
+  // la salle des chaudières du Scharnhorst touchée au cap Nord faisant
+  // chuter sa vitesse de 30 à ~22 nds (13 déc. 1943), la tourelle avant du
+  // Bismarck détruite tôt dans son dernier combat, le magasin du Hood qui
+  // a explosé. Dégâts permanents pour la durée de l'engagement (pas de
+  // réparation en cours de combat) — voir tacticalEngine.ts.
+  disabledWeaponSlots   String[]  @default([]) // pièces détruites (ex: "gun:1", "torpedo") — voir TacticalAction.weaponSlot
+  speedCapKnots         Float? // vitesse max réduite par une avarie de machines (null = pas de plafond, utilise UnitClass.maxSpeedKnots)
+  rudderJammed          Boolean   @default(false) // gouvernail bloqué : ne peut plus manœuvrer, cap maintenu
+  fireControlDamaged    Boolean   @default(false) // télépointage endommagé : pénalité de précision sur ses propres tirs
+
   orders           UnitOrder[]
   detectedAs       DetectionEvent[] @relation("TargetUnit")
   observedFrom     DetectionEvent[] @relation("ObserverUnit")
@@ -534,6 +549,12 @@ model TacticalAction {
   /// coup : en-dessous = touché. Affiché aux joueurs pour rendre le
   /// mécanisme transparent (pas juste un résultat, le jet lui-même).
   hitRoll          Float?
+  /// Effet localisé proposé par ce coup (tourelle détruite, salle des
+  /// machines touchée, gouvernail bloqué, télépointage endommagé, magasin
+  /// atteint), appliqué en bloc à `resolveFirePhase` comme `damagePoints` —
+  /// voir combat.ts (rollLocalizedDamage) et Unit (disabledWeaponSlots &c).
+  /// Absent = ce coup n'a rien handicapé au-delà de sa perte de PV.
+  localizedEffect  Json?
   /// Récit du coup, affiché aux joueurs.
   narrative        String?
   /// Le tir a trahi la position du tireur (feu de bouche, sillage) pour la manche suivante.

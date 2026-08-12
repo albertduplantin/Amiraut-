@@ -176,6 +176,11 @@ async function renderTacticalView(engagementId: string, teamId: string) {
         turningRadiusM: u.unitClass.turningRadiusM ?? defaultTurningRadiusM(u.unitClass.category),
         accelerationKnotsPerMin: u.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(u.unitClass.category),
         torpedoesRemaining: u.torpedoesRemaining,
+        disabledWeaponSlots: u.disabledWeaponSlots,
+        speedCapKnots: u.speedCapKnots,
+        rudderJammed: u.rudderJammed,
+        fireControlDamaged: u.fireControlDamaged,
+        profileImageUrl: u.unitClass.profileImageUrl,
       }))}
       contacts={Array.from(bestContactByTarget.values()).map((c) => {
         const observer = ownUnits.find((u) => u.id === c.observerUnitId);
@@ -207,6 +212,7 @@ async function renderTacticalView(engagementId: string, teamId: string) {
           status: enemy?.status ?? "ACTIVE",
           estimatedHeadingDeg: estimate?.headingDeg ?? null,
           estimatedSpeedKnots: estimate?.speedKnots ?? null,
+          profileImageUrl: c.targetUnit.unitClass.profileImageUrl,
         };
       })}
       ownFireActionsThisRound={ownFireActionsThisRound.map((a) => ({

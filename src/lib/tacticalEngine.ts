@@ -1,21 +1,35 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { distanceNm, bearingDeg, pathLengthNm, speedBudgetNm, turnPenaltyNm, type LatLng } from "@/lib/geo";
+import { distanceNm, bearingDeg, destinationPoint, pathLengthNm, speedBudgetNm, turnPenaltyNm, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm, type WeatherConditions } from "@/lib/weather";
 import {
   resolveGunEngagement,
   resolveTorpedoEngagement,
   resolveDepthChargeAttack,
+  rollLocalizedDamage,
   selectTorpedoBattery,
   isTorpedoArcClear,
   isInGunArc,
   type CombatProfile,
   type DepthBand as CombatDepthBand,
 } from "@/lib/combat";
-import { describeShot, assessFiringReveal } from "@/lib/tacticalNarrative";
+import { describeShot, describeLocalizedEffect, describeMagazineHit, assessFiringReveal, type LocalizedEffectStored } from "@/lib/tacticalNarrative";
 import { OrderValidationError, currentOpenTurn, switchTurnToTacticalScale } from "@/lib/turnEngine";
 import type { DepthBand, SensorType, WeaponType } from "@/generated/prisma/client";
 import { Prisma } from "@/generated/prisma/client";
+
+/** Précision réduite d'un tireur au télépointage endommagé (voir Unit.fireControlDamaged) — cas Bismarck, 27 mai 1941. */
+const FIRE_CONTROL_DAMAGED_ACCURACY_MULTIPLIER = 0.7;
+/** Vitesse plancher laissée à un navire dont la salle des machines a été touchée : jamais totalement paralysé par ce seul dégât. */
+const MIN_SPEED_CAP_KNOTS = 5;
+
+/** Choisit au hasard une pièce encore active de la cible à désactiver (une tourelle, sinon les tubes lance-torpilles) — null si plus rien à désactiver. */
+function pickWeaponSlotToDisable(profile: CombatProfile | null | undefined, alreadyDisabled: string[]): string | null {
+  const gunSlots = (profile?.guns ?? []).map((_, i) => gunWeaponSlot(i)).filter((s) => !alreadyDisabled.includes(s));
+  if (gunSlots.length > 0) return gunSlots[Math.floor(Math.random() * gunSlots.length)];
+  if (profile?.torpedoTubes && !alreadyDisabled.includes(TORPEDO_WEAPON_SLOT)) return TORPEDO_WEAPON_SLOT;
+  return null;
+}
 
 const NM_TO_M = 1852;
 const ASDIC_ATTACK_RANGE_M = 2000;
@@ -394,9 +408,19 @@ export async function submitTacticalMovementForUnit(params: {
   if (!participant || participant.teamId !== params.teamId) {
     throw new OrderValidationError("Cette unité ne participe pas à cet engagement pour votre camp.");
   }
-  if (params.speedKnots < 0 || params.speedKnots > participant.unit.unitClass.maxSpeedKnots) {
+
+  // Une avarie de machines (voir Unit.speedCapKnots, cas Scharnhorst au cap
+  // Nord) plafonne la vitesse en dessous du maximum théorique de la classe.
+  const effectiveMaxSpeedKnots =
+    participant.unit.speedCapKnots != null
+      ? Math.min(participant.unit.unitClass.maxSpeedKnots, participant.unit.speedCapKnots)
+      : participant.unit.unitClass.maxSpeedKnots;
+
+  if (params.speedKnots < 0 || params.speedKnots > effectiveMaxSpeedKnots) {
     throw new OrderValidationError(
-      `${participant.unit.name} : vitesse ${params.speedKnots} nds hors limites (max ${participant.unit.unitClass.maxSpeedKnots}).`
+      `${participant.unit.name} : vitesse ${params.speedKnots} nds hors limites (max ${effectiveMaxSpeedKnots.toFixed(0)}${
+        participant.unit.speedCapKnots != null ? ", réduit par avarie" : ""
+      }).`
     );
   }
 
@@ -407,17 +431,30 @@ export async function submitTacticalMovementForUnit(params: {
   const lastSpeed = lastSpeedByUnit.get(params.unitId) ?? 0;
   const maxDelta = accelKnotsPerMin * engagement.roundMinutes;
   const minReachable = Math.max(0, lastSpeed - maxDelta);
-  const maxReachable = Math.min(participant.unit.unitClass.maxSpeedKnots, lastSpeed + maxDelta);
+  const maxReachable = Math.min(effectiveMaxSpeedKnots, lastSpeed + maxDelta);
   if (params.speedKnots < minReachable - 0.01 || params.speedKnots > maxReachable + 0.01) {
     throw new OrderValidationError(
       `${participant.unit.name} : ne peut pas passer de ${lastSpeed.toFixed(0)} à ${params.speedKnots.toFixed(0)} nds en ${engagement.roundMinutes.toFixed(1)}min (accélération max ${accelKnotsPerMin.toFixed(1)}nds/min, atteignable entre ${minReachable.toFixed(0)} et ${maxReachable.toFixed(0)}nds).`
     );
   }
 
-  if (params.path.length > 0) {
+  // Gouvernail bloqué (voir Unit.rudderJammed, cas Bismarck 24 mai 1941) :
+  // le navire ne peut plus choisir sa route, seulement sa vitesse — le
+  // tracé envoyé par le client est ignoré, on impose une ligne droite dans
+  // le cap actuel sur tout le budget de la manche.
+  const effectivePath = participant.unit.rudderJammed
+    ? (() => {
+        const budgetNm = speedBudgetNm(params.speedKnots, engagement.roundMinutes);
+        if (budgetNm <= 0) return [];
+        const start = { lat: participant.unit.currentLat, lng: participant.unit.currentLng };
+        return [destinationPoint(start, participant.unit.currentHeadingDeg ?? 0, budgetNm)];
+      })()
+    : params.path;
+
+  if (!participant.unit.rudderJammed && effectivePath.length > 0) {
     const turningRadiusNm =
       (participant.unit.unitClass.turningRadiusM ?? defaultTurningRadiusM(participant.unit.unitClass.category)) / NM_TO_M;
-    const fullPath = [{ lat: participant.unit.currentLat, lng: participant.unit.currentLng }, ...params.path];
+    const fullPath = [{ lat: participant.unit.currentLat, lng: participant.unit.currentLng }, ...effectivePath];
     const budgetNm = speedBudgetNm(params.speedKnots, engagement.roundMinutes);
     const usedNm = pathLengthNm(fullPath) + turnPenaltyNm(fullPath, turningRadiusNm);
     if (usedNm > budgetNm * 1.01) {
@@ -444,10 +481,10 @@ export async function submitTacticalMovementForUnit(params: {
       unitId: params.unitId,
       teamId: params.teamId,
       speedKnots: params.speedKnots,
-      movementPath: params.path,
+      movementPath: effectivePath,
       depthBand: params.depthBand,
     },
-    update: { speedKnots: params.speedKnots, movementPath: params.path, depthBand: params.depthBand },
+    update: { speedKnots: params.speedKnots, movementPath: effectivePath, depthBand: params.depthBand },
   });
 }
 
@@ -535,6 +572,9 @@ export async function submitTacticalFireShot(params: {
     },
   });
   if (alreadyFired) throw new OrderValidationError(`${attacker.name} : cette pièce a déjà tiré cette manche.`);
+  if (attacker.disabledWeaponSlots.includes(params.weaponSlot)) {
+    throw new OrderValidationError(`${attacker.name} : cette pièce est hors service.`);
+  }
 
   // On ne tire que sur ce que son camp a détecté à l'issue du mouvement.
   const contact = await prisma.tacticalContact.findFirst({
@@ -562,6 +602,10 @@ export async function submitTacticalFireShot(params: {
   let outcome: { hitChancePercent: number; hitRoll: number; hit: boolean; hits: number; damagePoints: number } | null = null;
   let calibreMm: number | null = null;
   let wakeVisible = true;
+  // Télépointage endommagé (voir Unit.fireControlDamaged, cas Bismarck 27
+  // mai 1941) : pénalise toute solution de tir au canon ou à la torpille,
+  // pas les grenades ASM (résolues à l'oreille, pas à l'optique).
+  const accuracyMultiplier = attacker.fireControlDamaged ? FIRE_CONTROL_DAMAGED_ACCURACY_MULTIPLIER : 1;
 
   if (params.weaponType === "DEPTH_CHARGE") {
     if (!targetSubmerged) throw new OrderValidationError("Les grenades ASM ne visent qu'un sous-marin immergé.");
@@ -600,6 +644,7 @@ export async function submitTacticalFireShot(params: {
       rangeM,
       relativeBearingDeg: relativeBearing,
       forcedBattery: battery,
+      accuracyMultiplier,
     });
   } else if (params.weaponType === "TORPEDO") {
     if (targetSubmerged) throw new OrderValidationError("Une torpille classique ne touche pas un sous-marin immergé.");
@@ -632,6 +677,7 @@ export async function submitTacticalFireShot(params: {
       targetSpeedKnots: 0,
       angleOfAttackDeg: lineOfFire - (target.currentHeadingDeg ?? 0),
       rangeM,
+      accuracyMultiplier,
     });
     if (outcome && attacker.torpedoesRemaining != null) {
       await prisma.unit.update({
@@ -650,9 +696,35 @@ export async function submitTacticalFireShot(params: {
   // individuelle, même si d'autres tirs simultanés viendront s'y ajouter.
   const targetHealthMax = target.healthMax ?? 1;
   const targetHealthBeforePhase = target.healthCurrent ?? targetHealthMax;
-  const provisionalRemaining = outcome.hit ? Math.max(0, targetHealthBeforePhase - outcome.damagePoints) : targetHealthBeforePhase;
-  const provisionalSunk = provisionalRemaining <= 0;
   const damageRatio = targetHealthMax > 0 ? outcome.damagePoints / targetHealthMax : 0;
+
+  // Dégâts localisés (voir Unit.disabledWeaponSlots &c.) : seulement les
+  // coups au but "solides", et seulement sur un bâtiment de surface (une
+  // tourelle ou un gouvernail n'a pas de sens pour un sous-marin ici).
+  let localizedEffect: LocalizedEffectStored | null = null;
+  if (outcome.hit && (params.weaponType === "GUN" || params.weaponType === "TORPEDO") && target.unitClass.category === "SURFACE_SHIP") {
+    const roll = rollLocalizedDamage({ weaponType: params.weaponType, damageRatio });
+    if (roll.type === "TURRET") {
+      const slot = pickWeaponSlotToDisable(target.unitClass.combatProfile as CombatProfile | null, target.disabledWeaponSlots);
+      if (slot) localizedEffect = { type: "WEAPON_DISABLED", slot };
+    } else if (roll.type === "ENGINE") {
+      localizedEffect = { type: "ENGINE", speedReductionRatio: roll.speedReductionRatio };
+    } else if (roll.type === "RUDDER" && !target.rudderJammed) {
+      localizedEffect = { type: "RUDDER" };
+    } else if (roll.type === "FIRE_CONTROL" && !target.fireControlDamaged) {
+      localizedEffect = { type: "FIRE_CONTROL" };
+    } else if (roll.type === "MAGAZINE") {
+      localizedEffect = { type: "MAGAZINE" };
+    }
+  }
+
+  // Un coup dans un magasin est catastrophique et quasi instantané (cas
+  // Hood) : on porte les dégâts de CE tir à l'exact potentiel restant de la
+  // cible plutôt qu'un multiple arbitraire, pour qu'il la coule pile sans
+  // fausser les statistiques de dégâts affichées.
+  const finalDamagePoints = localizedEffect?.type === "MAGAZINE" ? targetHealthBeforePhase : outcome.damagePoints;
+  const provisionalRemaining = outcome.hit ? Math.max(0, targetHealthBeforePhase - finalDamagePoints) : targetHealthBeforePhase;
+  const provisionalSunk = provisionalRemaining <= 0;
 
   const isNight = isNightWeather(
     engagement.turn.weather
@@ -666,17 +738,20 @@ export async function submitTacticalFireShot(params: {
   );
   const reveal = assessFiringReveal({ weaponType: params.weaponType, calibreMm, torpedoWakeVisible: wakeVisible, isNight });
 
-  const narrative = describeShot({
-    attackerName: attacker.name,
-    targetName: target.name,
-    weaponType: params.weaponType,
-    hit: outcome.hit,
-    hits: outcome.hits,
-    damagePoints: outcome.damagePoints,
-    damageRatio,
-    targetSunk: provisionalSunk,
-    rangeNm: rangeM / NM_TO_M,
-  });
+  const narrative =
+    localizedEffect?.type === "MAGAZINE"
+      ? describeMagazineHit(attacker.name, target.name)
+      : describeShot({
+          attackerName: attacker.name,
+          targetName: target.name,
+          weaponType: params.weaponType,
+          hit: outcome.hit,
+          hits: outcome.hits,
+          damagePoints: finalDamagePoints,
+          damageRatio,
+          targetSunk: provisionalSunk,
+          rangeNm: rangeM / NM_TO_M,
+        }) + (localizedEffect ? " " + describeLocalizedEffect(localizedEffect, target.name) : "");
 
   try {
     await prisma.tacticalAction.create({
@@ -693,10 +768,11 @@ export async function submitTacticalFireShot(params: {
         resolved: true,
         hit: outcome.hit,
         hits: outcome.hits,
-        damagePoints: outcome.damagePoints,
+        damagePoints: finalDamagePoints,
         targetSunk: provisionalSunk,
         hitChancePercent: outcome.hitChancePercent,
         hitRoll: outcome.hitRoll,
+        localizedEffect: localizedEffect ?? undefined,
         narrative,
         revealedShooter: reveal.revealRadiusNm > 0,
         applied: false,
@@ -716,7 +792,7 @@ export async function submitTacticalFireShot(params: {
   return {
     hit: outcome.hit,
     hits: outcome.hits,
-    damagePoints: outcome.damagePoints,
+    damagePoints: finalDamagePoints,
     hitChancePercent: outcome.hitChancePercent,
     hitRoll: outcome.hitRoll,
     narrative,
@@ -844,21 +920,57 @@ export async function resolveFirePhase(engagementId: string) {
   });
 
   const damageByTarget = new Map<string, number>();
+  const localizedByTarget = new Map<string, LocalizedEffectStored[]>();
   for (const shot of shots) {
-    if (!shot.hit || !shot.targetUnitId || !shot.damagePoints) continue;
-    damageByTarget.set(shot.targetUnitId, (damageByTarget.get(shot.targetUnitId) ?? 0) + shot.damagePoints);
+    if (!shot.hit || !shot.targetUnitId) continue;
+    if (shot.damagePoints) damageByTarget.set(shot.targetUnitId, (damageByTarget.get(shot.targetUnitId) ?? 0) + shot.damagePoints);
+    if (shot.localizedEffect) {
+      const arr = localizedByTarget.get(shot.targetUnitId) ?? [];
+      arr.push(shot.localizedEffect as unknown as LocalizedEffectStored);
+      localizedByTarget.set(shot.targetUnitId, arr);
+    }
   }
 
-  if (damageByTarget.size > 0) {
-    const targets = await prisma.unit.findMany({ where: { id: { in: Array.from(damageByTarget.keys()) } } });
+  const affectedTargetIds = new Set([...damageByTarget.keys(), ...localizedByTarget.keys()]);
+  if (affectedTargetIds.size > 0) {
+    const targets = await prisma.unit.findMany({ where: { id: { in: Array.from(affectedTargetIds) } }, include: { unitClass: true } });
     for (const target of targets) {
       const totalDamage = damageByTarget.get(target.id) ?? 0;
       const max = target.healthMax ?? 1;
       const current = target.healthCurrent ?? max;
       const next = Math.max(0, current - totalDamage);
+
+      // Dégâts localisés cumulés de la manche (voir submitTacticalFireShot) :
+      // un même navire peut encaisser plusieurs coups distincts la même
+      // manche, chacun ayant proposé son propre effet indépendamment des
+      // autres (aucun ne sait encore, au moment du tir, ce que les tirs
+      // simultanés ont déjà décidé) — on les cumule ici, dédupliqués par pièce.
+      const effects = localizedByTarget.get(target.id) ?? [];
+      const disabledSlots = new Set(target.disabledWeaponSlots);
+      let speedCap = target.speedCapKnots;
+      let rudderJammed = target.rudderJammed;
+      let fireControlDamaged = target.fireControlDamaged;
+      for (const eff of effects) {
+        if (eff.type === "WEAPON_DISABLED") disabledSlots.add(eff.slot);
+        else if (eff.type === "ENGINE") {
+          const currentEffectiveMax = speedCap ?? target.unitClass.maxSpeedKnots;
+          const reduced = Math.max(MIN_SPEED_CAP_KNOTS, currentEffectiveMax * (1 - eff.speedReductionRatio));
+          speedCap = speedCap == null ? reduced : Math.min(speedCap, reduced);
+        } else if (eff.type === "RUDDER") rudderJammed = true;
+        else if (eff.type === "FIRE_CONTROL") fireControlDamaged = true;
+        // MAGAZINE : déjà reflété dans damagePoints (voir submitTacticalFireShot), rien de plus à appliquer ici.
+      }
+
       await prisma.unit.update({
         where: { id: target.id },
-        data: { healthCurrent: next, status: next <= 0 ? "SUNK" : next < max * 0.6 ? "DAMAGED" : "ACTIVE" },
+        data: {
+          healthCurrent: next,
+          status: next <= 0 ? "SUNK" : next < max * 0.6 ? "DAMAGED" : "ACTIVE",
+          disabledWeaponSlots: Array.from(disabledSlots),
+          speedCapKnots: speedCap,
+          rudderJammed,
+          fireControlDamaged,
+        },
       });
     }
   }
