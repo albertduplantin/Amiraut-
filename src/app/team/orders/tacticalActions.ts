@@ -24,32 +24,34 @@ async function assertOwnsUnits(teamId: string, unitIds: string[]) {
   if (count !== unitIds.length) throw new AccessDeniedError("Une de ces unités ne vous appartient pas.");
 }
 
-/** Enregistre le mouvement d'UN navire (voir tacticalEngine.submitTacticalMovementForUnit) : rappelable plusieurs fois, y compris pour changer d'avis, tant que la phase n'est pas terminée. */
+/**
+ * Enregistre le mouvement d'UN navire (voir tacticalEngine.submitTacticalMovementForUnit) :
+ * rappelable plusieurs fois, y compris pour changer d'avis, tant que la phase n'est pas
+ * terminée. Pas de vitesse en paramètre : elle est déduite de la longueur du trajet.
+ */
 export async function submitMovementForUnitAction(params: {
   engagementId: string;
   unitId: string;
-  speedKnots: number;
   path: LatLng[];
   depthBand?: DepthBand;
-}): Promise<TacticalActionResult> {
+}): Promise<TacticalActionResult & { speedKnots?: number }> {
   const session = await getSession();
   try {
     assertPlayer(session);
     await assertOwnsUnits(session.teamId, [params.unitId]);
-    await submitTacticalMovementForUnit({
+    const result = await submitTacticalMovementForUnit({
       engagementId: params.engagementId,
       teamId: session.teamId,
       unitId: params.unitId,
-      speedKnots: params.speedKnots,
       path: params.path,
       depthBand: params.depthBand,
     });
+    revalidatePath("/team/orders");
+    return { ok: true, speedKnots: result.speedKnots };
   } catch (error) {
     if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
     throw error;
   }
-  revalidatePath("/team/orders");
-  return { ok: true };
 }
 
 /** Le camp annonce qu'il a fini de positionner ses navires cette manche ; un navire jamais repositionné garde sa position. */

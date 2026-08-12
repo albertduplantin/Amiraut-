@@ -31,6 +31,40 @@ export const DEFAULT_LENGTH_METERS: Record<SilhouetteKey, number> = {
   aircraft: 12,
 };
 
+/**
+ * Manœuvre (mode tactique) — replis par TYPE de navire (pas par classe
+ * individuelle), utilisés seulement si UnitClass.turningRadiusM/
+ * accelerationKnotsPerMin ne sont pas renseignés : un futur navire ajouté
+ * au jeu (mode "ajouter un navire") hérite d'une valeur plausible pour sa
+ * silhouette sans recherche dédiée par classe.
+ *
+ * Valeurs agrégées à partir des classes déjà documentées individuellement
+ * dans prisma/seed.ts (avec sources) : les destroyers/croiseurs légers
+ * tournent et accélèrent nettement plus vite qu'un cuirassé (chaudières
+ * proportionnellement plus puissantes pour leur déplacement, gouvernail
+ * plus réactif) ; un cargo civil est le plus lent et le moins manœuvrant
+ * des deux ; un sous-marin en surface a un diamètre tactique très serré
+ * (double gouvernail, ex: U-Boot type VII ~150m) mais une accélération de
+ * cuirassé (moteurs diesel/électriques bien plus modestes qu'une
+ * turbine à vapeur de grand bâtiment de surface).
+ */
+export const DEFAULT_TURNING_RADIUS_M: Record<SilhouetteKey, number> = {
+  cargo: 450,
+  destroyer: 300,
+  cruiser: 310,
+  battleship: 290,
+  submarine: 180,
+  aircraft: 120,
+};
+export const DEFAULT_ACCELERATION_KNOTS_PER_MIN: Record<SilhouetteKey, number> = {
+  cargo: 1,
+  destroyer: 4.5,
+  cruiser: 3.75,
+  battleship: 2.5,
+  submarine: 3,
+  aircraft: 8,
+};
+
 export function classifySilhouette(category: string, className: string): SilhouetteKey {
   if (category === "SUBMARINE") return "submarine";
   if (category === "AIRCRAFT") return "aircraft";
@@ -75,24 +109,36 @@ export type UnitVisualStatus = "ACTIVE" | "DAMAGED" | "SUNK";
 
 let smokeIdCounter = 0;
 
+/** Interpole entre deux couleurs hex ("#rrggbb") — `t` 0 = `a`, 1 = `b`. */
+function lerpColorHex(a: string, b: string, t: number): string {
+  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  const mix = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
+  return `#${mix.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /**
  * Panache de fumée superposé au-dessus de la silhouette (position absolue,
  * hors flux : ne modifie donc pas la boîte englobante que MapLibre utilise
- * pour ancrer le marqueur sur ses coordonnées réelles). `dense` = navire
- * coulé (fumée noire épaisse), sinon navire endommagé (fumée plus légère).
+ * pour ancrer le marqueur sur ses coordonnées réelles). `intensity` (0-1)
+ * gradue le panache selon l'ampleur des dégâts plutôt qu'un simple
+ * "endommagé/coulé" binaire : à peine visible juste après le seuil de
+ * déclenchement, noir et épais à l'approche du naufrage (intensity → 1).
  *
  * Rendu par dégradés radiaux + flou gaussien (plutôt que des ronds nets) pour
  * un aspect vaporeux : la base du panache est sombre et dense, il s'éclaircit
  * et se disperse en montant, comme un vrai panache de fumée.
  */
-function buildSmokeOverlay(heightPx: number, dense: boolean): string {
+function buildSmokeOverlay(heightPx: number, intensity: number): string {
+  const t = Math.max(0, Math.min(1, intensity));
   const scale = heightPx / 42;
   const w = Math.round(30 * scale);
   const h = Math.round(38 * scale);
   const id = `smoke${smokeIdCounter++}`;
-  const baseColor = dense ? "#151b26" : "#94a3b8";
-  const lightColor = dense ? "#57657a" : "#e2e8f0";
-  const opacity = dense ? 0.88 : 0.55;
+  const baseColor = lerpColorHex("#94a3b8", "#151b26", t);
+  const lightColor = lerpColorHex("#e2e8f0", "#57657a", t);
+  const opacity = 0.4 + t * 0.5;
+  const riseSeconds = 7 - t * 2; // un panache plus dense se disperse un peu plus lentement.
 
   return `
     <svg width="${w}" height="${h}" viewBox="0 0 30 38" style="position:absolute;left:50%;top:0;transform:translate(-50%,-90%);pointer-events:none;overflow:visible;">
@@ -109,7 +155,7 @@ function buildSmokeOverlay(heightPx: number, dense: boolean): string {
           <stop offset="100%" stop-color="${lightColor}" stop-opacity="0" />
         </radialGradient>
       </defs>
-      <g class="smoke-plume" filter="url(#${id}b)" style="animation: smoke-rise ${dense ? 5 : 6.5}s ease-in-out infinite; transform-origin: 15px 30px;">
+      <g class="smoke-plume" filter="url(#${id}b)" style="animation: smoke-rise ${riseSeconds}s ease-in-out infinite; transform-origin: 15px 30px;">
         <ellipse cx="15" cy="31" rx="7" ry="6" fill="url(#${id}g1)" />
         <ellipse cx="10.5" cy="22" rx="6" ry="5.2" fill="url(#${id}g1)" />
         <ellipse cx="19.5" cy="18" rx="5.4" ry="4.8" fill="url(#${id}g1)" />
@@ -179,11 +225,22 @@ export function buildSilhouetteElement(params: {
   referenceSpeedKnots?: number;
   /** Cap/vitesse estimés plutôt que certains (contact ennemi) : vecteur en pointillés, plus pâle. */
   vectorEstimated?: boolean;
+  /** Part du potentiel max déjà perdue (0-1) : gradue l'intensité du panache de fumée — voir buildSmokeOverlay. Absent/0 = pas de fumée (sauf coulé). */
+  damageRatio?: number;
 }): HTMLDivElement {
   const heightPx = params.heightPx ?? 42;
   const widthPx = Math.round((heightPx * 24) / 48);
   const isSunk = params.status === "SUNK";
-  const isDamaged = params.status === "DAMAGED";
+  // En dessous de ce seuil, une éraflure ne fume pas — au-delà, l'intensité
+  // du panache grossit avec les dégâts jusqu'à un panache noir et épais à
+  // l'approche du naufrage (coulé = toujours au maximum).
+  const SMOKE_THRESHOLD = 0.12;
+  const damageRatio = Math.max(0, Math.min(1, params.damageRatio ?? 0));
+  const smokeIntensity = isSunk
+    ? 1
+    : damageRatio > SMOKE_THRESHOLD
+      ? 0.25 + ((damageRatio - SMOKE_THRESHOLD) / (1 - SMOKE_THRESHOLD)) * 0.6
+      : 0;
   // Épave : coque grisée/assombrie (plus la couleur d'équipe, qui n'a plus de
   // sens pour un navire hors de combat) et croix rouge marquant la perte.
   const hullColor = isSunk ? "#475569" : params.color;
@@ -214,7 +271,7 @@ export function buildSilhouetteElement(params: {
           )}</span>`
         : ""
     }
-    ${isSunk || isDamaged ? buildSmokeOverlay(heightPx, isSunk) : ""}
+    ${smokeIntensity > 0 ? buildSmokeOverlay(heightPx, smokeIntensity) : ""}
     ${
       !isSunk && params.speedKnots
         ? buildVectorOverlay(heightPx, params.speedKnots / (params.referenceSpeedKnots || params.speedKnots || 1), params.color, params.vectorEstimated ?? false)

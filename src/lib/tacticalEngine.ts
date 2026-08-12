@@ -24,6 +24,7 @@ import {
   type LocalizedEffectStored,
 } from "@/lib/tacticalNarrative";
 import { OrderValidationError, currentOpenTurn, switchTurnToTacticalScale } from "@/lib/turnEngine";
+import { classifySilhouette, DEFAULT_TURNING_RADIUS_M, DEFAULT_ACCELERATION_KNOTS_PER_MIN } from "@/lib/shipSilhouettes";
 import type { DepthBand, SensorType, WeaponType } from "@/generated/prisma/client";
 import { Prisma } from "@/generated/prisma/client";
 
@@ -61,16 +62,18 @@ function isNightWeather(w: WeatherConditions | null): boolean {
 
 // ── Manœuvre : rayon de virage et accélération ──────────────
 //
-// Repli par catégorie si une classe de navire n'a pas encore ces champs
-// renseignés (ex: ajoutée avant leur introduction, ou nouvelle classe pas
-// encore documentée) — voir prisma/seed.ts pour la méthodologie de
-// recherche et les valeurs par classe.
-export function defaultTurningRadiusM(category: string): number {
-  return category === "SUBMARINE" ? 200 : 320;
+// Repli par TYPE de navire (destroyer/croiseur/cuirassé/sous-marin/cargo,
+// déduit du nom de la classe comme pour les silhouettes) si une classe n'a
+// pas encore ces champs renseignés individuellement — typiquement une
+// nouvelle classe ajoutée sans recherche dédiée. Voir
+// shipSilhouettes.ts (DEFAULT_TURNING_RADIUS_M/DEFAULT_ACCELERATION_KNOTS_PER_MIN)
+// pour les valeurs et leur méthodologie, et prisma/seed.ts pour le détail
+// par classe individuelle quand il existe.
+export function defaultTurningRadiusM(category: string, className: string): number {
+  return DEFAULT_TURNING_RADIUS_M[classifySilhouette(category, className)];
 }
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- catégorie gardée dans la signature pour permettre une différenciation future sans casser les appelants.
-export function defaultAccelerationKnotsPerMin(category: string): number {
-  return 3;
+export function defaultAccelerationKnotsPerMin(category: string, className: string): number {
+  return DEFAULT_ACCELERATION_KNOTS_PER_MIN[classifySilhouette(category, className)];
 }
 
 /**
@@ -399,11 +402,45 @@ export async function recomputeContacts(engagementId: string, roundNumber: numbe
  * différents, dans l'ordre qu'il veut, tant que `finishMovementPhase` n'a
  * pas été appelé.
  */
+/**
+ * Vitesse min/max qu'une unité peut effectivement atteindre CETTE manche,
+ * compte tenu de sa vitesse précédente et de son accélération/décélération
+ * maximale (jamais instantanée) — partagé entre la validation serveur et
+ * l'affichage client (voir page.tsx), pour que les deux s'accordent
+ * toujours sur les mêmes bornes.
+ */
+export function reachableSpeedRange(params: {
+  lastSpeedKnots: number;
+  accelKnotsPerMin: number;
+  roundMinutes: number;
+  effectiveMaxSpeedKnots: number;
+}): { minReachable: number; maxReachable: number } {
+  const maxDelta = params.accelKnotsPerMin * params.roundMinutes;
+  return {
+    minReachable: Math.max(0, params.lastSpeedKnots - maxDelta),
+    maxReachable: Math.min(params.effectiveMaxSpeedKnots, params.lastSpeedKnots + maxDelta),
+  };
+}
+
+/**
+ * Enregistre (ou met à jour) le mouvement d'UN navire pour la manche en
+ * cours — sans marquer l'équipe comme prête : peut être rappelé plusieurs
+ * fois pour le même navire (le joueur change d'avis) ou pour des navires
+ * différents, dans l'ordre qu'il veut, tant que `finishMovementPhase` n'a
+ * pas été appelé.
+ *
+ * Pas de vitesse choisie séparément (retour joueur : un curseur de vitesse
+ * est redondant avec le tracé) — la vitesse est DÉDUITE de la longueur du
+ * trajet dessiné (distance ÷ durée de la manche), et doit tomber dans la
+ * fourchette atteignable compte tenu de l'accélération ET de la
+ * décélération maximales (aucune des deux n'est instantanée) : un trajet
+ * trop court est refusé exactement comme un trajet trop long, plutôt que
+ * d'être silencieusement corrigé à la place du joueur.
+ */
 export async function submitTacticalMovementForUnit(params: {
   engagementId: string;
   teamId: string;
   unitId: string;
-  speedKnots: number;
   path: LatLng[];
   depthBand?: DepthBand;
 }) {
@@ -425,52 +462,55 @@ export async function submitTacticalMovementForUnit(params: {
       ? Math.min(participant.unit.unitClass.maxSpeedKnots, participant.unit.speedCapKnots)
       : participant.unit.unitClass.maxSpeedKnots;
 
-  if (params.speedKnots < 0 || params.speedKnots > effectiveMaxSpeedKnots) {
-    throw new OrderValidationError(
-      `${participant.unit.name} : vitesse ${params.speedKnots} nds hors limites (max ${effectiveMaxSpeedKnots.toFixed(0)}${
-        participant.unit.speedCapKnots != null ? ", réduit par avarie" : ""
-      }).`
-    );
-  }
-
-  // Accélération : la vitesse ne peut changer que d'un écart plafonné par
-  // manche (recherche historique, voir prisma/seed.ts) — un cuirassé ne
-  // passe pas de 10 à 28 nds en 5 minutes.
-  const accelKnotsPerMin = participant.unit.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(participant.unit.unitClass.category);
+  // Accélération/décélération : la vitesse ne peut changer que d'un écart
+  // plafonné par manche (recherche historique, voir prisma/seed.ts) — un
+  // cuirassé ne passe pas de 10 à 28 nds en 5 minutes, et inversement ne
+  // s'arrête pas net non plus.
+  const accelKnotsPerMin =
+    participant.unit.unitClass.accelerationKnotsPerMin ??
+    defaultAccelerationKnotsPerMin(participant.unit.unitClass.category, participant.unit.unitClass.name);
   const lastSpeed = lastSpeedByUnit.get(params.unitId) ?? 0;
-  const maxDelta = accelKnotsPerMin * engagement.roundMinutes;
-  const minReachable = Math.max(0, lastSpeed - maxDelta);
-  const maxReachable = Math.min(effectiveMaxSpeedKnots, lastSpeed + maxDelta);
-  if (params.speedKnots < minReachable - 0.01 || params.speedKnots > maxReachable + 0.01) {
-    throw new OrderValidationError(
-      `${participant.unit.name} : ne peut pas passer de ${lastSpeed.toFixed(0)} à ${params.speedKnots.toFixed(0)} nds en ${engagement.roundMinutes.toFixed(1)}min (accélération max ${accelKnotsPerMin.toFixed(1)}nds/min, atteignable entre ${minReachable.toFixed(0)} et ${maxReachable.toFixed(0)}nds).`
-    );
-  }
+  const { minReachable, maxReachable } = reachableSpeedRange({
+    lastSpeedKnots: lastSpeed,
+    accelKnotsPerMin,
+    roundMinutes: engagement.roundMinutes,
+    effectiveMaxSpeedKnots,
+  });
 
-  // Gouvernail bloqué (voir Unit.rudderJammed, cas Bismarck 24 mai 1941) :
-  // le navire ne peut plus choisir sa route, seulement sa vitesse — le
-  // tracé envoyé par le client est ignoré, on impose une ligne droite dans
-  // le cap actuel sur tout le budget de la manche.
-  const effectivePath = participant.unit.rudderJammed
-    ? (() => {
-        const budgetNm = speedBudgetNm(params.speedKnots, engagement.roundMinutes);
-        if (budgetNm <= 0) return [];
-        const start = { lat: participant.unit.currentLat, lng: participant.unit.currentLng };
-        return [destinationPoint(start, participant.unit.currentHeadingDeg ?? 0, budgetNm)];
-      })()
-    : params.path;
+  const turningRadiusNm =
+    (participant.unit.unitClass.turningRadiusM ?? defaultTurningRadiusM(participant.unit.unitClass.category, participant.unit.unitClass.name)) /
+    NM_TO_M;
+  const start = { lat: participant.unit.currentLat, lng: participant.unit.currentLng };
 
-  if (!participant.unit.rudderJammed && effectivePath.length > 0) {
-    const turningRadiusNm =
-      (participant.unit.unitClass.turningRadiusM ?? defaultTurningRadiusM(participant.unit.unitClass.category)) / NM_TO_M;
-    const fullPath = [{ lat: participant.unit.currentLat, lng: participant.unit.currentLng }, ...effectivePath];
-    const budgetNm = speedBudgetNm(params.speedKnots, engagement.roundMinutes);
+  let effectivePath: LatLng[];
+  let impliedSpeedKnots: number;
+
+  if (participant.unit.rudderJammed) {
+    // Gouvernail bloqué (voir Unit.rudderJammed, cas Bismarck 24 mai 1941) :
+    // le navire ne peut plus choisir sa route, seulement sa vitesse — le cap
+    // du trajet envoyé par le client est ignoré, on ne garde que sa distance
+    // totale (jusqu'où le joueur a voulu pousser les machines), imposée en
+    // ligne droite dans le cap actuel. Faute de pouvoir gouverner, on
+    // simplifie en supposant qu'il pousse à pleine vitesse disponible.
+    impliedSpeedKnots = maxReachable;
+    const budgetNm = speedBudgetNm(impliedSpeedKnots, engagement.roundMinutes);
+    effectivePath = budgetNm > 0 ? [destinationPoint(start, participant.unit.currentHeadingDeg ?? 0, budgetNm)] : [];
+  } else {
+    const fullPath = [start, ...params.path];
     const usedNm = pathLengthNm(fullPath) + turnPenaltyNm(fullPath, turningRadiusNm);
-    if (usedNm > budgetNm * 1.01) {
+    impliedSpeedKnots = usedNm / (engagement.roundMinutes / 60);
+    if (impliedSpeedKnots > maxReachable + 0.05) {
       throw new OrderValidationError(
-        `${participant.unit.name} : tracé de ${usedNm.toFixed(2)}nm (dont manœuvre), budget ${budgetNm.toFixed(2)}nm à ${params.speedKnots}nds sur ${engagement.roundMinutes.toFixed(1)}min.`
+        `${participant.unit.name} : trajet de ${usedNm.toFixed(2)}nm impliquant ${impliedSpeedKnots.toFixed(0)}nds, trop rapide (accélération max ${accelKnotsPerMin.toFixed(1)}nds/min depuis ${lastSpeed.toFixed(0)}nds, max atteignable ${maxReachable.toFixed(0)}nds ce tour-ci).`
       );
     }
+    if (impliedSpeedKnots < minReachable - 0.05) {
+      const minNm = speedBudgetNm(minReachable, engagement.roundMinutes);
+      throw new OrderValidationError(
+        `${participant.unit.name} : trajet de ${usedNm.toFixed(2)}nm trop court — ce navire ne peut pas ralentir en dessous de ${minReachable.toFixed(0)}nds ce tour-ci (décélération max ${accelKnotsPerMin.toFixed(1)}nds/min depuis ${lastSpeed.toFixed(0)}nds), il doit parcourir au moins ${minNm.toFixed(2)}nm.`
+      );
+    }
+    effectivePath = params.path;
   }
 
   await prisma.tacticalAction.upsert({
@@ -489,12 +529,14 @@ export async function submitTacticalMovementForUnit(params: {
       phase: "MOVEMENT",
       unitId: params.unitId,
       teamId: params.teamId,
-      speedKnots: params.speedKnots,
+      speedKnots: impliedSpeedKnots,
       movementPath: effectivePath,
       depthBand: params.depthBand,
     },
-    update: { speedKnots: params.speedKnots, movementPath: effectivePath, depthBand: params.depthBand },
+    update: { speedKnots: impliedSpeedKnots, movementPath: effectivePath, depthBand: params.depthBand },
   });
+
+  return { speedKnots: impliedSpeedKnots };
 }
 
 /**
@@ -884,7 +926,7 @@ async function maybeResolvePhase(engagementId: string) {
 export async function resolveMovementPhase(engagementId: string) {
   const engagement = await prisma.tacticalEngagement.findUniqueOrThrow({
     where: { id: engagementId },
-    include: { participants: { include: { unit: true } } },
+    include: { participants: { include: { unit: { include: { unitClass: true } } } } },
   });
 
   const moves = await prisma.tacticalAction.findMany({
@@ -892,10 +934,36 @@ export async function resolveMovementPhase(engagementId: string) {
   });
   const moveByUnit = new Map(moves.map((m) => [m.unitId, m]));
 
+  // Navires sans ordre cette manche : la décélération n'étant pas
+  // instantanée, un navire lancé ne peut pas s'arrêter net juste parce
+  // qu'il a été oublié — il continue sur son erre, au cap connu, à sa
+  // vitesse minimale atteignable (0 s'il n'allait déjà pas vite).
+  const untouchedUnitIds = engagement.participants.filter((p) => p.unit.status !== "SUNK" && !moveByUnit.has(p.unitId)).map((p) => p.unitId);
+  const lastSpeedByUnit = await getLastKnownSpeedsByUnit(engagementId, untouchedUnitIds, engagement.roundNumber);
+
   for (const p of engagement.participants) {
     if (p.unit.status === "SUNK") continue;
     const move = moveByUnit.get(p.unitId);
-    if (!move) continue; // sans ordre : maintient sa position
+
+    if (!move) {
+      const lastSpeed = lastSpeedByUnit.get(p.unitId) ?? 0;
+      if (lastSpeed <= 0) continue; // n'allait déjà pas vite : garde sa position, comme avant.
+      const effectiveMaxSpeedKnots =
+        p.unit.speedCapKnots != null ? Math.min(p.unit.unitClass.maxSpeedKnots, p.unit.speedCapKnots) : p.unit.unitClass.maxSpeedKnots;
+      const accelKnotsPerMin =
+        p.unit.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(p.unit.unitClass.category, p.unit.unitClass.name);
+      const { minReachable } = reachableSpeedRange({
+        lastSpeedKnots: lastSpeed,
+        accelKnotsPerMin,
+        roundMinutes: engagement.roundMinutes,
+        effectiveMaxSpeedKnots,
+      });
+      if (minReachable <= 0) continue;
+      const coastNm = speedBudgetNm(minReachable, engagement.roundMinutes);
+      const dest = destinationPoint({ lat: p.unit.currentLat, lng: p.unit.currentLng }, p.unit.currentHeadingDeg ?? 0, coastNm);
+      await prisma.unit.update({ where: { id: p.unitId }, data: { currentLat: dest.lat, currentLng: dest.lng } });
+      continue;
+    }
 
     const path = Array.isArray(move.movementPath) ? (move.movementPath as unknown as LatLng[]) : [];
     if (path.length > 0) {

@@ -59,6 +59,8 @@ export type ShipMarkerConfig = {
   referenceSpeedKnots?: number;
   /** Cap/vitesse estimés (contact ennemi, pas une donnée certaine) : vecteur en pointillés, plus pâle. */
   vectorEstimated?: boolean;
+  /** Part du potentiel max déjà perdue (0-1) : gradue l'intensité du panache de fumée. Absent/0 = pas de fumée (sauf coulé). */
+  damageRatio?: number;
 };
 
 type GameMapProps = {
@@ -363,7 +365,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     }
 
     for (const config of incoming) {
-      const signature = `${config.silhouette}|${config.color}|${config.label ?? ""}|${config.status ?? ""}|${Math.round((config.speedKnots ?? 0) * 2)}|${config.vectorEstimated ?? false}`;
+      const signature = `${config.silhouette}|${config.color}|${config.label ?? ""}|${config.status ?? ""}|${Math.round((config.speedKnots ?? 0) * 2)}|${config.vectorEstimated ?? false}|${Math.round((config.damageRatio ?? 0) * 20)}`;
       const current = existing.get(config.id);
       if (!current) {
         const el = buildSilhouetteElement(config);

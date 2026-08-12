@@ -132,7 +132,8 @@ type MovementAction = { unitId: string; speedKnots: number | null; movementPath:
 
 type BattleMessage = { id: string; kind: string; authorName: string; body: string; roundNumber: number };
 
-type MovementDraft = { speedKnots: number; path: LatLng[] };
+/** Pas de vitesse dans le brouillon : elle est déduite de la longueur du trajet, pas choisie séparément. */
+type MovementDraft = { path: LatLng[] };
 
 const ASSUMED_TARGET_SPEED_RATIO = 0.7;
 const TORPEDO_SLOT = "torpedo";
@@ -151,12 +152,9 @@ function activeWeaponSlotsForShip(ship: OwnUnit): string[] {
   return weaponSlotsForShip(ship).filter((s) => !ship.disabledWeaponSlots.includes(s));
 }
 
-/** Brouillon initial d'un navire : reprend ce qu'il a déjà validé cette manche (rechargement de page en cours de phase) si présent, sinon sa dernière vitesse connue et aucun trajet. */
-function initialDraftFor(ship: OwnUnit, savedThisRound: MovementAction | undefined): MovementDraft {
-  if (savedThisRound) {
-    return { speedKnots: savedThisRound.speedKnots ?? ship.lastSpeedKnots, path: savedThisRound.movementPath ?? [] };
-  }
-  return { speedKnots: ship.lastSpeedKnots, path: [] };
+/** Brouillon initial d'un navire : reprend le trajet déjà validé cette manche (rechargement de page en cours de phase) si présent, sinon aucun trajet. */
+function initialDraftFor(savedThisRound: MovementAction | undefined): MovementDraft {
+  return { path: savedThisRound?.movementPath ?? [] };
 }
 
 export function TacticalView(props: {
@@ -228,7 +226,7 @@ export function TacticalView(props: {
 
   const [movementDrafts, setMovementDrafts] = useState<Record<string, MovementDraft>>(() => {
     const init: Record<string, MovementDraft> = {};
-    for (const u of props.ownUnits) init[u.id] = initialDraftFor(u, savedMovementByUnit[u.id]);
+    for (const u of props.ownUnits) init[u.id] = initialDraftFor(savedMovementByUnit[u.id]);
     return init;
   });
 
@@ -246,7 +244,7 @@ export function TacticalView(props: {
     setFreshSavedUnitIds(new Set());
     setMovementDrafts(() => {
       const init: Record<string, MovementDraft> = {};
-      for (const u of props.ownUnits) init[u.id] = initialDraftFor(u, savedMovementByUnit[u.id]);
+      for (const u of props.ownUnits) init[u.id] = initialDraftFor(savedMovementByUnit[u.id]);
       return init;
     });
   }
@@ -322,29 +320,22 @@ export function TacticalView(props: {
 
   // Budget de distance : la longueur du trajet PLUS la pénalité de virage
   // (arc de cercle équivalent au rayon de virage réel du navire — voir
-  // geo.ts) compte contre le budget de la manche.
-  const budgetNm = selectedShip && draft ? speedBudgetNm(draft.speedKnots, props.roundMinutes) : 0;
+  // geo.ts) DÉTERMINE la vitesse (pas l'inverse) : pas de curseur, la
+  // vitesse est déduite de ce que le joueur trace. Doit tomber entre
+  // minBudgetNm et maxBudgetNm (accélération ET décélération plafonnées,
+  // aucune des deux n'est instantanée).
+  const minBudgetNm = selectedShip ? speedBudgetNm(minSpeed, props.roundMinutes) : 0;
+  const maxBudgetNm = selectedShip ? speedBudgetNm(maxSpeed, props.roundMinutes) : 0;
   const fullPath = selectedShip && draft ? [{ lat: selectedShip.currentLat, lng: selectedShip.currentLng }, ...draft.path] : [];
   const straightNm = selectedShip && draft ? pathLengthNm(fullPath) : 0;
   const turnNm = selectedShip && draft ? turnPenaltyNm(fullPath, selectedShip.turningRadiusM / NM_TO_M) : 0;
   const usedNm = straightNm + turnNm;
-  const remainingNm = Math.max(0, budgetNm - usedNm);
-  const lastPoint = useMemo(
-    () =>
-      selectedShip && draft
-        ? (draft.path[draft.path.length - 1] ?? { lat: selectedShip.currentLat, lng: selectedShip.currentLng })
-        : null,
-    [selectedShip, draft]
-  );
-
-  function updateDraftSpeed(speedKnots: number) {
-    if (!selectedShip) return;
-    setMovementDrafts((prev) => {
-      const budget = speedBudgetNm(speedKnots, props.roundMinutes);
-      const clamped = clampPathToBudget([{ lat: selectedShip.currentLat, lng: selectedShip.currentLng }, ...prev[selectedShip.id].path], budget);
-      return { ...prev, [selectedShip.id]: { speedKnots, path: clamped.slice(1) } };
-    });
-  }
+  const impliedSpeedKnots = usedNm / (props.roundMinutes / 60);
+  // Gouvernail bloqué : cap et vitesse forcés côté serveur (pleine vitesse
+  // disponible) — rien à valider côté client, il n'y a plus de trajet à juger.
+  const isPathValid = selectedShip?.rudderJammed || (impliedSpeedKnots >= minSpeed - 0.05 && impliedSpeedKnots <= maxSpeed + 0.05);
+  const remainingNm = Math.max(0, maxBudgetNm - usedNm);
+  const shortfallNm = Math.max(0, minBudgetNm - usedNm);
 
   function clearDraftPath() {
     if (!selectedShip) return;
@@ -354,13 +345,15 @@ export function TacticalView(props: {
   function handleMapClick(pos: LatLng) {
     if (!isMovementPhase || !selectedShip || !draft) return;
     if (selectedShip.rudderJammed) {
-      setError("Gouvernail bloqué : la trajectoire ne peut plus être modifiée, seule la vitesse est réglable.");
+      setError("Gouvernail bloqué : le navire poursuit tout droit à pleine vitesse disponible, rien à tracer.");
       return;
     }
     const start = { lat: selectedShip.currentLat, lng: selectedShip.currentLng };
     const previous = draft.path[draft.path.length - 1] ?? start;
-    const budget = speedBudgetNm(draft.speedKnots, props.roundMinutes);
-    const clamped = clampPathToBudget([start, ...draft.path, pos], budget);
+    // Cadenassé à la distance maximale atteignable cette manche (le trait ne
+    // peut de toute façon pas impliquer plus vite que ça) — pas de budget
+    // choisi séparément puisque la vitesse est déduite du trait lui-même.
+    const clamped = clampPathToBudget([start, ...draft.path, pos], maxBudgetNm);
     const newPoint = clamped[clamped.length - 1];
     if (gameMapRef.current && !gameMapRef.current.isWaterSegment(previous, newPoint)) {
       setError("Trajet impossible : il traverserait la terre.");
@@ -397,7 +390,6 @@ export function TacticalView(props: {
       const result = await submitMovementForUnitAction({
         engagementId: props.engagementId,
         unitId: shipId,
-        speedKnots: movementDrafts[shipId]?.speedKnots ?? 0,
         path: movementDrafts[shipId]?.path ?? [],
       });
       if (!result.ok) {
@@ -535,20 +527,35 @@ export function TacticalView(props: {
       const start = { lat: selectedShip.currentLat, lng: selectedShip.currentLng };
       // Gouvernail bloqué : le trajet n'est plus dessiné par le joueur, on
       // prévisualise la ligne droite forcée que le serveur imposera (voir
-      // submitTacticalMovementForUnit).
+      // submitTacticalMovementForUnit) — à pleine vitesse disponible.
       const previewPath = selectedShip.rudderJammed
-        ? [start, destinationPoint(start, selectedShip.headingDeg ?? 0, budgetNm)]
+        ? [start, destinationPoint(start, selectedShip.headingDeg ?? 0, maxBudgetNm)]
         : [start, ...draft.path];
-      list.push({ id: "draft-path", kind: "line", data: lineFeatureCollection(previewPath), color: "#facc15", width: 3 });
-      if (lastPoint && !selectedShip.rudderJammed) {
+      list.push({ id: "draft-path", kind: "line", data: lineFeatureCollection(previewPath), color: isPathValid ? "#facc15" : "#f87171", width: 3 });
+      if (!selectedShip.rudderJammed) {
+        // Deux anneaux-repères autour de la position actuelle : le trajet
+        // doit s'étendre entre les deux (à vol d'oiseau, la manœuvre en
+        // coûte un peu plus) — l'extérieur borne la vitesse max
+        // atteignable cette manche, l'intérieur la vitesse min (la
+        // décélération n'est pas plus instantanée que l'accélération).
         list.push({
-          id: "budget-ring",
+          id: "budget-ring-max",
           kind: "line",
-          data: budgetCircleFeatureCollection(lastPoint, remainingNm),
+          data: budgetCircleFeatureCollection(start, maxBudgetNm),
           color: "#facc15",
           width: 1,
           dashed: true,
         });
+        if (minBudgetNm > 0.01) {
+          list.push({
+            id: "budget-ring-min",
+            kind: "line",
+            data: budgetCircleFeatureCollection(start, minBudgetNm),
+            color: "#f87171",
+            width: 1,
+            dashed: true,
+          });
+        }
       }
     }
 
@@ -585,18 +592,24 @@ export function TacticalView(props: {
     selectedTarget,
     isMovementPhase,
     draft,
-    lastPoint,
-    remainingNm,
-    budgetNm,
+    minBudgetNm,
+    maxBudgetNm,
+    isPathValid,
     showEnemyProjection,
     props.roundMinutes,
     props.ownTrailByUnit,
     props.enemyTrailByTarget,
   ]);
 
+  // Épaves : un navire coulé reste affiché à sa dernière position (croix
+  // rouge + fumée noire, voir shipSilhouettes.ts) plutôt que de disparaître
+  // — d'où props.ownUnits/props.contacts ici (non filtrés), alors que le
+  // reste de l'interface (listes cliquables, sélection) continue d'utiliser
+  // livingOwnUnits/liveContacts, une épave n'étant plus manœuvrable ni ciblable.
   const shipMarkers = useMemo<ShipMarkerConfig[]>(() => {
-    const own = livingOwnUnits.map((u) => {
+    const own = props.ownUnits.map((u) => {
       const silhouette = classifySilhouette(u.category, u.className);
+      const damageRatio = u.healthMax && u.healthMax > 0 ? 1 - (u.healthCurrent ?? u.healthMax) / u.healthMax : 0;
       return {
         id: `own-${u.id}`,
         lat: u.currentLat,
@@ -608,10 +621,16 @@ export function TacticalView(props: {
         status: u.status as "ACTIVE" | "DAMAGED" | "SUNK",
         speedKnots: u.lastSpeedKnots,
         referenceSpeedKnots: u.maxSpeedKnots,
+        damageRatio,
       };
     });
-    const enemies = liveContacts.map((c) => {
+    const enemies = props.contacts.map((c) => {
       const silhouette = classifySilhouette(c.category, c.className);
+      // Brouillard de guerre : on ne connaît pas les PV exacts d'un contact
+      // ennemi, seulement son statut (ACTIF/ENDOMMAGÉ/COULÉ) — valeur
+      // représentative plutôt que la vraie proportion, juste pour graduer
+      // le panache visuellement sans révéler son potentiel réel.
+      const damageRatio = c.status === "SUNK" ? 1 : c.status === "DAMAGED" ? 0.45 : 0;
       return {
         id: `contact-${c.targetUnitId}`,
         lat: c.lat,
@@ -624,10 +643,11 @@ export function TacticalView(props: {
         speedKnots: c.estimatedSpeedKnots ?? undefined,
         referenceSpeedKnots: c.maxSpeedKnots,
         vectorEstimated: true,
+        damageRatio,
       };
     });
     return [...own, ...enemies];
-  }, [livingOwnUnits, liveContacts, selectedShipId, selectedTargetId]);
+  }, [props.ownUnits, props.contacts, selectedShipId, selectedTargetId]);
 
   const fitPoints = [
     ...props.ownUnits.map((u) => ({ lat: u.currentLat, lng: u.currentLng })),
@@ -867,17 +887,19 @@ export function TacticalView(props: {
             isMovementPhase ? (
               <MovementDashboard
                 ship={selectedShip}
-                draft={draft!}
-                budgetNm={budgetNm}
+                minBudgetNm={minBudgetNm}
+                maxBudgetNm={maxBudgetNm}
                 straightNm={straightNm}
                 turnNm={turnNm}
+                shortfallNm={shortfallNm}
                 remainingNm={remainingNm}
                 roundMinutes={props.roundMinutes}
                 minSpeed={minSpeed}
                 maxSpeed={maxSpeed}
+                impliedSpeedKnots={impliedSpeedKnots}
+                isPathValid={isPathValid}
                 positioned={isShipPositioned(selectedShip.id)}
                 isPending={isPending}
-                onSpeedChange={updateDraftSpeed}
                 onClear={clearDraftPath}
                 onSave={saveShipMovement}
               />
@@ -1005,32 +1027,36 @@ export function TacticalView(props: {
 
 function MovementDashboard({
   ship,
-  draft,
-  budgetNm,
+  minBudgetNm,
+  maxBudgetNm,
   straightNm,
   turnNm,
+  shortfallNm,
   remainingNm,
   roundMinutes,
   minSpeed,
   maxSpeed,
+  impliedSpeedKnots,
+  isPathValid,
   positioned,
   isPending,
-  onSpeedChange,
   onClear,
   onSave,
 }: {
   ship: OwnUnit;
-  draft: MovementDraft;
-  budgetNm: number;
+  minBudgetNm: number;
+  maxBudgetNm: number;
   straightNm: number;
   turnNm: number;
+  shortfallNm: number;
   remainingNm: number;
   roundMinutes: number;
   minSpeed: number;
   maxSpeed: number;
+  impliedSpeedKnots: number;
+  isPathValid: boolean;
   positioned: boolean;
   isPending: boolean;
-  onSpeedChange: (speed: number) => void;
   onClear: () => void;
   onSave: () => void;
 }) {
@@ -1045,33 +1071,39 @@ function MovementDashboard({
       </div>
       <HealthBar unit={ship} />
       <DamageReport ship={ship} />
-      {ship.rudderJammed && (
+      {ship.rudderJammed ? (
         <p className="rounded-md border border-red-800 bg-red-950/30 px-2 py-1 text-xs text-red-300">
-          ⚠ Cap maintenu au {Math.round(ship.headingDeg ?? 0)}°, seule la vitesse est réglable.
+          ⚠ Gouvernail bloqué — le navire poursuit tout droit au cap {Math.round(ship.headingDeg ?? 0)}° à pleine vitesse disponible (
+          {Math.round(maxSpeed)} nds). Rien à tracer, juste à valider.
         </p>
+      ) : (
+        <>
+          <div className="rounded-md bg-slate-900 p-3 text-xs">
+            <div className="mb-1 flex items-center justify-between text-sm font-medium text-slate-200">
+              <span>Vitesse déduite du trajet</span>
+              <span className={isPathValid ? "text-emerald-400" : "text-red-400"}>{Math.round(impliedSpeedKnots)} nds</span>
+            </div>
+            <div className="text-slate-500">
+              Atteignable cette manche : {Math.round(minSpeed)}-{Math.round(maxSpeed)} nds (accélération/décélération max{" "}
+              {ship.accelerationKnotsPerMin.toFixed(1)} nds/min depuis {ship.lastSpeedKnots} nds, max navire {ship.maxSpeedKnots} nds
+              {ship.speedCapKnots != null ? `, réduit à ${Math.round(ship.speedCapKnots)} nds par avarie` : ""})
+            </div>
+          </div>
+          <div className="rounded-md bg-slate-900 p-3 text-xs">
+            <div>
+              Trajet : {straightNm.toFixed(2)} nm{turnNm > 0.01 ? ` + ${turnNm.toFixed(2)} nm de manœuvre` : ""}
+            </div>
+            <div>
+              Doit être entre {minBudgetNm.toFixed(2)} et {maxBudgetNm.toFixed(2)} nm ({formatDuration(roundMinutes)})
+            </div>
+            {!isPathValid && shortfallNm > 0 && (
+              <div className="mt-1 text-red-400">⚠ Trop court de {shortfallNm.toFixed(2)} nm — ce navire ne peut pas ralentir plus vite.</div>
+            )}
+            {!isPathValid && shortfallNm === 0 && <div className="mt-1 text-red-400">⚠ Trop long de {(-remainingNm).toFixed(2)} nm — trop rapide pour ce tour-ci.</div>}
+          </div>
+          <p className="text-xs text-slate-500">Cliquez sur la carte pour tracer le trajet de cette manche — sa longueur détermine la vitesse.</p>
+        </>
       )}
-      <label className="block text-xs">
-        Vitesse : {draft.speedKnots} nds (dernière manche {ship.lastSpeedKnots} nds)
-        <input
-          type="range"
-          min={Math.round(minSpeed)}
-          max={Math.round(maxSpeed)}
-          value={draft.speedKnots}
-          onChange={(e) => onSpeedChange(Number(e.target.value))}
-          className="mt-1 w-full"
-        />
-        <div className="mt-0.5 text-[11px] text-slate-500">
-          Atteignable cette manche : {Math.round(minSpeed)}-{Math.round(maxSpeed)} nds (accélération max {ship.accelerationKnotsPerMin.toFixed(1)}
-          nds/min, max navire {ship.maxSpeedKnots} nds{ship.speedCapKnots != null ? `, réduit à ${Math.round(ship.speedCapKnots)} nds par avarie` : ""})
-        </div>
-      </label>
-      <div className="rounded-md bg-slate-900 p-3 text-xs">
-        <div>Budget cette manche : {budgetNm.toFixed(2)} nm ({formatDuration(roundMinutes)})</div>
-        <div>Trajet : {straightNm.toFixed(2)} nm</div>
-        {turnNm > 0.01 && <div>Manœuvre (virages) : {turnNm.toFixed(2)} nm</div>}
-        <div>Restant : {remainingNm.toFixed(2)} nm</div>
-      </div>
-      {!ship.rudderJammed && <p className="text-xs text-slate-500">Cliquez sur la carte pour tracer le trajet de cette manche.</p>}
       <div className="flex gap-2">
         {!ship.rudderJammed && (
           <button onClick={onClear} className="rounded-md border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-900">
@@ -1080,7 +1112,7 @@ function MovementDashboard({
         )}
         <button
           onClick={onSave}
-          disabled={isPending}
+          disabled={isPending || !isPathValid}
           className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 text-xs font-medium hover:bg-brass-500 disabled:opacity-50"
         >
           {isPending ? "Envoi…" : positioned ? "Revalider ce navire" : "Valider le mouvement de ce navire"}
