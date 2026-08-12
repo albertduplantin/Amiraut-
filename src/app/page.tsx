@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default async function Home({
   searchParams,
 }: {
@@ -10,9 +12,12 @@ export default async function Home({
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-950 px-6 text-center text-slate-100">
       <h1 className="text-3xl font-semibold tracking-tight">Amirauté en ligne</h1>
       <p className="mt-3 max-w-md text-slate-400">
-        Jeu de guerre naval asynchrone. Utilisez le lien d&apos;invitation qui vous a été transmis par
-        l&apos;arbitre pour rejoindre une partie.
+        Jeu de guerre naval asynchrone. Utilisez le lien d&apos;invitation qui vous a été transmis pour rejoindre
+        une partie, ou lancez-en une nouvelle.
       </p>
+      <Link href="/create" className="mt-6 rounded-md bg-brass-600 px-5 py-2.5 text-sm font-medium hover:bg-brass-500">
+        Créer une partie
+      </Link>
       {error === "invite-invalide" && (
         <p className="mt-6 rounded-md border border-red-800 bg-red-950 px-4 py-2 text-sm text-red-300">
           Ce lien d&apos;invitation n&apos;est pas valide. Vérifiez l&apos;URL ou contactez l&apos;arbitre de la

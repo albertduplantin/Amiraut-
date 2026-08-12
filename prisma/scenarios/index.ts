@@ -19,8 +19,14 @@ export function findScenario(key: string): ScenarioDefinition | undefined {
 export async function instantiateScenario(
   prisma: PrismaClient,
   definition: ScenarioDefinition,
-  options: { withArbiter?: boolean } = {}
+  options: { withArbiter?: boolean; turnMinutesOverride?: number } = {}
 ) {
+  // Échelle de temps initiale ajustable à la création (Lobby) : ne change
+  // que la durée du premier tour stratégique, pas l'échelle du combat
+  // tactique (tacticalRoundMinutes), qui reste dictée par la cadence des
+  // pièces une fois le combat engagé.
+  const turnMinutes = options.turnMinutesOverride ?? definition.defaultTurnMinutes;
+
   const scenario = await prisma.scenario.create({
     data: {
       name: definition.name,
@@ -28,7 +34,7 @@ export async function instantiateScenario(
       mapCenterLat: definition.mapCenterLat,
       mapCenterLng: definition.mapCenterLng,
       mapDefaultZoom: definition.mapDefaultZoom,
-      defaultTurnMinutes: definition.defaultTurnMinutes,
+      defaultTurnMinutes: turnMinutes,
       status: "ACTIVE",
     },
   });
@@ -119,7 +125,7 @@ export async function instantiateScenario(
       number: 1,
       status: "PENDING_ORDERS",
       gameStartAt: new Date(),
-      durationMinutes: definition.defaultTurnMinutes,
+      durationMinutes: turnMinutes,
       weatherId: weather.id,
     },
   });
