@@ -191,7 +191,7 @@ export function ReportsClient(props: { mapCenter: LatLng; mapZoom: number; repor
                     <span className="font-medium">{c.unitClassName}</span>
                     {turnIndex === 0 && (
                       <Link
-                        href={`/team/tactical/${c.detectionEventId}`}
+                        href={`/team/battle/open/${c.detectionEventId}`}
                         className="shrink-0 rounded border border-orange-800 px-1.5 py-0.5 text-[10px] text-orange-300 hover:bg-orange-950/50"
                       >
                         Mode tactique

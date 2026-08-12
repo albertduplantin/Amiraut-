@@ -47,11 +47,16 @@ export function selectTorpedoBattery(
 
 /**
  * Dégâts moyens d'un coup de 380mm, calibrés sur l'indication du livret
- * qu'un croiseur lourd bien protégé encaisse l'impact de 4 à 5 obus de 380
- * avant de succomber (p. 4) : pour une cible de résistance ~100 pts,
- * un coup de 380 vaut donc environ 100/4,5 ≈ 22 points.
+ * qu'un croiseur lourd bien protégé encaisse 4 à 5 obus de 380 avant de
+ * succomber (p. 4).
+ *
+ * La référence est le potentiel réel des unités du jeu, pas une échelle
+ * abstraite : un croiseur lourd classe County vaut 17,2 points dans la base
+ * du livret, donc un coup de 380 vaut 17,2 / 4,5 ≈ 3,8 points. (Une version
+ * antérieure supposait des navires à ~100 points et rendait chaque impact
+ * instantanément fatal — un cuirassé coulait en une salve.)
  */
-const REFERENCE_DAMAGE_PER_380MM_HIT = 22;
+const REFERENCE_DAMAGE_PER_380MM_HIT = 3.8;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -89,12 +94,20 @@ function gunDamagePerHit(calibreMm: number, rng: () => number): number {
   return base * variability;
 }
 
-/** Nombre de coups au but dans la salve, borné par le nombre de pièces effectivement en état de tirer. */
+/**
+ * Nombre de coups au but dans une salve qui a encadré la cible.
+ *
+ * Une salve encadrante ne met pas la moitié de ses obus au but : au
+ * détroit du Danemark, le Bismarck a placé environ 5 coups sur 93 obus
+ * tirés. On garde donc une probabilité faible par pièce supplémentaire,
+ * pour qu'une salve réussie donne typiquement 1 ou 2 impacts et non la
+ * moitié de la bordée.
+ */
 function rollHitCount(effectiveGunCount: number, rng: () => number): number {
   if (effectiveGunCount <= 0) return 0;
   let hits = 1;
   for (let i = 1; i < effectiveGunCount; i++) {
-    if (rng() < 0.35) hits++;
+    if (rng() < 0.12) hits++;
   }
   return hits;
 }
@@ -160,7 +173,7 @@ export function resolveGunEngagement(params: {
  * plus dévastatrice qu'un coup de canon équivalent — d'où une référence
  * légèrement supérieure à celle d'un coup de 380mm.
  */
-const REFERENCE_DAMAGE_PER_TORPEDO_HIT = 28;
+const REFERENCE_DAMAGE_PER_TORPEDO_HIT = 4.8;
 
 /**
  * Chance de toucher pour une torpille. `angleOfAttackDeg` est l'angle entre
@@ -275,7 +288,12 @@ const DEPTH_BAND_HIT_FACTOR: Record<DepthBand, number> = {
   DEEP: 0.35,
 };
 
-const REFERENCE_DAMAGE_PER_DEPTH_CHARGE_ATTACK = 30;
+/**
+ * Une passe de grenades bien réglée était souvent fatale à un sous-marin,
+ * mais rarement du premier coup : sur l'échelle de potentiel du livret (un
+ * Type VIIC vaut 0,85 point), on vise deux à trois passes réussies.
+ */
+const REFERENCE_DAMAGE_PER_DEPTH_CHARGE_ATTACK = 0.4;
 
 export function depthChargeHitChancePercent(params: {
   rangeM: number;

@@ -61,6 +61,12 @@ export default async function ArbiterDashboardPage() {
     orderBy: { id: "asc" },
   });
 
+  const activeEngagements = await prisma.tacticalEngagement.findMany({
+    where: { scenarioId: session.scenarioId, status: { not: "RESOLVED" } },
+    include: { participants: { include: { unit: { select: { name: true } }, team: { select: { name: true } } } } },
+    orderBy: { startedAt: "desc" },
+  });
+
   return (
     <div className="chart-room-bg min-h-screen p-6 text-slate-100">
       <h1 className="font-display text-xl tracking-wide text-brass-300">{scenario.name}</h1>
@@ -98,6 +104,45 @@ export default async function ArbiterDashboardPage() {
                 </form>
               </li>
             ))}
+          </ul>
+        </section>
+      )}
+
+      {activeEngagements.length > 0 && (
+        <section className="panel-brass mt-4 max-w-2xl rounded-md border border-red-800 bg-red-950/20 p-4">
+          <h2 className="font-display mb-3 tracking-wide text-red-300">
+            ⚔ Combats tactiques en cours ({activeEngagements.length})
+          </h2>
+          <ul className="space-y-2">
+            {activeEngagements.map((e) => {
+              const byTeam = new Map<string, string[]>();
+              for (const p of e.participants) {
+                const list = byTeam.get(p.team.name) ?? [];
+                list.push(p.unit.name);
+                byTeam.set(p.team.name, list);
+              }
+              return (
+                <li key={e.id} className="rounded-md bg-slate-950/60 px-3 py-2 text-sm">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span>
+                      Manche {e.roundNumber} — {e.status === "AWAITING_MOVEMENT" ? "mouvement" : "tir"}
+                      {e.arbiterPaused && <span className="ml-2 text-amber-400">⏸ suspendu</span>}
+                    </span>
+                    <Link
+                      href={`/arbiter/battle/${e.id}`}
+                      className="rounded-md border border-red-700 px-2 py-1 text-xs hover:bg-red-950/50"
+                    >
+                      Observer
+                    </Link>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {Array.from(byTeam.entries())
+                      .map(([team, names]) => `${team} : ${names.join(", ")}`)
+                      .join(" · ")}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

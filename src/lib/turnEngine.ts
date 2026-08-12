@@ -421,7 +421,7 @@ export async function acknowledgeTacticalMode(detectionEventId: string) {
  * (le premier tour non publié). Un tir tactique s'y rattache : la détection
  * qui l'a déclenché, elle, appartient au tour précédent déjà publié.
  */
-async function currentOpenTurn(referenceTurnId: string) {
+export async function currentOpenTurn(referenceTurnId: string) {
   const reference = await prisma.turn.findUniqueOrThrow({
     where: { id: referenceTurnId },
     select: { scenarioId: true },

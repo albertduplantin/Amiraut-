@@ -27,6 +27,8 @@ model Scenario {
   units        Unit[]
   turns        Turn[]
   participants Participant[]
+
+  tacticalEngagements TacticalEngagement[]
 }
 
 enum ScenarioStatus {
@@ -46,6 +48,8 @@ model Team {
   participants Participant[]
   reports      Report[]
 
+  tacticalParticipants TacticalParticipant[]
+
   @@unique([scenarioId, name])
 }
 
@@ -63,23 +67,23 @@ model Fleet {
 // ── Bibliothèque d'unités (gabarits réutilisables) ────────
 
 model UnitClass {
-  id               String       @id @default(cuid())
-  name             String
-  nation           String
-  category         UnitCategory
-  maxSpeedKnots    Float
-  lengthMeters     Float? // longueur hors-tout réelle, pour l'échelle des silhouettes vue de dessus
-  beamMeters       Float? // largeur hors-tout réelle, pour la taille de cible au combat (L × l)
-  sensors          Json // [{ type: "RADAR", rangeNm: 20 }, ...]
-  detectability    Float        @default(1)
-  iconKey          String
-  profileImageUrl  String? // silhouette de profil (vue latérale)
-  planImageUrl     String? // silhouette vue de dessus, si disponible
-  historicalNote   String? // contexte historique du type de navire
-  enduranceMinutes Int? // réservé phase 2 (autonomie/carburant), inutilisé en V1
-  weaponSystems    Json? // fiche d'armement historique affichée aux joueurs (texte libre)
-  combatProfile    Json? // armement structuré utilisé par le moteur de combat, voir CombatProfile dans combat.ts
-  depthChargeStock Int? // stock initial de grenades ASM (escorteurs uniquement), voir Unit.depthChargesRemaining
+  id                    String       @id @default(cuid())
+  name                  String
+  nation                String
+  category              UnitCategory
+  maxSpeedKnots         Float
+  lengthMeters          Float? // longueur hors-tout réelle, pour l'échelle des silhouettes vue de dessus
+  beamMeters            Float? // largeur hors-tout réelle, pour la taille de cible au combat (L × l)
+  sensors               Json // [{ type: "RADAR", rangeNm: 20 }, ...]
+  detectability         Float        @default(1)
+  iconKey               String
+  profileImageUrl       String? // silhouette de profil (vue latérale)
+  planImageUrl          String? // silhouette vue de dessus, si disponible
+  historicalNote        String? // contexte historique du type de navire
+  enduranceMinutes      Int? // réservé phase 2 (autonomie/carburant), inutilisé en V1
+  weaponSystems         Json? // fiche d'armement historique affichée aux joueurs (texte libre)
+  combatProfile         Json? // armement structuré utilisé par le moteur de combat, voir CombatProfile dans combat.ts
+  depthChargeStock      Int? // stock initial de grenades ASM (escorteurs uniquement), voir Unit.depthChargesRemaining
   // Autonomie sous-marine (sous-marins uniquement) : batterie ~80nm à 4nds
   // pour un Type VIIC (uboat.net), oxygène/CO2 jusqu'à ~72h en cas extrême
   // (cartouches + bouteilles de secours) — voir Unit.batteryChargePercent et
@@ -100,46 +104,51 @@ enum UnitCategory {
 // ── Instances d'unités dans un scénario ───────────────────
 
 model Unit {
-  id                String     @id @default(cuid())
-  scenarioId        String
-  scenario          Scenario   @relation(fields: [scenarioId], references: [id])
-  fleetId           String
-  fleet             Fleet      @relation(fields: [fleetId], references: [id])
+  id                    String     @id @default(cuid())
+  scenarioId            String
+  scenario              Scenario   @relation(fields: [scenarioId], references: [id])
+  fleetId               String
+  fleet                 Fleet      @relation(fields: [fleetId], references: [id])
   // Transfert de flotte demandé par un joueur (ordre par signal) : prend
   // effet à la publication du tour en cours, pas immédiatement — le navire
   // a besoin d'un tour pour rallier sa nouvelle formation.
-  pendingFleetId    String?
-  pendingFleet      Fleet?     @relation("PendingFleetTransfer", fields: [pendingFleetId], references: [id])
-  unitClassId       String
-  unitClass         UnitClass  @relation(fields: [unitClassId], references: [id])
-  name              String
-  pennant           String?
-  historicalNote    String? // contexte historique propre à ce navire (rôle dans la bataille, etc.)
-  status            UnitStatus @default(ACTIVE)
-  healthMax         Float? // potentiel de résistance initial (formule du livret : Dw/1000 + blindage + K%)
-  healthCurrent     Float?
-  currentLat        Float
-  currentLng        Float
-  currentHeadingDeg Float?
-  lastResolvedTurn  Int        @default(0)
+  pendingFleetId        String?
+  pendingFleet          Fleet?     @relation("PendingFleetTransfer", fields: [pendingFleetId], references: [id])
+  unitClassId           String
+  unitClass             UnitClass  @relation(fields: [unitClassId], references: [id])
+  name                  String
+  pennant               String?
+  historicalNote        String? // contexte historique propre à ce navire (rôle dans la bataille, etc.)
+  status                UnitStatus @default(ACTIVE)
+  healthMax             Float? // potentiel de résistance initial (formule du livret : Dw/1000 + blindage + K%)
+  healthCurrent         Float?
+  currentLat            Float
+  currentLng            Float
+  currentHeadingDeg     Float?
+  lastResolvedTurn      Int        @default(0)
   // Palier d'immersion courant (sous-marins uniquement ; toujours SURFACE
   // pour les autres catégories). Changé par ordre, un seul palier adjacent
   // à la fois — voir UnitOrder.depthBand et resolveTurnDetections/resolveCombat.
-  depthBand           DepthBand @default(SURFACE)
+  depthBand             DepthBand  @default(SURFACE)
   depthChargesRemaining Int? // grenades ASM restantes (escorteurs uniquement, null sinon)
   // Autonomie sous-marine courante (sous-marins uniquement, null sinon) : la
   // batterie se vide en immersion (vite à haute vitesse, cf. combat.ts),
   // l'oxygène se consomme au temps passé immergé quelle que soit la vitesse.
   // Les deux se rechargent/renouvellent intégralement en faisant surface.
-  batteryChargePercent Float?
-  oxygenHoursRemaining Float?
-  torpedoesRemaining   Int? // torpilles restantes (sous-marins), tous types confondus
+  batteryChargePercent  Float?
+  oxygenHoursRemaining  Float?
+  torpedoesRemaining    Int? // torpilles restantes (sous-marins), tous types confondus
 
-  orders          UnitOrder[]
-  detectedAs      DetectionEvent[] @relation("TargetUnit")
-  observedFrom    DetectionEvent[] @relation("ObserverUnit")
-  combatAsTarget  CombatEvent[]    @relation("CombatTarget")
-  combatAsAttacker CombatEvent[]   @relation("CombatAttacker")
+  orders           UnitOrder[]
+  detectedAs       DetectionEvent[] @relation("TargetUnit")
+  observedFrom     DetectionEvent[] @relation("ObserverUnit")
+  combatAsTarget   CombatEvent[]    @relation("CombatTarget")
+  combatAsAttacker CombatEvent[]    @relation("CombatAttacker")
+
+  tacticalParticipations TacticalParticipant[]
+  tacticalActions        TacticalAction[]
+  tacticalTargetedBy     TacticalAction[]      @relation("TacticalTarget")
+  tacticalContactedAs    TacticalContact[]     @relation("TacticalContactTarget")
 
   @@index([scenarioId, fleetId])
 }
@@ -220,6 +229,8 @@ model Turn {
   combatEvents    CombatEvent[]
   reports         Report[]
 
+  tacticalEngagements TacticalEngagement[]
+
   @@unique([scenarioId, number])
 }
 
@@ -293,33 +304,33 @@ model Waypoint {
 // ── Détection / revue arbitre ───────────────────────────────
 
 model DetectionEvent {
-  id                 String        @id @default(cuid())
-  turnId             String
-  turn               Turn          @relation(fields: [turnId], references: [id])
-  observerUnitId     String
-  observerUnit       Unit          @relation("ObserverUnit", fields: [observerUnitId], references: [id])
-  targetUnitId       String
-  targetUnit         Unit          @relation("TargetUnit", fields: [targetUnitId], references: [id])
-  method             SensorType
-  cpaDistanceNm      Float
-  cpaMinutesIntoTurn Float
-  observerLatAtCpa   Float
-  observerLngAtCpa   Float
-  targetLatAtCpa     Float
-  targetLngAtCpa     Float
-  systemProposed     Boolean       @default(true)
-  arbiterStatus      ArbiterStatus @default(PROPOSED)
-  arbiterNote        String?
-  decidedById        String?
+  id                       String        @id @default(cuid())
+  turnId                   String
+  turn                     Turn          @relation(fields: [turnId], references: [id])
+  observerUnitId           String
+  observerUnit             Unit          @relation("ObserverUnit", fields: [observerUnitId], references: [id])
+  targetUnitId             String
+  targetUnit               Unit          @relation("TargetUnit", fields: [targetUnitId], references: [id])
+  method                   SensorType
+  cpaDistanceNm            Float
+  cpaMinutesIntoTurn       Float
+  observerLatAtCpa         Float
+  observerLngAtCpa         Float
+  targetLatAtCpa           Float
+  targetLngAtCpa           Float
+  systemProposed           Boolean       @default(true)
+  arbiterStatus            ArbiterStatus @default(PROPOSED)
+  arbiterNote              String?
+  decidedById              String?
   // Un joueur d'un des deux camps a demandé le mode bataille tactique pour
   // cet engagement (vue rapprochée dédiée, voir /team/tactical/[id]) : signal
   // à l'arbitre, qui reste libre d'en tenir compte (ex: raccourcir le tour
   // suivant pour une résolution plus fine).
-  tacticalModeRequested Boolean    @default(false)
+  tacticalModeRequested    Boolean       @default(false)
   // Vu par l'arbitre (voir arbiter/page.tsx) : permet de faire disparaître la
   // demande une fois traitée, sans quoi elle resterait affichée pour toujours
   // même une fois le tour concerné publié depuis longtemps.
-  tacticalModeAcknowledged Boolean @default(false)
+  tacticalModeAcknowledged Boolean       @default(false)
 
   combatEvents CombatEvent[]
 
@@ -348,9 +359,9 @@ enum ArbiterStatus {
 // hybride, cohérent avec la détection). Voir src/lib/combat.ts.
 
 model CombatEvent {
-  id               String     @id @default(cuid())
+  id               String          @id @default(cuid())
   turnId           String
-  turn             Turn       @relation(fields: [turnId], references: [id])
+  turn             Turn            @relation(fields: [turnId], references: [id])
   // Détection à l'origine de l'engagement : sert de garde-fou pour qu'un
   // tir déclenché manuellement en mode tactique ne soit pas ensuite résolu
   // une seconde fois par la passe automatique de fin de tour (et
@@ -358,9 +369,9 @@ model CombatEvent {
   detectionEventId String?
   detectionEvent   DetectionEvent? @relation(fields: [detectionEventId], references: [id])
   attackerUnitId   String
-  attackerUnit     Unit       @relation("CombatAttacker", fields: [attackerUnitId], references: [id])
+  attackerUnit     Unit            @relation("CombatAttacker", fields: [attackerUnitId], references: [id])
   targetUnitId     String
-  targetUnit       Unit       @relation("CombatTarget", fields: [targetUnitId], references: [id])
+  targetUnit       Unit            @relation("CombatTarget", fields: [targetUnitId], references: [id])
   weaponType       WeaponType
   // Identifiant du type de torpille utilisé (ex: "g7a"/"g7e"), null pour
   // canon/grenades ASM ou torpille sans variantes — voir CombatProfile.torpedoTypes.
@@ -370,9 +381,9 @@ model CombatEvent {
   hits             Int
   damagePoints     Float
   targetHealthLeft Float
-  targetSunk       Boolean    @default(false)
-  firedTactically  Boolean    @default(false)
-  createdAt        DateTime   @default(now())
+  targetSunk       Boolean         @default(false)
+  firedTactically  Boolean         @default(false)
+  createdAt        DateTime        @default(now())
 
   @@index([turnId])
   @@index([detectionEventId, weaponType])
@@ -399,4 +410,179 @@ model Report {
   narrative   String?
 
   @@unique([turnId, teamId])
+}
+
+// ── Bataille tactique ────────────────────────────────────────
+//
+// Quand un contact devient un vrai duel, on quitte l'échelle du transit
+// (des heures) pour celle du combat : des manches courtes (5 min par
+// défaut) enchaînant deux phases, comme dans le livret original.
+//
+//   MOUVEMENT : les deux camps manœuvrent, puis le moteur recalcule qui
+//               voit qui — un sous-marin jusque-là invisible peut se
+//               faire repérer ici.
+//   TIR       : chaque camp tire, mais uniquement sur ce qu'il a détecté.
+//               Ouvrir le feu trahit sa propre position (feu de bouche,
+//               sillage de torpille) pour la manche suivante.
+//
+// On répète jusqu'à destruction d'un camp, épuisement des munitions ou
+// rupture de contact.
+
+model TacticalEngagement {
+  id            String             @id @default(cuid())
+  scenarioId    String
+  scenario      Scenario           @relation(fields: [scenarioId], references: [id])
+  turnId        String
+  turn          Turn               @relation(fields: [turnId], references: [id])
+  status        TacticalStatus     @default(AWAITING_MOVEMENT)
+  syncMode      TacticalSyncMode   @default(ASYNC)
+  roundNumber   Int                @default(1)
+  /// Durée d'une manche en minutes (le livret résout le combat par tranches de 5 min).
+  roundMinutes  Int                @default(5)
+  endReason     TacticalEndReason?
+  /// L'arbitre a suspendu le combat : plus aucune soumission acceptée tant qu'il n'a pas relancé.
+  arbiterPaused Boolean            @default(false)
+  startedAt     DateTime           @default(now())
+  endedAt       DateTime?
+
+  participants TacticalParticipant[]
+  actions      TacticalAction[]
+  contacts     TacticalContact[]
+  submissions  TacticalSubmission[]
+  messages     TacticalMessage[]
+
+  @@index([scenarioId, status])
+}
+
+enum TacticalStatus {
+  AWAITING_MOVEMENT
+  AWAITING_FIRE
+  RESOLVED
+}
+
+enum TacticalSyncMode {
+  /// Les deux camps sont présents : la manche s'enchaîne dès que tout le monde a validé.
+  SYNC
+  /// Chacun joue quand il veut, la manche se résout dès la dernière soumission.
+  ASYNC
+}
+
+enum TacticalEndReason {
+  ALL_ENEMIES_SUNK
+  CONTACT_LOST
+  OUT_OF_AMMUNITION
+  ARBITER_ENDED
+  DISENGAGED
+}
+
+model TacticalParticipant {
+  engagementId String
+  engagement   TacticalEngagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  unitId       String
+  unit         Unit               @relation(fields: [unitId], references: [id])
+  teamId       String
+  team         Team               @relation(fields: [teamId], references: [id])
+  joinedRound  Int                @default(1)
+
+  @@id([engagementId, unitId])
+  @@index([engagementId, teamId])
+}
+
+/// Ordre d'une unité pour une phase d'une manche : manœuvre ou tir selon `phase`.
+model TacticalAction {
+  id           String             @id @default(cuid())
+  engagementId String
+  engagement   TacticalEngagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  roundNumber  Int
+  phase        TacticalPhase
+  unitId       String
+  unit         Unit               @relation(fields: [unitId], references: [id])
+  teamId       String
+
+  // Phase MOUVEMENT
+  headingDeg Float?
+  speedKnots Float?
+  depthBand  DepthBand?
+
+  // Phase TIR
+  targetUnitId  String?
+  targetUnit    Unit?       @relation("TacticalTarget", fields: [targetUnitId], references: [id])
+  weaponType    WeaponType?
+  torpedoTypeId String?
+
+  // Résultat, rempli à la résolution
+  resolved         Boolean  @default(false)
+  hit              Boolean?
+  hits             Int?
+  damagePoints     Float?
+  targetSunk       Boolean?
+  hitChancePercent Float?
+  /// Récit du coup, affiché aux joueurs.
+  narrative        String?
+  /// Le tir a trahi la position du tireur (feu de bouche, sillage) pour la manche suivante.
+  revealedShooter  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([engagementId, roundNumber, phase, unitId])
+  @@index([engagementId, roundNumber])
+}
+
+enum TacticalPhase {
+  MOVEMENT
+  FIRE
+}
+
+/// Qui voit quoi à l'issue de la phase de mouvement d'une manche.
+model TacticalContact {
+  id             String             @id @default(cuid())
+  engagementId   String
+  engagement     TacticalEngagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  roundNumber    Int
+  observerTeamId String
+  observerUnitId String
+  targetUnitId   String
+  targetUnit     Unit               @relation("TacticalContactTarget", fields: [targetUnitId], references: [id])
+  method         SensorType
+  distanceNm     Float
+
+  @@unique([engagementId, roundNumber, observerUnitId, targetUnitId])
+  @@index([engagementId, roundNumber, observerTeamId])
+}
+
+/// Validation d'une phase par un camp : la manche se résout quand les deux ont validé.
+model TacticalSubmission {
+  engagementId String
+  engagement   TacticalEngagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  roundNumber  Int
+  phase        TacticalPhase
+  teamId       String
+  submittedAt  DateTime           @default(now())
+
+  @@id([engagementId, roundNumber, phase, teamId])
+}
+
+/// Messagerie du combat : dialogue entre joueurs, interventions et événements de l'arbitre.
+model TacticalMessage {
+  id           String              @id @default(cuid())
+  engagementId String
+  engagement   TacticalEngagement  @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  kind         TacticalMessageKind @default(CHAT)
+  /// null = visible par tous les camps ; sinon réservé à cette équipe.
+  teamId       String?
+  authorName   String
+  body         String
+  roundNumber  Int
+  createdAt    DateTime            @default(now())
+
+  @@index([engagementId, createdAt])
+}
+
+enum TacticalMessageKind {
+  /// Message entre joueurs.
+  CHAT
+  /// Événement injecté par l'arbitre (avarie, renfort, ordre du commandement…).
+  ARBITER_EVENT
+  /// Message narratif produit par le moteur.
+  SYSTEM
 }

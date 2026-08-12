@@ -900,7 +900,7 @@ function LastContactsPanel({
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium text-slate-200">{c.unitClassName}</span>
                     <Link
-                      href={`/team/tactical/${c.detectionEventId}`}
+                      href={`/team/battle/open/${c.detectionEventId}`}
                       className="shrink-0 rounded border border-orange-800 px-1.5 py-0.5 text-[10px] text-orange-300 hover:bg-orange-950/50"
                     >
                       Mode tactique
