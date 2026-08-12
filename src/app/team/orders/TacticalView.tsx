@@ -13,7 +13,13 @@ import {
   isTorpedoArcClear,
   type CombatProfile,
 } from "@/lib/combat";
-import { submitTacticalMovementAction, submitFireShotAction, finishFirePhaseAction, sendBattleChatAction } from "./tacticalActions";
+import {
+  submitMovementForUnitAction,
+  finishMovementPhaseAction,
+  submitFireShotAction,
+  finishFirePhaseAction,
+  sendBattleChatAction,
+} from "./tacticalActions";
 
 const NM_TO_M = 1852;
 
@@ -64,6 +70,9 @@ type FireAction = {
   hit: boolean | null;
   hits: number | null;
   damagePoints: number | null;
+  hitChancePercent: number | null;
+  /** Tirage au sort (0-100) : touché si en-dessous de `hitChancePercent`. */
+  hitRoll: number | null;
   narrative: string | null;
 };
 
@@ -73,8 +82,12 @@ type LogEntry = {
   hit: boolean | null;
   hits: number | null;
   damagePoints: number | null;
+  hitChancePercent: number | null;
+  hitRoll: number | null;
   narrative: string | null;
 };
+
+type MovementAction = { unitId: string; speedKnots: number | null; movementPath: LatLng[] | null };
 
 type BattleMessage = { id: string; kind: string; authorName: string; body: string; roundNumber: number };
 
@@ -90,6 +103,14 @@ function weaponSlotsForShip(ship: OwnUnit): string[] {
   const hasTorpedoes = ship.combatProfile?.torpedoTubes && (ship.torpedoesRemaining == null || ship.torpedoesRemaining > 0);
   if (hasTorpedoes) slots.push(TORPEDO_SLOT);
   return slots;
+}
+
+/** Brouillon initial d'un navire : reprend ce qu'il a déjà validé cette manche (rechargement de page en cours de phase) si présent, sinon sa dernière vitesse connue et aucun trajet. */
+function initialDraftFor(ship: OwnUnit, savedThisRound: MovementAction | undefined): MovementDraft {
+  if (savedThisRound) {
+    return { speedKnots: savedThisRound.speedKnots ?? ship.lastSpeedKnots, path: savedThisRound.movementPath ?? [] };
+  }
+  return { speedKnots: ship.lastSpeedKnots, path: [] };
 }
 
 export function TacticalView(props: {
@@ -108,6 +129,7 @@ export function TacticalView(props: {
   ownUnits: OwnUnit[];
   contacts: Contact[];
   ownFireActionsThisRound: FireAction[];
+  ownMovementActionsThisRound: MovementAction[];
   battleLog: LogEntry[];
   messages: BattleMessage[];
 }) {
@@ -127,26 +149,36 @@ export function TacticalView(props: {
   const [pickingTarget, setPickingTarget] = useState(false);
   const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null);
   const [freshResults, setFreshResults] = useState<Record<string, FireAction>>({});
+  /** Navires dont le mouvement vient d'être validé cette manche (retour instantané, avant que `router.refresh()` mette props.ownMovementActionsThisRound à jour). */
+  const [freshSavedUnitIds, setFreshSavedUnitIds] = useState<Set<string>>(new Set());
+
+  const savedMovementByUnit = useMemo(() => {
+    const map: Record<string, MovementAction> = {};
+    for (const a of props.ownMovementActionsThisRound) map[a.unitId] = a;
+    return map;
+  }, [props.ownMovementActionsThisRound]);
 
   const [movementDrafts, setMovementDrafts] = useState<Record<string, MovementDraft>>(() => {
     const init: Record<string, MovementDraft> = {};
-    for (const u of props.ownUnits) init[u.id] = { speedKnots: u.lastSpeedKnots, path: [] };
+    for (const u of props.ownUnits) init[u.id] = initialDraftFor(u, savedMovementByUnit[u.id]);
     return init;
   });
 
-  // Le brouillon de mouvement et le cache local des tirs fraîchement
-  // validés ne doivent survivre que le temps de LA manche où ils ont été
-  // saisis — sans ça, l'état du navigateur reste figé sur la manche
-  // précédente (vitesse redescendue à sa valeur de premier chargement,
-  // navires marqués "déjà tiré" à tort). Ajusté pendant le rendu — même
-  // pattern que le reset de sélection ci-dessous.
+  // Le brouillon de mouvement et le cache local des tirs/validations
+  // fraîchement soumis ne doivent survivre que le temps de LA manche où
+  // ils ont été saisis — sans ça, l'état du navigateur reste figé sur la
+  // manche précédente (vitesse redescendue à sa valeur de premier
+  // chargement, navires marqués "déjà tiré"/"déjà positionné" à tort).
+  // Ajusté pendant le rendu — même pattern que le reset de sélection
+  // ci-dessous.
   const [roundKey, setRoundKey] = useState<number>(props.roundNumber);
   if (roundKey !== props.roundNumber) {
     setRoundKey(props.roundNumber);
     setFreshResults({});
+    setFreshSavedUnitIds(new Set());
     setMovementDrafts(() => {
       const init: Record<string, MovementDraft> = {};
-      for (const u of props.ownUnits) init[u.id] = { speedKnots: u.lastSpeedKnots, path: [] };
+      for (const u of props.ownUnits) init[u.id] = initialDraftFor(u, savedMovementByUnit[u.id]);
       return init;
     });
   }
@@ -169,6 +201,13 @@ export function TacticalView(props: {
         return slots.length > 0 && slots.some((s) => !firedBySlot[`${u.id}|${s}`]);
       }),
     [livingOwnUnits, firedBySlot]
+  );
+
+  const isShipPositioned = (unitId: string) => !!savedMovementByUnit[unitId] || freshSavedUnitIds.has(unitId);
+  const unpositionedShips = useMemo(
+    () => livingOwnUnits.filter((u) => !isShipPositioned(u.id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [livingOwnUnits, savedMovementByUnit, freshSavedUnitIds]
   );
 
   // Rafraîchit automatiquement tant que le combat est en cours — pas
@@ -269,17 +308,31 @@ export function TacticalView(props: {
     setHover(id && pos ? { id, x: pos.x, y: pos.y } : null);
   }
 
-  function submitMovement() {
+  /** Valide le mouvement du navire sélectionné — rappelable pour changer d'avis tant que la phase n'est pas terminée. */
+  function saveShipMovement() {
+    if (!selectedShip) return;
+    const shipId = selectedShip.id;
     setError(null);
     startTransition(async () => {
-      const result = await submitTacticalMovementAction({
+      const result = await submitMovementForUnitAction({
         engagementId: props.engagementId,
-        moves: livingOwnUnits.map((u) => ({
-          unitId: u.id,
-          speedKnots: movementDrafts[u.id]?.speedKnots ?? 0,
-          path: movementDrafts[u.id]?.path ?? [],
-        })),
+        unitId: shipId,
+        speedKnots: movementDrafts[shipId]?.speedKnots ?? 0,
+        path: movementDrafts[shipId]?.path ?? [],
       });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setFreshSavedUnitIds((prev) => new Set(prev).add(shipId));
+      router.refresh();
+    });
+  }
+
+  function finishMovement() {
+    setError(null);
+    startTransition(async () => {
+      const result = await finishMovementPhaseAction({ engagementId: props.engagementId });
       if (!result.ok) setError(result.error);
       else router.refresh();
     });
@@ -327,6 +380,8 @@ export function TacticalView(props: {
           hit: result.result.hit,
           hits: result.result.hits,
           damagePoints: result.result.damagePoints,
+          hitChancePercent: result.result.hitChancePercent,
+          hitRoll: result.result.hitRoll,
           narrative: result.result.narrative,
         },
       }));
@@ -536,7 +591,12 @@ export function TacticalView(props: {
                           {firedCount}/{slots.length} tiré
                         </span>
                       )}
-                      {isMovementPhase && (movementDrafts[u.id]?.path.length ?? 0) > 0 && <span className="text-emerald-400">➜</span>}
+                      {isMovementPhase &&
+                        (isShipPositioned(u.id) ? (
+                          <span className="text-emerald-400">✓ validé</span>
+                        ) : (
+                          (movementDrafts[u.id]?.path.length ?? 0) > 0 && <span className="text-slate-500">➜ brouillon</span>
+                        ))}
                     </div>
                     <div className="text-slate-500">{u.className}</div>
                   </button>
@@ -649,8 +709,11 @@ export function TacticalView(props: {
                 roundMinutes={props.roundMinutes}
                 minSpeed={minSpeed}
                 maxSpeed={maxSpeed}
+                positioned={isShipPositioned(selectedShip.id)}
+                isPending={isPending}
                 onSpeedChange={updateDraftSpeed}
                 onClear={clearDraftPath}
+                onSave={saveShipMovement}
               />
             ) : (
               <FireDashboard
@@ -674,13 +737,23 @@ export function TacticalView(props: {
           {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
 
           {!hasSubmittedThisPhase && !props.arbiterPaused && isMovementPhase && (
-            <button
-              onClick={submitMovement}
-              disabled={isPending}
-              className="mt-3 w-full rounded-md bg-brass-600 px-3 py-2 font-medium hover:bg-brass-500 disabled:opacity-50"
-            >
-              {isPending ? "Envoi…" : "Valider le mouvement"}
-            </button>
+            <>
+              {unpositionedShips.length > 0 && (
+                <p className="mt-3 rounded-md border border-amber-800 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+                  {unpositionedShips.length === 1
+                    ? `${unpositionedShips[0].name} n'a pas encore été positionné.`
+                    : `${unpositionedShips.length} navires n'ont pas encore été positionnés : ${unpositionedShips.map((u) => u.name).join(", ")}.`}{" "}
+                  Un navire non positionné garde sa position.
+                </p>
+              )}
+              <button
+                onClick={finishMovement}
+                disabled={isPending}
+                className="mt-3 w-full rounded-md bg-brass-600 px-3 py-2 font-medium hover:bg-brass-500 disabled:opacity-50"
+              >
+                {isPending ? "Envoi…" : "Terminer la phase de mouvement"}
+              </button>
+            </>
           )}
           {!hasSubmittedThisPhase && !props.arbiterPaused && !isMovementPhase && (
             <>
@@ -712,6 +785,11 @@ export function TacticalView(props: {
                     <li key={i} className={`rounded-md px-3 py-2 text-xs ${a.hit ? "bg-red-950/40" : "bg-slate-800/60"}`}>
                       <div className="mb-0.5 text-[10px] uppercase tracking-wide text-slate-500">Manche {a.roundNumber}</div>
                       {a.narrative}
+                      {a.hitRoll !== null && a.hitChancePercent !== null && (
+                        <div className="mt-1 text-slate-500">
+                          Jet : {a.hitRoll.toFixed(1)} (seuil {a.hitChancePercent.toFixed(0)}%)
+                        </div>
+                      )}
                       {a.hit && (
                         <div className="mt-1 text-slate-400">
                           {a.hits} impact{(a.hits ?? 0) > 1 ? "s" : ""} · {a.damagePoints?.toFixed(1)} pts
@@ -767,8 +845,11 @@ function MovementDashboard({
   roundMinutes,
   minSpeed,
   maxSpeed,
+  positioned,
+  isPending,
   onSpeedChange,
   onClear,
+  onSave,
 }: {
   ship: OwnUnit;
   draft: MovementDraft;
@@ -779,13 +860,19 @@ function MovementDashboard({
   roundMinutes: number;
   minSpeed: number;
   maxSpeed: number;
+  positioned: boolean;
+  isPending: boolean;
   onSpeedChange: (speed: number) => void;
   onClear: () => void;
+  onSave: () => void;
 }) {
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="font-semibold">{ship.name}</h2>
+        <h2 className="flex items-center gap-1.5 font-semibold">
+          {ship.name}
+          {positioned && <span className="text-xs font-normal text-emerald-400">✓ validé</span>}
+        </h2>
         <p className="text-xs text-slate-500">{ship.className}</p>
       </div>
       <HealthBar unit={ship} />
@@ -811,9 +898,18 @@ function MovementDashboard({
         <div>Restant : {remainingNm.toFixed(2)} nm</div>
       </div>
       <p className="text-xs text-slate-500">Cliquez sur la carte pour tracer le trajet de cette manche.</p>
-      <button onClick={onClear} className="w-full rounded-md border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-900">
-        Effacer le trajet
-      </button>
+      <div className="flex gap-2">
+        <button onClick={onClear} className="rounded-md border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-900">
+          Effacer le trajet
+        </button>
+        <button
+          onClick={onSave}
+          disabled={isPending}
+          className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 text-xs font-medium hover:bg-brass-500 disabled:opacity-50"
+        >
+          {isPending ? "Envoi…" : positioned ? "Revalider ce navire" : "Valider le mouvement de ce navire"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -925,6 +1021,11 @@ function FireDashboard({
                     </span>
                     <span className="text-emerald-400">✓ tiré</span>
                   </div>
+                  {fired.hitRoll !== null && fired.hitChancePercent !== null && (
+                    <div className="mt-1 text-slate-500">
+                      Jet : {fired.hitRoll.toFixed(1)} (seuil {fired.hitChancePercent.toFixed(0)}%)
+                    </div>
+                  )}
                   {fired.narrative && <div className="mt-1 text-slate-300">{fired.narrative}</div>}
                 </li>
               );
@@ -960,6 +1061,12 @@ function FireDashboard({
                 <span>Torpilles ({formatArc(torpedoBattery.arc ?? "BROADSIDE")})</span>
                 <span className="text-emerald-400">✓ tiré</span>
               </div>
+              {firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.hitRoll !== null && firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.hitChancePercent !== null && (
+                <div className="mt-1 text-slate-500">
+                  Jet : {firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.hitRoll?.toFixed(1)} (seuil{" "}
+                  {firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.hitChancePercent?.toFixed(0)}%)
+                </div>
+              )}
               {firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.narrative && (
                 <div className="mt-1 text-slate-300">{firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.narrative}</div>
               )}

@@ -67,6 +67,13 @@ async function renderTacticalView(engagementId: string, teamId: string) {
   const ownFireActionsThisRound = await prisma.tacticalAction.findMany({
     where: { engagementId, roundNumber: engagement.roundNumber, phase: "FIRE", teamId },
   });
+  // Navires déjà repositionnés cette manche (soumission par navire, voir
+  // TacticalView) : sert à l'indicateur "validé" dans la liste et à
+  // pré-remplir le brouillon avec le trajet déjà enregistré si le joueur
+  // revient sur ce navire.
+  const ownMovementActionsThisRound = await prisma.tacticalAction.findMany({
+    where: { engagementId, roundNumber: engagement.roundNumber, phase: "MOVEMENT", teamId },
+  });
 
   // Vitesse de départ par défaut à la manche 1 : celle du dernier ordre
   // stratégique soumis pour ce navire (la vitesse qu'il avait juste avant
@@ -210,7 +217,15 @@ async function renderTacticalView(engagementId: string, teamId: string) {
         hit: a.hit,
         hits: a.hits,
         damagePoints: a.damagePoints,
+        hitChancePercent: a.hitChancePercent,
+        hitRoll: a.hitRoll,
         narrative: a.narrative,
+      }))}
+      ownMovementActionsThisRound={ownMovementActionsThisRound.map((a) => ({
+        unitId: a.unitId,
+        speedKnots: a.speedKnots,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        movementPath: (a.movementPath as any) ?? null,
       }))}
       battleLog={battleLog.map((a) => ({
         roundNumber: a.roundNumber,
@@ -218,6 +233,8 @@ async function renderTacticalView(engagementId: string, teamId: string) {
         hit: a.hit,
         hits: a.hits,
         damagePoints: a.damagePoints,
+        hitChancePercent: a.hitChancePercent,
+        hitRoll: a.hitRoll,
         narrative: a.narrative,
       }))}
       messages={messages.map((m) => ({ id: m.id, kind: m.kind, authorName: m.authorName, body: m.body, roundNumber: m.roundNumber }))}

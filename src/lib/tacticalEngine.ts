@@ -369,83 +369,96 @@ export async function recomputeContacts(engagementId: string, roundNumber: numbe
 
 // ── Soumission des ordres ───────────────────────────────────
 
-export async function submitTacticalMovement(params: {
+/**
+ * Enregistre (ou met à jour) le mouvement d'UN navire pour la manche en
+ * cours — sans marquer l'équipe comme prête : peut être rappelé plusieurs
+ * fois pour le même navire (le joueur change d'avis) ou pour des navires
+ * différents, dans l'ordre qu'il veut, tant que `finishMovementPhase` n'a
+ * pas été appelé.
+ */
+export async function submitTacticalMovementForUnit(params: {
   engagementId: string;
   teamId: string;
-  moves: { unitId: string; speedKnots: number; path: LatLng[]; depthBand?: DepthBand }[];
+  unitId: string;
+  speedKnots: number;
+  path: LatLng[];
+  depthBand?: DepthBand;
 }) {
   const engagement = await assertEngagementOpen(params.engagementId, "AWAITING_MOVEMENT");
-  const lastSpeedByUnit = await getLastKnownSpeedsByUnit(
-    params.engagementId,
-    params.moves.map((m) => m.unitId),
-    engagement.roundNumber
-  );
+  const lastSpeedByUnit = await getLastKnownSpeedsByUnit(params.engagementId, [params.unitId], engagement.roundNumber);
 
-  for (const m of params.moves) {
-    const participant = await prisma.tacticalParticipant.findUnique({
-      where: { engagementId_unitId: { engagementId: params.engagementId, unitId: m.unitId } },
-      include: { unit: { include: { unitClass: true } } },
-    });
-    if (!participant || participant.teamId !== params.teamId) {
-      throw new OrderValidationError("Cette unité ne participe pas à cet engagement pour votre camp.");
-    }
-    if (m.speedKnots < 0 || m.speedKnots > participant.unit.unitClass.maxSpeedKnots) {
+  const participant = await prisma.tacticalParticipant.findUnique({
+    where: { engagementId_unitId: { engagementId: params.engagementId, unitId: params.unitId } },
+    include: { unit: { include: { unitClass: true } } },
+  });
+  if (!participant || participant.teamId !== params.teamId) {
+    throw new OrderValidationError("Cette unité ne participe pas à cet engagement pour votre camp.");
+  }
+  if (params.speedKnots < 0 || params.speedKnots > participant.unit.unitClass.maxSpeedKnots) {
+    throw new OrderValidationError(
+      `${participant.unit.name} : vitesse ${params.speedKnots} nds hors limites (max ${participant.unit.unitClass.maxSpeedKnots}).`
+    );
+  }
+
+  // Accélération : la vitesse ne peut changer que d'un écart plafonné par
+  // manche (recherche historique, voir prisma/seed.ts) — un cuirassé ne
+  // passe pas de 10 à 28 nds en 5 minutes.
+  const accelKnotsPerMin = participant.unit.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(participant.unit.unitClass.category);
+  const lastSpeed = lastSpeedByUnit.get(params.unitId) ?? 0;
+  const maxDelta = accelKnotsPerMin * engagement.roundMinutes;
+  const minReachable = Math.max(0, lastSpeed - maxDelta);
+  const maxReachable = Math.min(participant.unit.unitClass.maxSpeedKnots, lastSpeed + maxDelta);
+  if (params.speedKnots < minReachable - 0.01 || params.speedKnots > maxReachable + 0.01) {
+    throw new OrderValidationError(
+      `${participant.unit.name} : ne peut pas passer de ${lastSpeed.toFixed(0)} à ${params.speedKnots.toFixed(0)} nds en ${engagement.roundMinutes.toFixed(1)}min (accélération max ${accelKnotsPerMin.toFixed(1)}nds/min, atteignable entre ${minReachable.toFixed(0)} et ${maxReachable.toFixed(0)}nds).`
+    );
+  }
+
+  if (params.path.length > 0) {
+    const turningRadiusNm =
+      (participant.unit.unitClass.turningRadiusM ?? defaultTurningRadiusM(participant.unit.unitClass.category)) / NM_TO_M;
+    const fullPath = [{ lat: participant.unit.currentLat, lng: participant.unit.currentLng }, ...params.path];
+    const budgetNm = speedBudgetNm(params.speedKnots, engagement.roundMinutes);
+    const usedNm = pathLengthNm(fullPath) + turnPenaltyNm(fullPath, turningRadiusNm);
+    if (usedNm > budgetNm * 1.01) {
       throw new OrderValidationError(
-        `${participant.unit.name} : vitesse ${m.speedKnots} nds hors limites (max ${participant.unit.unitClass.maxSpeedKnots}).`
+        `${participant.unit.name} : tracé de ${usedNm.toFixed(2)}nm (dont manœuvre), budget ${budgetNm.toFixed(2)}nm à ${params.speedKnots}nds sur ${engagement.roundMinutes.toFixed(1)}min.`
       );
     }
+  }
 
-    // Accélération : la vitesse ne peut changer que d'un écart plafonné par
-    // manche (recherche historique, voir prisma/seed.ts) — un cuirassé ne
-    // passe pas de 10 à 28 nds en 5 minutes.
-    const accelKnotsPerMin = participant.unit.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(participant.unit.unitClass.category);
-    const lastSpeed = lastSpeedByUnit.get(m.unitId) ?? 0;
-    const maxDelta = accelKnotsPerMin * engagement.roundMinutes;
-    const minReachable = Math.max(0, lastSpeed - maxDelta);
-    const maxReachable = Math.min(participant.unit.unitClass.maxSpeedKnots, lastSpeed + maxDelta);
-    if (m.speedKnots < minReachable - 0.01 || m.speedKnots > maxReachable + 0.01) {
-      throw new OrderValidationError(
-        `${participant.unit.name} : ne peut pas passer de ${lastSpeed.toFixed(0)} à ${m.speedKnots.toFixed(0)} nds en ${engagement.roundMinutes.toFixed(1)}min (accélération max ${accelKnotsPerMin.toFixed(1)}nds/min, atteignable entre ${minReachable.toFixed(0)} et ${maxReachable.toFixed(0)}nds).`
-      );
-    }
-
-    if (m.path.length > 0) {
-      const turningRadiusNm =
-        (participant.unit.unitClass.turningRadiusM ?? defaultTurningRadiusM(participant.unit.unitClass.category)) / NM_TO_M;
-      const fullPath = [{ lat: participant.unit.currentLat, lng: participant.unit.currentLng }, ...m.path];
-      const budgetNm = speedBudgetNm(m.speedKnots, engagement.roundMinutes);
-      const usedNm = pathLengthNm(fullPath) + turnPenaltyNm(fullPath, turningRadiusNm);
-      if (usedNm > budgetNm * 1.01) {
-        throw new OrderValidationError(
-          `${participant.unit.name} : tracé de ${usedNm.toFixed(2)}nm (dont manœuvre), budget ${budgetNm.toFixed(2)}nm à ${m.speedKnots}nds sur ${engagement.roundMinutes.toFixed(1)}min.`
-        );
-      }
-    }
-
-    await prisma.tacticalAction.upsert({
-      where: {
-        engagementId_roundNumber_phase_unitId_weaponSlot: {
-          engagementId: params.engagementId,
-          roundNumber: engagement.roundNumber,
-          phase: "MOVEMENT",
-          unitId: m.unitId,
-          weaponSlot: "",
-        },
-      },
-      create: {
+  await prisma.tacticalAction.upsert({
+    where: {
+      engagementId_roundNumber_phase_unitId_weaponSlot: {
         engagementId: params.engagementId,
         roundNumber: engagement.roundNumber,
         phase: "MOVEMENT",
-        unitId: m.unitId,
-        teamId: params.teamId,
-        speedKnots: m.speedKnots,
-        movementPath: m.path,
-        depthBand: m.depthBand,
+        unitId: params.unitId,
+        weaponSlot: "",
       },
-      update: { speedKnots: m.speedKnots, movementPath: m.path, depthBand: m.depthBand },
-    });
-  }
+    },
+    create: {
+      engagementId: params.engagementId,
+      roundNumber: engagement.roundNumber,
+      phase: "MOVEMENT",
+      unitId: params.unitId,
+      teamId: params.teamId,
+      speedKnots: params.speedKnots,
+      movementPath: params.path,
+      depthBand: params.depthBand,
+    },
+    update: { speedKnots: params.speedKnots, movementPath: params.path, depthBand: params.depthBand },
+  });
+}
 
+/**
+ * L'équipe annonce qu'elle a fini de positionner ses navires cette manche ;
+ * la manche se résout dès que les deux camps l'ont fait. Un navire jamais
+ * explicitement repositionné garde sa position (choix valide, symétrique
+ * du "garder le feu" en phase de tir) — voir `resolveMovementPhase`.
+ */
+export async function finishMovementPhase(params: { engagementId: string; teamId: string }) {
+  const engagement = await assertEngagementOpen(params.engagementId, "AWAITING_MOVEMENT");
   await markSubmitted(params.engagementId, engagement.roundNumber, "MOVEMENT", params.teamId);
   return maybeResolvePhase(params.engagementId);
 }
@@ -455,6 +468,8 @@ export type FireShotResult = {
   hits: number;
   damagePoints: number;
   hitChancePercent: number;
+  /** Tirage au sort (0-100) : touché si en-dessous de `hitChancePercent`. Affiché aux joueurs pour rendre le jet transparent. */
+  hitRoll: number;
   narrative: string;
   revealRadiusNm: number;
 };
@@ -544,7 +559,7 @@ export async function submitTacticalFireShot(params: {
   const attackerHealthCurrent = attacker.healthCurrent ?? attacker.healthMax ?? 1;
   const attackerHealthMax = attacker.healthMax ?? 1;
 
-  let outcome: { hitChancePercent: number; hit: boolean; hits: number; damagePoints: number } | null = null;
+  let outcome: { hitChancePercent: number; hitRoll: number; hit: boolean; hits: number; damagePoints: number } | null = null;
   let calibreMm: number | null = null;
   let wakeVisible = true;
 
@@ -557,7 +572,7 @@ export async function submitTacticalFireShot(params: {
       targetDepthBand: target.depthBand as CombatDepthBand,
     });
     if (!dc) throw new OrderValidationError("Pas assez de grenades ASM à bord pour une passe.");
-    outcome = { hitChancePercent: dc.hitChancePercent, hit: dc.hit, hits: dc.hit ? 1 : 0, damagePoints: dc.damagePoints };
+    outcome = { hitChancePercent: dc.hitChancePercent, hitRoll: dc.hitRoll, hit: dc.hit, hits: dc.hit ? 1 : 0, damagePoints: dc.damagePoints };
     await prisma.unit.update({
       where: { id: attacker.id },
       data: { depthChargesRemaining: Math.max(0, (attacker.depthChargesRemaining ?? 0) - dc.chargesUsed) },
@@ -681,6 +696,7 @@ export async function submitTacticalFireShot(params: {
         damagePoints: outcome.damagePoints,
         targetSunk: provisionalSunk,
         hitChancePercent: outcome.hitChancePercent,
+        hitRoll: outcome.hitRoll,
         narrative,
         revealedShooter: reveal.revealRadiusNm > 0,
         applied: false,
@@ -702,6 +718,7 @@ export async function submitTacticalFireShot(params: {
     hits: outcome.hits,
     damagePoints: outcome.damagePoints,
     hitChancePercent: outcome.hitChancePercent,
+    hitRoll: outcome.hitRoll,
     narrative,
     revealRadiusNm: reveal.revealRadiusNm,
   };

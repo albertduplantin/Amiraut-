@@ -4,7 +4,14 @@ import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
 import { assertPlayer, AccessDeniedError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { submitTacticalMovement, submitTacticalFireShot, finishFirePhase, postTacticalMessage, type FireShotResult } from "@/lib/tacticalEngine";
+import {
+  submitTacticalMovementForUnit,
+  finishMovementPhase,
+  submitTacticalFireShot,
+  finishFirePhase,
+  postTacticalMessage,
+  type FireShotResult,
+} from "@/lib/tacticalEngine";
 import { OrderValidationError } from "@/lib/turnEngine";
 import type { DepthBand, WeaponType } from "@/generated/prisma/client";
 import type { LatLng } from "@/lib/geo";
@@ -17,15 +24,40 @@ async function assertOwnsUnits(teamId: string, unitIds: string[]) {
   if (count !== unitIds.length) throw new AccessDeniedError("Une de ces unités ne vous appartient pas.");
 }
 
-export async function submitTacticalMovementAction(params: {
+/** Enregistre le mouvement d'UN navire (voir tacticalEngine.submitTacticalMovementForUnit) : rappelable plusieurs fois, y compris pour changer d'avis, tant que la phase n'est pas terminée. */
+export async function submitMovementForUnitAction(params: {
   engagementId: string;
-  moves: { unitId: string; speedKnots: number; path: LatLng[]; depthBand?: DepthBand }[];
+  unitId: string;
+  speedKnots: number;
+  path: LatLng[];
+  depthBand?: DepthBand;
 }): Promise<TacticalActionResult> {
   const session = await getSession();
   try {
     assertPlayer(session);
-    await assertOwnsUnits(session.teamId, params.moves.map((m) => m.unitId));
-    await submitTacticalMovement({ engagementId: params.engagementId, teamId: session.teamId, moves: params.moves });
+    await assertOwnsUnits(session.teamId, [params.unitId]);
+    await submitTacticalMovementForUnit({
+      engagementId: params.engagementId,
+      teamId: session.teamId,
+      unitId: params.unitId,
+      speedKnots: params.speedKnots,
+      path: params.path,
+      depthBand: params.depthBand,
+    });
+  } catch (error) {
+    if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
+    throw error;
+  }
+  revalidatePath("/team/orders");
+  return { ok: true };
+}
+
+/** Le camp annonce qu'il a fini de positionner ses navires cette manche ; un navire jamais repositionné garde sa position. */
+export async function finishMovementPhaseAction(params: { engagementId: string }): Promise<TacticalActionResult> {
+  const session = await getSession();
+  try {
+    assertPlayer(session);
+    await finishMovementPhase({ engagementId: params.engagementId, teamId: session.teamId });
   } catch (error) {
     if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
     throw error;

@@ -530,6 +530,10 @@ model TacticalAction {
   /// d'autres tirs simultanés — voir `applied`.
   targetSunk       Boolean?
   hitChancePercent Float?
+  /// Tirage au sort (0-100) comparé à `hitChancePercent` pour décider du
+  /// coup : en-dessous = touché. Affiché aux joueurs pour rendre le
+  /// mécanisme transparent (pas juste un résultat, le jet lui-même).
+  hitRoll          Float?
   /// Récit du coup, affiché aux joueurs.
   narrative        String?
   /// Le tir a trahi la position du tireur (feu de bouche, sillage) pour la manche suivante.
