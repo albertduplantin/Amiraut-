@@ -53,6 +53,12 @@ export type ShipMarkerConfig = {
   label?: string;
   /** Épave fumante (SUNK) / fumée (DAMAGED) superposées à la silhouette. */
   status?: UnitVisualStatus;
+  /** Vitesse actuelle (nds) : affiche un vecteur devant l'étrave et un sillage. Absent/0 = aucun des deux. */
+  speedKnots?: number;
+  /** Vitesse de référence (typiquement la vitesse max) normalisant la longueur du vecteur. */
+  referenceSpeedKnots?: number;
+  /** Cap/vitesse estimés (contact ennemi, pas une donnée certaine) : vecteur en pointillés, plus pâle. */
+  vectorEstimated?: boolean;
 };
 
 type GameMapProps = {
@@ -347,7 +353,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     }
 
     for (const config of incoming) {
-      const signature = `${config.silhouette}|${config.color}|${config.label ?? ""}|${config.status ?? ""}`;
+      const signature = `${config.silhouette}|${config.color}|${config.label ?? ""}|${config.status ?? ""}|${Math.round((config.speedKnots ?? 0) * 2)}|${config.vectorEstimated ?? false}`;
       const current = existing.get(config.id);
       if (!current) {
         const el = buildSilhouetteElement(config);

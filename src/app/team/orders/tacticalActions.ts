@@ -40,6 +40,8 @@ export async function submitFireShotAction(params: {
   unitId: string;
   targetUnitId: string;
   weaponType: WeaponType;
+  /** Quelle pièce précise tire — voir gunWeaponSlot/TORPEDO_WEAPON_SLOT dans tacticalEngine.ts. */
+  weaponSlot: string;
   torpedoTypeId?: string;
 }): Promise<FireShotActionResult> {
   const session = await getSession();
@@ -52,6 +54,7 @@ export async function submitFireShotAction(params: {
       unitId: params.unitId,
       targetUnitId: params.targetUnitId,
       weaponType: params.weaponType,
+      weaponSlot: params.weaponSlot,
       torpedoTypeId: params.torpedoTypeId,
     });
     revalidatePath("/team/orders");

@@ -46,6 +46,8 @@ export const denmarkStrait: ScenarioDefinition = {
       maxSpeedKnots: 31,
       lengthMeters: 262,
       beamMeters: 31.8,
+      turningRadiusM: 300, // croiseur de bataille rapide (conception 1916 modernisée), plus manœuvrant qu'un cuirassé pur.
+      accelerationKnotsPerMin: 3,
       sensors: [
         { type: "RADAR", rangeNm: 13 },
         { type: "VISUAL", rangeNm: 14 },
@@ -78,6 +80,8 @@ export const denmarkStrait: ScenarioDefinition = {
       maxSpeedKnots: 28,
       lengthMeters: 227,
       beamMeters: 31.4,
+      turningRadiusM: 280, // cuirassé moderne (classe KGV) : voir méthodologie prisma/seed.ts.
+      accelerationKnotsPerMin: 2.5,
       sensors: [
         { type: "RADAR", rangeNm: 15 },
         { type: "VISUAL", rangeNm: 14 },
@@ -110,6 +114,8 @@ export const denmarkStrait: ScenarioDefinition = {
       maxSpeedKnots: 30,
       lengthMeters: 251,
       beamMeters: 36,
+      turningRadiusM: 280, // cuirassé moderne : diamètre tactique resserré ~600yd (voir méthodologie prisma/seed.ts).
+      accelerationKnotsPerMin: 2.5,
       sensors: [
         { type: "RADAR", rangeNm: 12 },
         { type: "VISUAL", rangeNm: 15 },
@@ -142,6 +148,8 @@ export const denmarkStrait: ScenarioDefinition = {
       maxSpeedKnots: 32,
       lengthMeters: 212,
       beamMeters: 21.7,
+      turningRadiusM: 320, // croiseur lourd : voir méthodologie dans prisma/seed.ts (ligne ~160).
+      accelerationKnotsPerMin: 3.5,
       sensors: [
         { type: "RADAR", rangeNm: 11 },
         { type: "VISUAL", rangeNm: 13 },

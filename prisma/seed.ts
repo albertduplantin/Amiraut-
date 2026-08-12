@@ -157,6 +157,14 @@ async function main() {
       maxSpeedKnots: 28,
       lengthMeters: 227.1,
       beamMeters: 31.4,
+      // Rayon de virage/accélération : recherche historique (WWII, wikipedia "Tactical diameter",
+      // Fletcher-class 950yd/30kt cité par destroyerhistory.org, note sur les cuirassés au diamètre
+      // tactique plus serré ~600yd que les croiseurs/destroyers 700-900yd malgré leur taille — rayon
+      // du gouvernail proportionnellement plus grand. Accélération : USS Iowa ~10min à pleine vitesse
+      // depuis l'arrêt (~33nds) ≈ 3,3nds/min, valeur de repli pour les cuirassés ; ajustée par catégorie
+      // (plus rapide pour les destroyers, plus lente pour les cargos).
+      turningRadiusM: 280, // cuirassé moderne (KGV) : diamètre tactique resserré ~600yd (naval architecture).
+      accelerationKnotsPerMin: 2.5,
       combatProfile: {
         // 2 tourelles quadruples avant (A, B) + 1 tourelle double arrière (Y).
         guns: [
@@ -195,6 +203,8 @@ async function main() {
       maxSpeedKnots: 32,
       lengthMeters: 180.3,
       beamMeters: 18.9,
+      turningRadiusM: 300, // croiseur léger : voir méthodologie ligne ~159.
+      accelerationKnotsPerMin: 4,
       combatProfile: {
         // 4 tourelles triples : A, B avant, X, Y arrière.
         guns: [
@@ -232,6 +242,8 @@ async function main() {
       maxSpeedKnots: 30,
       lengthMeters: 187,
       beamMeters: 19.3,
+      turningRadiusM: 300, // croiseur léger : voir méthodologie ligne ~159.
+      accelerationKnotsPerMin: 4,
       combatProfile: {
         guns: [
           { calibreMm: 152, count: 6, rangeM: 22600, roundsPerMinute: 6, arc: "FORWARD" },
@@ -268,6 +280,8 @@ async function main() {
       maxSpeedKnots: 31,
       lengthMeters: 169.3,
       beamMeters: 18.9,
+      turningRadiusM: 300, // croiseur léger : voir méthodologie ligne ~159.
+      accelerationKnotsPerMin: 4,
       combatProfile: {
         guns: [
           { calibreMm: 152, count: 6, rangeM: 22600, roundsPerMinute: 6, arc: "FORWARD" },
@@ -303,6 +317,8 @@ async function main() {
       maxSpeedKnots: 32,
       lengthMeters: 192.9,
       beamMeters: 20.1,
+      turningRadiusM: 320, // croiseur lourd : diamètre tactique typique 700-900yd (640-820m) pour croiseurs/destroyers (source générale citée).
+      accelerationKnotsPerMin: 3.5,
       combatProfile: {
         // 4 tourelles doubles : A, B avant, X, Y arrière.
         guns: [
@@ -341,6 +357,8 @@ async function main() {
       maxSpeedKnots: 36,
       lengthMeters: 100.3,
       beamMeters: 10.4,
+      turningRadiusM: 300, // destroyer moderne bien conçu (voir méthodologie ligne ~159).
+      accelerationKnotsPerMin: 5,
       combatProfile: {
         // 3 tourelles simples : A, B avant, X arrière.
         guns: [
@@ -380,6 +398,8 @@ async function main() {
       maxSpeedKnots: 36,
       lengthMeters: 114.9,
       beamMeters: 11.1,
+      turningRadiusM: 300, // destroyer moderne bien conçu (voir méthodologie ligne ~159).
+      accelerationKnotsPerMin: 5,
       combatProfile: {
         // 4 tourelles simples : A, B avant, X, Y arrière.
         guns: [
@@ -417,6 +437,8 @@ async function main() {
       maxSpeedKnots: 37,
       lengthMeters: 100.3,
       beamMeters: 10.2,
+      turningRadiusM: 300, // destroyer moderne bien conçu (voir méthodologie ligne ~159).
+      accelerationKnotsPerMin: 5,
       combatProfile: {
         // 2 tourelles simples : A avant, X arrière.
         guns: [
@@ -454,6 +476,8 @@ async function main() {
       maxSpeedKnots: 18,
       lengthMeters: 95.1,
       beamMeters: 9.35,
+      turningRadiusM: 340, // destroyer ancien (conception 1918-19), gouvernail simple, moins agile qu'un destroyer moderne.
+      accelerationKnotsPerMin: 4,
       combatProfile: {
         guns: [
           { calibreMm: 102, count: 2, rangeM: 12500, roundsPerMinute: 10, arc: "FORWARD" },
@@ -492,6 +516,8 @@ async function main() {
       maxSpeedKnots: 10,
       lengthMeters: 135,
       beamMeters: 17.3,
+      turningRadiusM: 450, // cargo civil : coque lourde, gouvernail peu dimensionné pour la manœuvre.
+      accelerationKnotsPerMin: 1,
       sensors: [{ type: "VISUAL", rangeNm: 8 }],
       detectability: 1.6,
       iconKey: "merchant",
@@ -510,6 +536,8 @@ async function main() {
       maxSpeedKnots: 32,
       lengthMeters: 234.9,
       beamMeters: 30,
+      turningRadiusM: 300, // croiseur de bataille rapide, plus manœuvrant qu'un cuirassé pur.
+      accelerationKnotsPerMin: 3,
       combatProfile: {
         // 3 tourelles triples : Anton, Bruno avant, Caesar arrière.
         guns: [
@@ -549,6 +577,8 @@ async function main() {
       maxSpeedKnots: 36,
       lengthMeters: 127,
       beamMeters: 12,
+      turningRadiusM: 300, // destroyer moderne bien conçu (voir méthodologie ligne ~159).
+      accelerationKnotsPerMin: 5,
       combatProfile: {
         // Une seule pièce avant (A) : la place réservée au deuxième affût
         // avant servait à la chaufferie surdimensionnée de ces destroyers
@@ -589,6 +619,8 @@ async function main() {
       maxSpeedKnots: 18,
       lengthMeters: 67.1,
       beamMeters: 6.2,
+      turningRadiusM: 150, // recherché : U-Boot type VII réputé très manœuvrant (double gouvernail, cf. naval-encyclopedia).
+      accelerationKnotsPerMin: 3,
       // Pas de canon en combatProfile : en 1943 un U-Boot en surface évite
       // le duel d'artillerie avec un escorteur (cohérent avec la doctrine
       // réelle). Deux types de torpilles au choix, un vrai arbitrage

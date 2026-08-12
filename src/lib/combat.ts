@@ -214,10 +214,18 @@ export function resolveGunEngagement(params: {
   rangeM: number;
   /** Relèvement de la cible relatif à la proue : exclut les pièces hors arc. */
   relativeBearingDeg?: number;
+  /**
+   * Impose cette pièce précise plutôt que de laisser `selectGunBattery` en
+   * choisir une automatiquement — nécessaire quand le joueur a
+   * explicitement désigné laquelle tirer (tir multi-armes : chaque pièce
+   * du bord peut tirer séparément la même manche, pas seulement "la
+   * meilleure").
+   */
+  forcedBattery?: GunBattery;
   rng?: () => number;
 }): GunEngagementResult | null {
   const rng = params.rng ?? Math.random;
-  const battery = selectGunBattery(params.attackerProfile, params.rangeM, params.relativeBearingDeg);
+  const battery = params.forcedBattery ?? selectGunBattery(params.attackerProfile, params.rangeM, params.relativeBearingDeg);
   if (!battery) return null;
 
   const hitChancePercent = gunHitChancePercent({

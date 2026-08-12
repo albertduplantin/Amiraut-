@@ -35,6 +35,10 @@ export type ScenarioUnitClass = {
   maxSpeedKnots: number;
   lengthMeters?: number;
   beamMeters?: number;
+  /** Rayon de virage réel (mètres) — voir géométrie du "diamètre tactique" en navigation. */
+  turningRadiusM?: number;
+  /** Vitesse de changement de vitesse (nœuds/minute) — accélération et décélération, symétriques par simplification. */
+  accelerationKnotsPerMin?: number;
   sensors: ScenarioSensor[];
   detectability?: number;
   iconKey: string;

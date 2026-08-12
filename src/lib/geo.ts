@@ -74,6 +74,34 @@ export function clampPathToBudget(points: LatLng[], budgetNm: number): LatLng[] 
   return clamped;
 }
 
+/** Écart angulaire absolu entre deux caps (0-180°). */
+function angleDiff(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+/**
+ * Pénalité de distance (nm) représentant le rayon de virage réel du
+ * navire : le tracé reste des segments droits à l'écran (simplification
+ * volontaire, pas de rendu de courbes), mais chaque changement de cap à un
+ * waypoint intérieur coûte la longueur de l'arc de cercle qu'un navire de
+ * ce rayon de virage devrait réellement parcourir pour effectuer ce virage
+ * — retranchée du budget de distance de la manche. Un virage à 180° avec
+ * un grand rayon de virage coûte donc nettement plus qu'un léger
+ * infléchissement de cap.
+ */
+export function turnPenaltyNm(points: LatLng[], turningRadiusNm: number): number {
+  if (turningRadiusNm <= 0 || points.length < 3) return 0;
+  let penalty = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const incoming = bearingDeg(points[i - 1], points[i]);
+    const outgoing = bearingDeg(points[i], points[i + 1]);
+    const turnDeg = angleDiff(incoming, outgoing);
+    penalty += ((turnDeg * Math.PI) / 180) * turningRadiusNm;
+  }
+  return penalty;
+}
+
 type TimedTrack = {
   /** Position au temps `minutes` (bornée aux deux extrémités du chemin). */
   positionAt(minutesIntoTurn: number): LatLng;

@@ -1,14 +1,14 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { distanceNm, bearingDeg, pathLengthNm, speedBudgetNm, type LatLng } from "@/lib/geo";
+import { distanceNm, bearingDeg, pathLengthNm, speedBudgetNm, turnPenaltyNm, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm, type WeatherConditions } from "@/lib/weather";
 import {
   resolveGunEngagement,
   resolveTorpedoEngagement,
   resolveDepthChargeAttack,
-  selectGunBattery,
   selectTorpedoBattery,
   isTorpedoArcClear,
+  isInGunArc,
   type CombatProfile,
   type DepthBand as CombatDepthBand,
 } from "@/lib/combat";
@@ -34,6 +34,60 @@ function parseSensors(json: unknown): SensorSpec[] {
 
 function isNightWeather(w: WeatherConditions | null): boolean {
   return !w || w.daylight === "NIGHT" || w.daylight === "POLAR_NIGHT";
+}
+
+// ── Manœuvre : rayon de virage et accélération ──────────────
+//
+// Repli par catégorie si une classe de navire n'a pas encore ces champs
+// renseignés (ex: ajoutée avant leur introduction, ou nouvelle classe pas
+// encore documentée) — voir prisma/seed.ts pour la méthodologie de
+// recherche et les valeurs par classe.
+export function defaultTurningRadiusM(category: string): number {
+  return category === "SUBMARINE" ? 200 : 320;
+}
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- catégorie gardée dans la signature pour permettre une différenciation future sans casser les appelants.
+export function defaultAccelerationKnotsPerMin(category: string): number {
+  return 3;
+}
+
+/**
+ * Vitesse de référence d'une unité pour cette manche : celle qu'elle avait
+ * juste avant (dernière manche tactique jouée, ou dernier ordre
+ * stratégique si c'est la toute première manche du combat) — sert à la
+ * fois de valeur par défaut affichée au joueur et de base pour le
+ * plafonnement par accélération. Traite plusieurs unités en une passe
+ * (évite N allers-retours base pour l'écran d'ordres).
+ */
+export async function getLastKnownSpeedsByUnit(
+  engagementId: string,
+  unitIds: string[],
+  currentRoundNumber: number
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (unitIds.length === 0) return result;
+
+  if (currentRoundNumber > 1) {
+    const priorMoves = await prisma.tacticalAction.findMany({
+      where: { engagementId, phase: "MOVEMENT", roundNumber: { lt: currentRoundNumber }, unitId: { in: unitIds } },
+      orderBy: { roundNumber: "desc" },
+      select: { unitId: true, speedKnots: true },
+    });
+    for (const m of priorMoves) {
+      if (!result.has(m.unitId) && m.speedKnots != null) result.set(m.unitId, m.speedKnots);
+    }
+  }
+
+  const missingUnitIds = unitIds.filter((id) => !result.has(id));
+  if (missingUnitIds.length > 0) {
+    const lastOrders = await Promise.all(
+      missingUnitIds.map((unitId) =>
+        prisma.unitOrder.findFirst({ where: { unitId }, orderBy: { submittedAt: "desc" }, select: { unitId: true, speedKnots: true } })
+      )
+    );
+    for (const o of lastOrders) if (o) result.set(o.unitId, o.speedKnots);
+  }
+
+  return result;
 }
 
 // ── Ouverture d'un engagement ───────────────────────────────
@@ -250,6 +304,8 @@ export async function recomputeContacts(engagementId: string, roundNumber: numbe
     targetUnitId: string;
     method: SensorType;
     distanceNm: number;
+    targetLatSnapshot: number;
+    targetLngSnapshot: number;
   }[] = [];
 
   for (const observer of engagement.participants) {
@@ -297,6 +353,8 @@ export async function recomputeContacts(engagementId: string, roundNumber: numbe
           targetUnitId: target.unitId,
           method: best.type,
           distanceNm: d,
+          targetLatSnapshot: target.unit.currentLat,
+          targetLngSnapshot: target.unit.currentLng,
         });
       }
     }
@@ -317,6 +375,11 @@ export async function submitTacticalMovement(params: {
   moves: { unitId: string; speedKnots: number; path: LatLng[]; depthBand?: DepthBand }[];
 }) {
   const engagement = await assertEngagementOpen(params.engagementId, "AWAITING_MOVEMENT");
+  const lastSpeedByUnit = await getLastKnownSpeedsByUnit(
+    params.engagementId,
+    params.moves.map((m) => m.unitId),
+    engagement.roundNumber
+  );
 
   for (const m of params.moves) {
     const participant = await prisma.tacticalParticipant.findUnique({
@@ -331,23 +394,42 @@ export async function submitTacticalMovement(params: {
         `${participant.unit.name} : vitesse ${m.speedKnots} nds hors limites (max ${participant.unit.unitClass.maxSpeedKnots}).`
       );
     }
+
+    // Accélération : la vitesse ne peut changer que d'un écart plafonné par
+    // manche (recherche historique, voir prisma/seed.ts) — un cuirassé ne
+    // passe pas de 10 à 28 nds en 5 minutes.
+    const accelKnotsPerMin = participant.unit.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(participant.unit.unitClass.category);
+    const lastSpeed = lastSpeedByUnit.get(m.unitId) ?? 0;
+    const maxDelta = accelKnotsPerMin * engagement.roundMinutes;
+    const minReachable = Math.max(0, lastSpeed - maxDelta);
+    const maxReachable = Math.min(participant.unit.unitClass.maxSpeedKnots, lastSpeed + maxDelta);
+    if (m.speedKnots < minReachable - 0.01 || m.speedKnots > maxReachable + 0.01) {
+      throw new OrderValidationError(
+        `${participant.unit.name} : ne peut pas passer de ${lastSpeed.toFixed(0)} à ${m.speedKnots.toFixed(0)} nds en ${engagement.roundMinutes.toFixed(1)}min (accélération max ${accelKnotsPerMin.toFixed(1)}nds/min, atteignable entre ${minReachable.toFixed(0)} et ${maxReachable.toFixed(0)}nds).`
+      );
+    }
+
     if (m.path.length > 0) {
+      const turningRadiusNm =
+        (participant.unit.unitClass.turningRadiusM ?? defaultTurningRadiusM(participant.unit.unitClass.category)) / NM_TO_M;
+      const fullPath = [{ lat: participant.unit.currentLat, lng: participant.unit.currentLng }, ...m.path];
       const budgetNm = speedBudgetNm(m.speedKnots, engagement.roundMinutes);
-      const usedNm = pathLengthNm([{ lat: participant.unit.currentLat, lng: participant.unit.currentLng }, ...m.path]);
+      const usedNm = pathLengthNm(fullPath) + turnPenaltyNm(fullPath, turningRadiusNm);
       if (usedNm > budgetNm * 1.01) {
         throw new OrderValidationError(
-          `${participant.unit.name} : tracé de ${usedNm.toFixed(2)}nm, budget ${budgetNm.toFixed(2)}nm à ${m.speedKnots}nds sur ${engagement.roundMinutes.toFixed(1)}min.`
+          `${participant.unit.name} : tracé de ${usedNm.toFixed(2)}nm (dont manœuvre), budget ${budgetNm.toFixed(2)}nm à ${m.speedKnots}nds sur ${engagement.roundMinutes.toFixed(1)}min.`
         );
       }
     }
 
     await prisma.tacticalAction.upsert({
       where: {
-        engagementId_roundNumber_phase_unitId: {
+        engagementId_roundNumber_phase_unitId_weaponSlot: {
           engagementId: params.engagementId,
           roundNumber: engagement.roundNumber,
           phase: "MOVEMENT",
           unitId: m.unitId,
+          weaponSlot: "",
         },
       },
       create: {
@@ -385,12 +467,27 @@ export type FireShotResult = {
  * les tirs de la manche restent simultanés (on ne sait pas encore, en
  * tirant, si la cible a déjà encaissé un autre coup ailleurs).
  */
+/** Identifie une pièce précise dans `combatProfile.guns[]` (ex: "gun:0") ou la batterie de torpilles / les grenades ASM. */
+export function gunWeaponSlot(gunIndex: number): string {
+  return `gun:${gunIndex}`;
+}
+export const TORPEDO_WEAPON_SLOT = "torpedo";
+export const DEPTH_CHARGE_WEAPON_SLOT = "depth_charge";
+
+function parseGunSlotIndex(weaponSlot: string): number | null {
+  if (!weaponSlot.startsWith("gun:")) return null;
+  const index = Number(weaponSlot.slice(4));
+  return Number.isInteger(index) && index >= 0 ? index : null;
+}
+
 export async function submitTacticalFireShot(params: {
   engagementId: string;
   teamId: string;
   unitId: string;
   targetUnitId: string;
   weaponType: WeaponType;
+  /** Quelle pièce précise du bord tire — voir `gunWeaponSlot`/`TORPEDO_WEAPON_SLOT`/`DEPTH_CHARGE_WEAPON_SLOT`. Un navire peut faire tirer chacune de ses pièces séparément la même manche. */
+  weaponSlot: string;
   torpedoTypeId?: string;
 }): Promise<FireShotResult> {
   const engagement = await prisma.tacticalEngagement.findUniqueOrThrow({
@@ -413,15 +510,16 @@ export async function submitTacticalFireShot(params: {
 
   const alreadyFired = await prisma.tacticalAction.findUnique({
     where: {
-      engagementId_roundNumber_phase_unitId: {
+      engagementId_roundNumber_phase_unitId_weaponSlot: {
         engagementId: params.engagementId,
         roundNumber: engagement.roundNumber,
         phase: "FIRE",
         unitId: params.unitId,
+        weaponSlot: params.weaponSlot,
       },
     },
   });
-  if (alreadyFired) throw new OrderValidationError(`${attacker.name} a déjà tiré cette manche.`);
+  if (alreadyFired) throw new OrderValidationError(`${attacker.name} : cette pièce a déjà tiré cette manche.`);
 
   // On ne tire que sur ce que son camp a détecté à l'issue du mouvement.
   const contact = await prisma.tacticalContact.findFirst({
@@ -466,14 +564,17 @@ export async function submitTacticalFireShot(params: {
     });
   } else if (params.weaponType === "GUN") {
     if (targetSubmerged) throw new OrderValidationError("Un sous-marin immergé n'est pas canonnable.");
+    const gunIndex = parseGunSlotIndex(params.weaponSlot);
+    const battery = gunIndex !== null ? (profile?.guns?.[gunIndex] ?? null) : null;
+    if (!battery) throw new OrderValidationError("Cette pièce est introuvable sur ce navire.");
     const bearingToTarget = bearingDeg(
       { lat: attacker.currentLat, lng: attacker.currentLng },
       { lat: target.currentLat, lng: target.currentLng }
     );
     const relativeBearing = bearingToTarget - (attacker.currentHeadingDeg ?? 0);
-    const battery = selectGunBattery(profile, rangeM, relativeBearing);
-    calibreMm = battery?.calibreMm ?? null;
-    if (!battery) throw new OrderValidationError("Aucune pièce à portée et dans l'arc de tir pour cette cible.");
+    calibreMm = battery.calibreMm;
+    if (battery.rangeM < rangeM) throw new OrderValidationError("Cette pièce est hors de portée pour cette cible.");
+    if (!isInGunArc(battery.arc, relativeBearing)) throw new OrderValidationError("Cette pièce est hors de son arc de tir pour cette cible.");
     outcome = resolveGunEngagement({
       attackerProfile: profile,
       attackerHealthCurrent,
@@ -483,6 +584,7 @@ export async function submitTacticalFireShot(params: {
       targetSpeedKnots: 0,
       rangeM,
       relativeBearingDeg: relativeBearing,
+      forcedBattery: battery,
     });
   } else if (params.weaponType === "TORPEDO") {
     if (targetSubmerged) throw new OrderValidationError("Une torpille classique ne touche pas un sous-marin immergé.");
@@ -571,6 +673,7 @@ export async function submitTacticalFireShot(params: {
         teamId: params.teamId,
         targetUnitId: params.targetUnitId,
         weaponType: params.weaponType,
+        weaponSlot: params.weaponSlot,
         torpedoTypeId: params.torpedoTypeId,
         resolved: true,
         hit: outcome.hit,
@@ -585,10 +688,11 @@ export async function submitTacticalFireShot(params: {
     });
   } catch (error) {
     // Filet de sécurité contre un double clic quasi simultané : la
-    // contrainte unique (engagement, manche, phase, navire) protège la
-    // règle « un seul tir par navire et par manche » même en cas de course.
+    // contrainte unique (engagement, manche, phase, navire, pièce) protège
+    // la règle « une seule fois par pièce et par manche » même en cas de
+    // course.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      throw new OrderValidationError(`${attacker.name} a déjà tiré cette manche.`);
+      throw new OrderValidationError(`${attacker.name} : cette pièce a déjà tiré cette manche.`);
     }
     throw error;
   }

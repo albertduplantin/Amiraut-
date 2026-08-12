@@ -44,6 +44,8 @@ export async function instantiateScenario(
         maxSpeedKnots: uc.maxSpeedKnots,
         lengthMeters: uc.lengthMeters,
         beamMeters: uc.beamMeters,
+        turningRadiusM: uc.turningRadiusM,
+        accelerationKnotsPerMin: uc.accelerationKnotsPerMin,
         sensors: uc.sensors,
         detectability: uc.detectability ?? 1,
         iconKey: uc.iconKey,

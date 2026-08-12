@@ -92,6 +92,15 @@ model UnitClass {
   oxygenEnduranceHours  Float?
   torpedoStock          Int? // torpilles totales embarquées (sous-marins), voir Unit.torpedoesRemaining
 
+  // Manœuvre (mode tactique) : diamètre tactique / vitesse maximale de
+  // rotation issus de recherches historiques (voir prisma/seed.ts et
+  // prisma/scenarios/denmark-strait.ts pour le détail par classe et les
+  // sources). Nullables pour rester compatibles avec d'anciennes classes
+  // non encore renseignées — le moteur applique alors un repli par
+  // catégorie plutôt que de planter.
+  turningRadiusM         Float?
+  accelerationKnotsPerMin Float?
+
   units Unit[]
 }
 
@@ -504,6 +513,11 @@ model TacticalAction {
   targetUnit    Unit?       @relation("TacticalTarget", fields: [targetUnitId], references: [id])
   weaponType    WeaponType?
   torpedoTypeId String?
+  /// Identifie QUELLE pièce a tiré ("gun:0", "gun:1", "torpedo"...) — un
+  /// navire peut tirer avec chacune de ses pièces la même manche (une seule
+  /// fois par pièce). Vide ("") pour les actions de la phase MOUVEMENT, qui
+  /// restent une seule ligne par navire et par manche.
+  weaponSlot    String      @default("")
 
   // Résultat, calculé immédiatement à la validation du tir (pas d'attente de
   // l'autre camp) : le joueur voit le compte rendu tout de suite.
@@ -528,7 +542,7 @@ model TacticalAction {
 
   createdAt DateTime @default(now())
 
-  @@unique([engagementId, roundNumber, phase, unitId])
+  @@unique([engagementId, roundNumber, phase, unitId, weaponSlot])
   @@index([engagementId, roundNumber])
 }
 
@@ -549,6 +563,12 @@ model TacticalContact {
   targetUnit     Unit               @relation("TacticalContactTarget", fields: [targetUnitId], references: [id])
   method         SensorType
   distanceNm     Float
+  /// Position réelle de la cible au moment du relevé — pas transmise telle
+  /// quelle au joueur (qui ne voit que distance/relèvement reconstruit) :
+  /// sert à replacer le marqueur sur la carte et à estimer un vecteur de
+  /// déplacement d'une manche à l'autre (voir page.tsx, estimatedVectorByTarget).
+  targetLatSnapshot Float?
+  targetLngSnapshot Float?
 
   @@unique([engagementId, roundNumber, observerUnitId, targetUnitId])
   @@index([engagementId, roundNumber, observerTeamId])

@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { bearingDeg, destinationPoint } from "@/lib/geo";
+import { bearingDeg, distanceNm } from "@/lib/geo";
+import { getLastKnownSpeedsByUnit, defaultTurningRadiusM, defaultAccelerationKnotsPerMin } from "@/lib/tacticalEngine";
 import { OrdersClient } from "./OrdersClient";
 import { TacticalView } from "./TacticalView";
 
@@ -70,26 +71,48 @@ async function renderTacticalView(engagementId: string, teamId: string) {
   // Vitesse de départ par défaut à la manche 1 : celle du dernier ordre
   // stratégique soumis pour ce navire (la vitesse qu'il avait juste avant
   // le passage à l'échelle de combat). Aux manches suivantes : sa propre
-  // vitesse soumise à la manche tactique précédente.
-  const lastSpeedByUnit = new Map<string, number>();
+  // vitesse soumise à la manche tactique précédente. Fonction partagée
+  // avec le moteur (submitTacticalMovement s'en sert aussi pour plafonner
+  // l'accélération) : une seule source de vérité, jamais de désaccord
+  // affichage/validation.
+  const lastSpeedByUnit = await getLastKnownSpeedsByUnit(engagementId, ownUnits.map((u) => u.id), engagement.roundNumber);
+
+  // Vecteur estimé pour les contacts ennemis (cap/vitesse déduits du
+  // déplacement de la cible entre la manche précédente et celle-ci) : voir
+  // TacticalContact.targetLatSnapshot/targetLngSnapshot.
+  const estimatedVectorByTarget = new Map<string, { headingDeg: number; speedKnots: number }>();
   if (engagement.roundNumber > 1) {
-    const priorMoves = await prisma.tacticalAction.findMany({
-      where: { engagementId, phase: "MOVEMENT", roundNumber: { lt: engagement.roundNumber }, unitId: { in: ownUnits.map((u) => u.id) } },
-      orderBy: { roundNumber: "desc" },
-      select: { unitId: true, speedKnots: true },
+    const currentBest = Array.from(bestContactByTarget.values());
+    const prevContacts = await prisma.tacticalContact.findMany({
+      where: {
+        engagementId,
+        roundNumber: engagement.roundNumber - 1,
+        observerTeamId: teamId,
+        targetUnitId: { in: currentBest.map((c) => c.targetUnitId) },
+      },
     });
-    for (const m of priorMoves) {
-      if (!lastSpeedByUnit.has(m.unitId) && m.speedKnots != null) lastSpeedByUnit.set(m.unitId, m.speedKnots);
+    // Un même ennemi peut avoir été vu par plusieurs de nos unités à la
+    // manche précédente aussi : même règle que pour la manche courante, on
+    // garde le relevé le plus précis (distance la plus courte).
+    const bestPrevByTarget = new Map<string, (typeof prevContacts)[number]>();
+    for (const c of prevContacts) {
+      const existing = bestPrevByTarget.get(c.targetUnitId);
+      if (!existing || c.distanceNm < existing.distanceNm) bestPrevByTarget.set(c.targetUnitId, c);
     }
-  }
-  const missingSpeedUnitIds = ownUnits.map((u) => u.id).filter((id) => !lastSpeedByUnit.has(id));
-  if (missingSpeedUnitIds.length > 0) {
-    const lastOrders = await Promise.all(
-      missingSpeedUnitIds.map((unitId) =>
-        prisma.unitOrder.findFirst({ where: { unitId }, orderBy: { submittedAt: "desc" }, select: { unitId: true, speedKnots: true } })
-      )
-    );
-    for (const o of lastOrders) if (o) lastSpeedByUnit.set(o.unitId, o.speedKnots);
+    for (const c of currentBest) {
+      const prev = bestPrevByTarget.get(c.targetUnitId);
+      if (!prev || prev.targetLatSnapshot == null || prev.targetLngSnapshot == null || c.targetLatSnapshot == null || c.targetLngSnapshot == null) {
+        continue;
+      }
+      const prevPos = { lat: prev.targetLatSnapshot, lng: prev.targetLngSnapshot };
+      const currentPos = { lat: c.targetLatSnapshot, lng: c.targetLngSnapshot };
+      const movedNm = distanceNm(prevPos, currentPos);
+      if (movedNm < 0.05) continue; // bruit d'arrondi, pas un vrai déplacement
+      estimatedVectorByTarget.set(c.targetUnitId, {
+        headingDeg: bearingDeg(prevPos, currentPos),
+        speedKnots: (movedNm / engagement.roundMinutes) * 60,
+      });
+    }
   }
 
   const battleLog = await prisma.tacticalAction.findMany({
@@ -143,22 +166,25 @@ async function renderTacticalView(engagementId: string, teamId: string) {
         headingDeg: u.currentHeadingDeg,
         depthBand: u.depthBand,
         lastSpeedKnots: lastSpeedByUnit.get(u.id) ?? 0,
+        turningRadiusM: u.unitClass.turningRadiusM ?? defaultTurningRadiusM(u.unitClass.category),
+        accelerationKnotsPerMin: u.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(u.unitClass.category),
         torpedoesRemaining: u.torpedoesRemaining,
       }))}
       contacts={Array.from(bestContactByTarget.values()).map((c) => {
         const observer = ownUnits.find((u) => u.id === c.observerUnitId);
         const enemy = enemyById.get(c.targetUnitId);
-        const relBearing =
-          observer && enemy
-            ? bearingDeg({ lat: observer.currentLat, lng: observer.currentLng }, { lat: enemy.currentLat, lng: enemy.currentLng })
-            : 0;
-        const normalizedBearing = ((relBearing % 360) + 360) % 360;
-        // Position du marqueur reconstruite depuis le relèvement/distance déjà
-        // partagés (pas une nouvelle fuite d'information) : nécessaire pour
-        // placer le contact sur la carte.
-        const markerPos = observer
-          ? destinationPoint({ lat: observer.currentLat, lng: observer.currentLng }, normalizedBearing, c.distanceNm)
-          : { lat: 0, lng: 0 };
+        // Position du marqueur : la position réelle de la cible au moment du
+        // relevé, déjà photographiée dans le contact (targetLatSnapshot/Lng)
+        // — pas une nouvelle fuite d'information par rapport à distance+
+        // relèvement déjà partagés, juste une reconstruction plus directe.
+        const markerPos =
+          c.targetLatSnapshot != null && c.targetLngSnapshot != null
+            ? { lat: c.targetLatSnapshot, lng: c.targetLngSnapshot }
+            : { lat: 0, lng: 0 };
+        const normalizedBearing = observer
+          ? ((bearingDeg({ lat: observer.currentLat, lng: observer.currentLng }, markerPos) % 360) + 360) % 360
+          : 0;
+        const estimate = estimatedVectorByTarget.get(c.targetUnitId) ?? null;
         return {
           targetUnitId: c.targetUnitId,
           name: c.targetUnit.name,
@@ -172,10 +198,13 @@ async function renderTacticalView(engagementId: string, teamId: string) {
           lat: markerPos.lat,
           lng: markerPos.lng,
           status: enemy?.status ?? "ACTIVE",
+          estimatedHeadingDeg: estimate?.headingDeg ?? null,
+          estimatedSpeedKnots: estimate?.speedKnots ?? null,
         };
       })}
       ownFireActionsThisRound={ownFireActionsThisRound.map((a) => ({
         unitId: a.unitId,
+        weaponSlot: a.weaponSlot,
         targetUnitId: a.targetUnitId,
         weaponType: a.weaponType,
         hit: a.hit,

@@ -120,12 +120,65 @@ function buildSmokeOverlay(heightPx: number, dense: boolean): string {
   `;
 }
 
+/**
+ * Vecteur vitesse : un trait avec pointe de flèche partant de l'étrave,
+ * dans l'axe du navire (la rotation du marqueur entier fait déjà le
+ * travail d'orientation — pas besoin de recalculer un cap ici). Longueur
+ * normalisée par rapport à une vitesse de référence (typiquement la
+ * vitesse max du navire) plutôt qu'à une distance réelle : donne un repère
+ * visuel immédiat ("je vais vite/lentement") sans prétendre à une échelle
+ * de navigation précise. En pointillés et plus pâle pour un cap/vitesse
+ * *estimé* (contact ennemi, déduit du déplacement entre deux relevés) —
+ * une donnée de brouillard de guerre, pas une certitude.
+ */
+function buildVectorOverlay(heightPx: number, speedRatio: number, color: string, estimated: boolean): string {
+  if (speedRatio <= 0.02) return "";
+  const scale = heightPx / 42;
+  // Une vitesse à la référence (ratio 1) étend le vecteur d'à peu près la
+  // longueur du navire lui-même — repère lisible sans déborder la carte.
+  const lengthUnits = Math.min(1, speedRatio) * 40;
+  const w = Math.round(16 * scale);
+  const h = Math.round((lengthUnits + 8) * scale);
+  const opacity = estimated ? 0.55 : 0.9;
+  const dash = estimated ? ' stroke-dasharray="3,2.5"' : "";
+  return `
+    <svg width="${w}" height="${h}" viewBox="0 0 16 ${lengthUnits + 8}" style="position:absolute;left:50%;bottom:100%;transform:translate(-50%,2px);pointer-events:none;overflow:visible;opacity:${opacity};">
+      <line x1="8" y1="${lengthUnits + 6}" x2="8" y2="6" stroke="${color}" stroke-width="1.6" stroke-linecap="round"${dash} />
+      <path d="M8 0 L12 8 L8 6 L4 8 Z" fill="${color}" />
+    </svg>
+  `;
+}
+
+/**
+ * Sillage : léger panache blanc s'évasant depuis la poupe, uniquement si le
+ * navire est en mouvement. Taille fixe (pas liée à la vitesse, contrairement
+ * au vecteur) — un effet d'ambiance qui se lit surtout une fois zoomé, la
+ * silhouette entière (dont ce panache fait partie) étant redimensionnée au
+ * zoom par `applyShipMarkerLayout`.
+ */
+function buildWakeOverlay(heightPx: number): string {
+  const scale = heightPx / 42;
+  const w = Math.round(20 * scale);
+  const h = Math.round(16 * scale);
+  return `
+    <svg width="${w}" height="${h}" viewBox="0 0 20 16" style="position:absolute;left:50%;top:100%;transform:translate(-50%,-3px);pointer-events:none;overflow:visible;opacity:0.5;">
+      <path d="M10 0 L4 14 M10 0 L16 14" stroke="#e2e8f0" stroke-width="1.2" stroke-linecap="round" fill="none" />
+    </svg>
+  `;
+}
+
 export function buildSilhouetteElement(params: {
   silhouette: SilhouetteKey;
   color: string;
   heightPx?: number;
   label?: string;
   status?: UnitVisualStatus;
+  /** Vitesse actuelle (nds), pour le vecteur et le sillage ; absent/0 = aucun des deux affiché. */
+  speedKnots?: number;
+  /** Vitesse de référence (typiquement la vitesse max du navire) normalisant la longueur du vecteur. */
+  referenceSpeedKnots?: number;
+  /** Cap/vitesse estimés plutôt que certains (contact ennemi) : vecteur en pointillés, plus pâle. */
+  vectorEstimated?: boolean;
 }): HTMLDivElement {
   const heightPx = params.heightPx ?? 42;
   const widthPx = Math.round((heightPx * 24) / 48);
@@ -162,6 +215,12 @@ export function buildSilhouetteElement(params: {
         : ""
     }
     ${isSunk || isDamaged ? buildSmokeOverlay(heightPx, isSunk) : ""}
+    ${
+      !isSunk && params.speedKnots
+        ? buildVectorOverlay(heightPx, params.speedKnots / (params.referenceSpeedKnots || params.speedKnots || 1), params.color, params.vectorEstimated ?? false)
+        : ""
+    }
+    ${!isSunk && params.speedKnots && params.speedKnots > 0.5 ? buildWakeOverlay(heightPx) : ""}
   `;
   return wrapper;
 }
