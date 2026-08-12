@@ -1,15 +1,66 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import type { ScenarioDefinition } from "./types";
+import { validateScenarioDefinition } from "./validation";
 import { denmarkStrait } from "./denmark-strait";
 
 /**
- * Bibliothèque de scénarios. Ajouter un scénario = ajouter une définition
- * ici ; l'éditeur de scénarios à venir produira le même format.
+ * Bibliothèque de scénarios intégrés. Ajouter un scénario = ajouter une
+ * définition ici ; les scénarios créés par les joueurs (module éditeur,
+ * voir src/app/scenarios/new) suivent exactement le même format, stockés en
+ * base dans `CustomScenario` — voir findScenarioAsync/listAllScenarioSummaries
+ * ci-dessous pour les deux confondus.
  */
 export const SCENARIO_LIBRARY: ScenarioDefinition[] = [denmarkStrait];
 
 export function findScenario(key: string): ScenarioDefinition | undefined {
   return SCENARIO_LIBRARY.find((s) => s.key === key);
+}
+
+/** Résumé léger d'un scénario pour une liste de sélection (voir /create). */
+export type ScenarioSummary = {
+  key: string;
+  name: string;
+  description: string;
+  dateLabel: string;
+  defaultTurnMinutes: number;
+  teamNames: string[];
+  custom: boolean;
+};
+
+function toSummary(def: ScenarioDefinition, custom: boolean): ScenarioSummary {
+  return {
+    key: def.key,
+    name: def.name,
+    description: def.description,
+    dateLabel: def.dateLabel,
+    defaultTurnMinutes: def.defaultTurnMinutes,
+    teamNames: def.teams.map((t) => t.name),
+    custom,
+  };
+}
+
+/** Bibliothèque intégrée + scénarios créés par les joueurs, pour la page /create. */
+export async function listAllScenarioSummaries(prisma: PrismaClient): Promise<ScenarioSummary[]> {
+  const custom = await prisma.customScenario.findMany({ orderBy: { createdAt: "desc" } });
+  const customSummaries: ScenarioSummary[] = [];
+  for (const c of custom) {
+    try {
+      customSummaries.push(toSummary(validateScenarioDefinition(c.definition), true));
+    } catch {
+      // Un scénario custom invalide (schéma changé depuis) n'empêche pas
+      // d'afficher le reste de la bibliothèque — juste ignoré ici.
+    }
+  }
+  return [...SCENARIO_LIBRARY.map((s) => toSummary(s, false)), ...customSummaries];
+}
+
+/** Cherche un scénario par clé, dans la bibliothèque intégrée puis dans les scénarios créés par les joueurs. */
+export async function findScenarioAsync(prisma: PrismaClient, key: string): Promise<ScenarioDefinition | undefined> {
+  const builtin = findScenario(key);
+  if (builtin) return builtin;
+  const custom = await prisma.customScenario.findUnique({ where: { key } });
+  if (!custom) return undefined;
+  return validateScenarioDefinition(custom.definition);
 }
 
 /**

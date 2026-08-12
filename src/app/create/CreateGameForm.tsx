@@ -11,6 +11,7 @@ type ScenarioSummary = {
   dateLabel: string;
   defaultTurnMinutes: number;
   teamNames: string[];
+  custom: boolean;
 };
 
 export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) {
@@ -99,7 +100,12 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
         <p className="mt-2 text-sm text-slate-400">Choisissez un scénario de la bibliothèque, puis distribuez les liens générés.</p>
 
         <div className="mt-8 space-y-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Scénario</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Scénario</h2>
+            <Link href="/scenarios/new" className="text-xs text-brass-400 hover:text-brass-300">
+              + Créer un scénario
+            </Link>
+          </div>
           {scenarios.length === 0 && <p className="text-sm text-slate-500">Aucun scénario disponible pour l&apos;instant.</p>}
           <div className="space-y-2">
             {scenarios.map((s) => (
@@ -111,7 +117,14 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-medium">{s.name}</span>
+                  <span className="flex items-center gap-1.5 font-medium">
+                    {s.name}
+                    {s.custom && (
+                      <span className="rounded border border-brass-700 px-1 py-0.5 text-[10px] font-normal text-brass-400">
+                        créé par un joueur
+                      </span>
+                    )}
+                  </span>
                   <span className="text-xs text-slate-500">{s.dateLabel}</span>
                 </div>
                 <p className="mt-1 text-xs text-slate-400">{s.description}</p>

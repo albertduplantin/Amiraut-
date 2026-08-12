@@ -37,6 +37,26 @@ enum ScenarioStatus {
   COMPLETED
 }
 
+// ── Bibliothèque de scénarios créés par les joueurs ───────────
+//
+// À ne pas confondre avec `Scenario` ci-dessus (une partie en cours,
+// instanciée). `CustomScenario` stocke un GABARIT réutilisable, au même
+// format que les scénarios intégrés (`ScenarioDefinition`, voir
+// prisma/scenarios/types.ts) — même pipeline `instantiateScenario` pour les
+// deux, voir prisma/scenarios/index.ts.
+
+model CustomScenario {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String
+  // ScenarioDefinition complet (équipes, flottes, unités, météo,
+  // objectifs...) validé par zod à l'écriture ET à la lecture — voir
+  // prisma/scenarios/validation.ts.
+  definition  Json
+  createdAt   DateTime @default(now())
+}
+
 model Team {
   id         String   @id @default(cuid())
   scenarioId String

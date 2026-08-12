@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { findScenario, instantiateScenario } from "../../../prisma/scenarios/index";
+import { findScenarioAsync, instantiateScenario } from "../../../prisma/scenarios/index";
 
 export type CreateGameResult =
   | {
@@ -23,7 +23,7 @@ export async function createGameAction(params: {
   withArbiter: boolean;
   turnMinutes: number;
 }): Promise<CreateGameResult> {
-  const def = findScenario(params.scenarioKey);
+  const def = await findScenarioAsync(prisma, params.scenarioKey);
   if (!def) return { ok: false, error: "Scénario introuvable." };
 
   if (!Number.isFinite(params.turnMinutes) || params.turnMinutes < 10 || params.turnMinutes > 720) {
