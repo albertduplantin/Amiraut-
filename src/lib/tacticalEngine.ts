@@ -12,8 +12,17 @@ import {
   isInGunArc,
   type CombatProfile,
   type DepthBand as CombatDepthBand,
+  type HitChanceBreakdown,
 } from "@/lib/combat";
-import { describeShot, describeLocalizedEffect, describeMagazineHit, assessFiringReveal, type LocalizedEffectStored } from "@/lib/tacticalNarrative";
+import {
+  describeShot,
+  describeLocalizedEffect,
+  describeMagazineHit,
+  describeHitChanceDebug,
+  describeLocalizedRollDebug,
+  assessFiringReveal,
+  type LocalizedEffectStored,
+} from "@/lib/tacticalNarrative";
 import { OrderValidationError, currentOpenTurn, switchTurnToTacticalScale } from "@/lib/turnEngine";
 import type { DepthBand, SensorType, WeaponType } from "@/generated/prisma/client";
 import { Prisma } from "@/generated/prisma/client";
@@ -508,6 +517,8 @@ export type FireShotResult = {
   /** Tirage au sort (0-100) : touché si en-dessous de `hitChancePercent`. Affiché aux joueurs pour rendre le jet transparent. */
   hitRoll: number;
   narrative: string;
+  /** Détail des calculs (précision + tirage de localisation), à des fins de débogage — voir tacticalNarrative.ts. */
+  debugInfo: string | null;
   revealRadiusNm: number;
 };
 
@@ -599,7 +610,9 @@ export async function submitTacticalFireShot(params: {
   const attackerHealthCurrent = attacker.healthCurrent ?? attacker.healthMax ?? 1;
   const attackerHealthMax = attacker.healthMax ?? 1;
 
-  let outcome: { hitChancePercent: number; hitRoll: number; hit: boolean; hits: number; damagePoints: number } | null = null;
+  let outcome:
+    | { hitChancePercent: number; hitRoll: number; hit: boolean; hits: number; damagePoints: number; hitChanceBreakdown?: HitChanceBreakdown }
+    | null = null;
   let calibreMm: number | null = null;
   let wakeVisible = true;
   // Télépointage endommagé (voir Unit.fireControlDamaged, cas Bismarck 27
@@ -702,18 +715,20 @@ export async function submitTacticalFireShot(params: {
   // coups au but "solides", et seulement sur un bâtiment de surface (une
   // tourelle ou un gouvernail n'a pas de sens pour un sous-marin ici).
   let localizedEffect: LocalizedEffectStored | null = null;
+  let localizedDebugLine: string | null = null;
   if (outcome.hit && (params.weaponType === "GUN" || params.weaponType === "TORPEDO") && target.unitClass.category === "SURFACE_SHIP") {
-    const roll = rollLocalizedDamage({ weaponType: params.weaponType, damageRatio });
-    if (roll.type === "TURRET") {
+    const { effect, debug } = rollLocalizedDamage({ weaponType: params.weaponType, damageRatio });
+    localizedDebugLine = describeLocalizedRollDebug(debug);
+    if (effect.type === "TURRET") {
       const slot = pickWeaponSlotToDisable(target.unitClass.combatProfile as CombatProfile | null, target.disabledWeaponSlots);
       if (slot) localizedEffect = { type: "WEAPON_DISABLED", slot };
-    } else if (roll.type === "ENGINE") {
-      localizedEffect = { type: "ENGINE", speedReductionRatio: roll.speedReductionRatio };
-    } else if (roll.type === "RUDDER" && !target.rudderJammed) {
+    } else if (effect.type === "ENGINE") {
+      localizedEffect = { type: "ENGINE", speedReductionRatio: effect.speedReductionRatio };
+    } else if (effect.type === "RUDDER" && !target.rudderJammed) {
       localizedEffect = { type: "RUDDER" };
-    } else if (roll.type === "FIRE_CONTROL" && !target.fireControlDamaged) {
+    } else if (effect.type === "FIRE_CONTROL" && !target.fireControlDamaged) {
       localizedEffect = { type: "FIRE_CONTROL" };
-    } else if (roll.type === "MAGAZINE") {
+    } else if (effect.type === "MAGAZINE") {
       localizedEffect = { type: "MAGAZINE" };
     }
   }
@@ -737,6 +752,13 @@ export async function submitTacticalFireShot(params: {
       : null
   );
   const reveal = assessFiringReveal({ weaponType: params.weaponType, calibreMm, torpedoWakeVisible: wakeVisible, isNight });
+
+  // Trace de calcul, à des fins de débogage/transparence (pas une règle du
+  // livret original) — voir tacticalNarrative.ts.
+  const debugLines: string[] = [];
+  if (outcome.hitChanceBreakdown) debugLines.push(`Précision : ${describeHitChanceDebug(outcome.hitChanceBreakdown)}`);
+  if (localizedDebugLine) debugLines.push(localizedDebugLine);
+  const debugInfo = debugLines.length > 0 ? debugLines.join(" ") : null;
 
   const narrative =
     localizedEffect?.type === "MAGAZINE"
@@ -774,6 +796,7 @@ export async function submitTacticalFireShot(params: {
         hitRoll: outcome.hitRoll,
         localizedEffect: localizedEffect ?? undefined,
         narrative,
+        debugInfo,
         revealedShooter: reveal.revealRadiusNm > 0,
         applied: false,
       },
@@ -796,6 +819,7 @@ export async function submitTacticalFireShot(params: {
     hitChancePercent: outcome.hitChancePercent,
     hitRoll: outcome.hitRoll,
     narrative,
+    debugInfo,
     revealRadiusNm: reveal.revealRadiusNm,
   };
 }

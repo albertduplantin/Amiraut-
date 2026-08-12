@@ -151,7 +151,18 @@ export function listUsableGunBatteries(
   );
 }
 
-export function gunHitChancePercent(params: {
+/** Détail des facteurs qui composent une chance de toucher — à des fins de transparence/débogage, voir describeHitChanceDebug dans tacticalNarrative.ts. */
+export type HitChanceBreakdown = {
+  baseAccuracy: number;
+  rangeRatio: number;
+  rangeFactor: number;
+  sizeFactor: number;
+  speedFactor: number;
+  accuracyMultiplier: number;
+  finalPercent: number;
+};
+
+export function gunHitChanceBreakdown(params: {
   calibreMm: number;
   rangeM: number;
   maxRangeM: number;
@@ -160,7 +171,7 @@ export function gunHitChancePercent(params: {
   targetSpeedKnots: number;
   /** Télépointage endommagé côté tireur (voir rollLocalizedDamage) : multiplie la précision brute. 1 = intact. */
   accuracyMultiplier?: number;
-}): number {
+}): HitChanceBreakdown {
   const rangeRatio = clamp(params.rangeM / params.maxRangeM, 0, 1);
   const rangeFactor = Math.pow(1 - rangeRatio, 1.6);
   const targetArea = Math.max(50, params.targetLengthM * params.targetBeamM);
@@ -168,7 +179,13 @@ export function gunHitChancePercent(params: {
   const sizeFactor = clamp(targetArea / 1800, 0.15, 2.2);
   const speedFactor = 1 / (1 + params.targetSpeedKnots / 22);
   const baseAccuracy = params.calibreMm >= 280 ? 0.6 : params.calibreMm >= 150 ? 0.72 : 0.85;
-  return clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * (params.accuracyMultiplier ?? 1) * 100, 0, 95);
+  const accuracyMultiplier = params.accuracyMultiplier ?? 1;
+  const finalPercent = clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * accuracyMultiplier * 100, 0, 95);
+  return { baseAccuracy, rangeRatio, rangeFactor, sizeFactor, speedFactor, accuracyMultiplier, finalPercent };
+}
+
+export function gunHitChancePercent(params: Parameters<typeof gunHitChanceBreakdown>[0]): number {
+  return gunHitChanceBreakdown(params).finalPercent;
 }
 
 function gunDamagePerHit(calibreMm: number, rng: () => number): number {
@@ -198,6 +215,7 @@ function rollHitCount(effectiveGunCount: number, rng: () => number): number {
 export type GunEngagementResult = {
   battery: GunBattery;
   hitChancePercent: number;
+  hitChanceBreakdown: HitChanceBreakdown;
   hitRoll: number;
   hit: boolean;
   hits: number;
@@ -234,7 +252,7 @@ export function resolveGunEngagement(params: {
   const battery = params.forcedBattery ?? selectGunBattery(params.attackerProfile, params.rangeM, params.relativeBearingDeg);
   if (!battery) return null;
 
-  const hitChancePercent = gunHitChancePercent({
+  const hitChanceBreakdown = gunHitChanceBreakdown({
     calibreMm: battery.calibreMm,
     rangeM: params.rangeM,
     maxRangeM: battery.rangeM,
@@ -243,11 +261,12 @@ export function resolveGunEngagement(params: {
     targetSpeedKnots: params.targetSpeedKnots,
     accuracyMultiplier: params.accuracyMultiplier,
   });
+  const hitChancePercent = hitChanceBreakdown.finalPercent;
 
   const hitRoll = rng() * 100;
   const hit = hitRoll < hitChancePercent;
   if (!hit) {
-    return { battery, hitChancePercent, hitRoll, hit: false, hits: 0, damagePoints: 0 };
+    return { battery, hitChancePercent, hitChanceBreakdown, hitRoll, hit: false, hits: 0, damagePoints: 0 };
   }
 
   // La puissance de feu se dégrade en proportion directe des dommages subis (livret p. 8).
@@ -258,7 +277,7 @@ export function resolveGunEngagement(params: {
   let damagePoints = 0;
   for (let i = 0; i < hits; i++) damagePoints += gunDamagePerHit(battery.calibreMm, rng);
 
-  return { battery, hitChancePercent, hitRoll, hit: true, hits, damagePoints };
+  return { battery, hitChancePercent, hitChanceBreakdown, hitRoll, hit: true, hits, damagePoints };
 }
 
 // ── Torpilles ───────────────────────────────────────────────
@@ -278,7 +297,7 @@ const REFERENCE_DAMAGE_PER_TORPEDO_HIT = 4.8;
  * livret l'appelle « angle de tir », aigu si la cible se rapproche, obtus
  * si elle s'éloigne (p. 6).
  */
-export function torpedoHitChancePercent(params: {
+export function torpedoHitChanceBreakdown(params: {
   rangeM: number;
   maxRangeM: number;
   torpedoSpeedKnots: number;
@@ -288,7 +307,7 @@ export function torpedoHitChancePercent(params: {
   angleOfAttackDeg: number;
   /** Télépointage endommagé côté tireur (voir rollLocalizedDamage) : multiplie la précision brute. 1 = intact. */
   accuracyMultiplier?: number;
-}): number {
+}): HitChanceBreakdown {
   const rangeRatio = clamp(params.rangeM / params.maxRangeM, 0, 1);
   const rangeFactor = Math.pow(1 - rangeRatio, 1.3);
   // Profil exposé par la cible : plein travers (sin=1) présente toute sa
@@ -302,7 +321,13 @@ export function torpedoHitChancePercent(params: {
   // une torpille rapide en laisse moins besoin.
   const speedFactor = params.torpedoSpeedKnots / (params.torpedoSpeedKnots + params.targetSpeedKnots * 1.5);
   const baseAccuracy = 0.55;
-  return clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * (params.accuracyMultiplier ?? 1) * 100, 0, 90);
+  const accuracyMultiplier = params.accuracyMultiplier ?? 1;
+  const finalPercent = clamp(baseAccuracy * rangeFactor * sizeFactor * speedFactor * accuracyMultiplier * 100, 0, 90);
+  return { baseAccuracy, rangeRatio, rangeFactor, sizeFactor, speedFactor, accuracyMultiplier, finalPercent };
+}
+
+export function torpedoHitChancePercent(params: Parameters<typeof torpedoHitChanceBreakdown>[0]): number {
+  return torpedoHitChanceBreakdown(params).finalPercent;
 }
 
 function torpedoDamagePerHit(rng: () => number): number {
@@ -313,6 +338,7 @@ function torpedoDamagePerHit(rng: () => number): number {
 export type TorpedoEngagementResult = {
   battery: TorpedoBattery;
   hitChancePercent: number;
+  hitChanceBreakdown: HitChanceBreakdown;
   hitRoll: number;
   hit: boolean;
   hits: number;
@@ -341,7 +367,7 @@ export function resolveTorpedoEngagement(params: {
   const battery = params.attackerProfile?.torpedoTubes;
   if (!battery || params.rangeM > battery.rangeM) return null;
 
-  const hitChancePercent = torpedoHitChancePercent({
+  const hitChanceBreakdown = torpedoHitChanceBreakdown({
     rangeM: params.rangeM,
     maxRangeM: battery.rangeM,
     torpedoSpeedKnots: battery.speedKnots,
@@ -351,11 +377,12 @@ export function resolveTorpedoEngagement(params: {
     angleOfAttackDeg: params.angleOfAttackDeg,
     accuracyMultiplier: params.accuracyMultiplier,
   });
+  const hitChancePercent = hitChanceBreakdown.finalPercent;
 
   const hitRoll = rng() * 100;
   const hit = hitRoll < hitChancePercent;
   if (!hit) {
-    return { battery, hitChancePercent, hitRoll, hit: false, hits: 0, damagePoints: 0 };
+    return { battery, hitChancePercent, hitChanceBreakdown, hitRoll, hit: false, hits: 0, damagePoints: 0 };
   }
 
   const firepowerRatio = params.attackerHealthMax > 0 ? clamp(params.attackerHealthCurrent / params.attackerHealthMax, 0, 1) : 1;
@@ -365,7 +392,7 @@ export function resolveTorpedoEngagement(params: {
   let damagePoints = 0;
   for (let i = 0; i < hits; i++) damagePoints += torpedoDamagePerHit(rng);
 
-  return { battery, hitChancePercent, hitRoll, hit: true, hits, damagePoints };
+  return { battery, hitChancePercent, hitChanceBreakdown, hitRoll, hit: true, hits, damagePoints };
 }
 
 // ── Grenades ASM (attaque en profondeur) ───────────────────
@@ -448,6 +475,21 @@ export const LOCALIZED_DAMAGE_THRESHOLD = 0.1;
 
 type LocalizedDamageType = LocalizedDamageEffect["type"];
 
+/** Trace complète d'un tirage de dégât localisé, à des fins de transparence/débogage — voir describeLocalizedRollDebug dans tacticalNarrative.ts. */
+export type LocalizedDamageDebug = {
+  weaponType: WeaponType;
+  damageRatio: number;
+  threshold: number;
+  belowThreshold: boolean;
+  /** Table de répartition utilisée (null si sous le seuil, ou grenade ASM qui n'en a pas). */
+  table: { type: LocalizedDamageType; weight: number }[] | null;
+  /** Valeur brute tirée (rng() * somme des poids) ayant décidé quelle tranche de la table est tombée. */
+  roll: number | null;
+  rollTotal: number | null;
+};
+
+export type LocalizedDamageRoll = { effect: LocalizedDamageEffect; debug: LocalizedDamageDebug };
+
 /**
  * Tire un type dans la table sans construire les effets candidats à
  * l'avance : un littéral `[{...}, poids]` évaluerait tous ses éléments
@@ -455,14 +497,15 @@ type LocalizedDamageType = LocalizedDamageEffect["type"];
  * n'est finalement pas retenu — en ne manipulant que des chaînes ici,
  * `rng()` n'est appelé qu'une fois pour le tirage lui-même.
  */
-function weightedPick(table: [LocalizedDamageType, number][], rng: () => number): LocalizedDamageType {
+function weightedPick(table: [LocalizedDamageType, number][], rng: () => number): { type: LocalizedDamageType; roll: number; total: number } {
   const total = table.reduce((sum, [, weight]) => sum + weight, 0);
-  let r = rng() * total;
+  const roll = rng() * total;
+  let r = roll;
   for (const [type, weight] of table) {
-    if (r < weight) return type;
+    if (r < weight) return { type, roll, total };
     r -= weight;
   }
-  return table[table.length - 1][0];
+  return { type: table[table.length - 1][0], roll, total };
 }
 
 /**
@@ -473,50 +516,63 @@ function weightedPick(table: [LocalizedDamageType, number][], rng: () => number)
  * deux fois plus de chances de toucher un organe vital, il est juste plus
  * susceptible d'avoir dépassé le seuil.
  */
-export function rollLocalizedDamage(params: {
-  weaponType: WeaponType;
-  damageRatio: number;
-  rng?: () => number;
-}): LocalizedDamageEffect {
-  if (params.damageRatio < LOCALIZED_DAMAGE_THRESHOLD) return { type: "NONE" };
+export function rollLocalizedDamage(params: { weaponType: WeaponType; damageRatio: number; rng?: () => number }): LocalizedDamageRoll {
+  const threshold = LOCALIZED_DAMAGE_THRESHOLD;
+  if (params.damageRatio < threshold) {
+    return {
+      effect: { type: "NONE" },
+      debug: { weaponType: params.weaponType, damageRatio: params.damageRatio, threshold, belowThreshold: true, table: null, roll: null, rollTotal: null },
+    };
+  }
   const rng = params.rng ?? Math.random;
 
-  let type: LocalizedDamageType;
+  let table: [LocalizedDamageType, number][] | null = null;
   if (params.weaponType === "TORPEDO") {
     // Coup sous la flottaison : la salle des machines et le gouvernail sont
     // les organes exposés (cas Bismarck) ; les tourelles, topside, sont
     // pratiquement hors de cause.
-    type = weightedPick(
-      [
-        ["MAGAZINE", 6],
-        ["ENGINE", 34],
-        ["RUDDER", 26],
-        ["FIRE_CONTROL", 4],
-        ["NONE", 30],
-      ],
-      rng
-    );
+    table = [
+      ["MAGAZINE", 6],
+      ["ENGINE", 34],
+      ["RUDDER", 26],
+      ["FIRE_CONTROL", 4],
+      ["NONE", 30],
+    ];
   } else if (params.weaponType === "GUN") {
-    type = weightedPick(
-      [
-        ["MAGAZINE", 4],
-        ["TURRET", 22],
-        ["ENGINE", 20],
-        ["RUDDER", 16],
-        ["FIRE_CONTROL", 14],
-        ["NONE", 24],
-      ],
-      rng
-    );
-  } else {
-    return { type: "NONE" }; // grenades ASM : voie d'eau seulement, pas de table dédiée.
+    table = [
+      ["MAGAZINE", 4],
+      ["TURRET", 22],
+      ["ENGINE", 20],
+      ["RUDDER", 16],
+      ["FIRE_CONTROL", 14],
+      ["NONE", 24],
+    ];
   }
+
+  if (!table) {
+    // Grenades ASM : voie d'eau seulement, pas de table dédiée.
+    return {
+      effect: { type: "NONE" },
+      debug: { weaponType: params.weaponType, damageRatio: params.damageRatio, threshold, belowThreshold: false, table: null, roll: null, rollTotal: null },
+    };
+  }
+
+  const picked = weightedPick(table, rng);
+  const debug: LocalizedDamageDebug = {
+    weaponType: params.weaponType,
+    damageRatio: params.damageRatio,
+    threshold,
+    belowThreshold: false,
+    table: table.map(([type, weight]) => ({ type, weight })),
+    roll: picked.roll,
+    rollTotal: picked.total,
+  };
 
   // Cas Scharnhorst (cap Nord, 30 -> ~22 nds) : une avarie de machines
   // retranche 15 à 35% de la vitesse max courante, tirée seulement pour
   // l'effet réellement retenu.
-  if (type === "ENGINE") return { type: "ENGINE", speedReductionRatio: 0.15 + rng() * 0.2 };
-  return { type } as LocalizedDamageEffect;
+  if (picked.type === "ENGINE") return { effect: { type: "ENGINE", speedReductionRatio: 0.15 + rng() * 0.2 }, debug };
+  return { effect: { type: picked.type } as LocalizedDamageEffect, debug };
 }
 
 export type DepthChargeAttackResult = {

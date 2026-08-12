@@ -12,6 +12,7 @@
  */
 
 import type { WeaponType } from "@/generated/prisma/client";
+import type { HitChanceBreakdown, LocalizedDamageDebug } from "@/lib/combat";
 
 // ── Risque de révélation ────────────────────────────────────
 
@@ -238,6 +239,61 @@ export function describeLocalizedEffect(effect: LocalizedEffectStored, targetNam
       return `Le télépointage de ${targetName} est balayé : sa précision va en souffrir.`;
     default:
       return "";
+  }
+}
+
+// ── Trace de calcul (débogage) ──────────────────────────────
+//
+// Détail des facteurs qui composent la chance de toucher et, le cas
+// échéant, le tirage de localisation des dégâts — affiché aux joueurs à des
+// fins de transparence, pas une règle du livret original (nos formules sont
+// une approximation inspirée de ses exemples chiffrés, voir combat.ts).
+
+function pct(x: number): string {
+  return `${Math.round(x * 100)}%`;
+}
+
+/** Détail lisible du calcul de précision d'un tir (canon ou torpille). */
+export function describeHitChanceDebug(b: HitChanceBreakdown): string {
+  const parts = [
+    `précision de base ${pct(b.baseAccuracy)}`,
+    `× facteur portée ${b.rangeFactor.toFixed(2)} (${pct(b.rangeRatio)} de la portée max)`,
+    `× facteur taille cible ${b.sizeFactor.toFixed(2)}`,
+    `× facteur vitesse cible ${b.speedFactor.toFixed(2)}`,
+  ];
+  if (b.accuracyMultiplier !== 1) parts.push(`× malus télépointage ${b.accuracyMultiplier.toFixed(2)}`);
+  return `${parts.join(" ")} = ${b.finalPercent.toFixed(1)}%`;
+}
+
+/** Détail lisible du tirage de localisation des dégâts (ou de son absence). */
+export function describeLocalizedRollDebug(d: LocalizedDamageDebug): string {
+  const ratio = `${pct(d.damageRatio)} du potentiel max de la cible en un coup`;
+  if (d.belowThreshold) {
+    return `Localisation : ${ratio} < seuil ${pct(d.threshold)} → pas de jet de localisation, dégâts de coque seulement.`;
+  }
+  if (!d.table || d.roll === null || d.rollTotal === null) {
+    return `Localisation : ${ratio} ≥ seuil ${pct(d.threshold)}, mais pas de table pour ce type d'arme.`;
+  }
+  const tableLabel = d.table.map((t) => `${localizedTypeLabel(t.type)} ${t.weight}`).join(", ");
+  return `Localisation : ${ratio} ≥ seuil ${pct(d.threshold)} → tirage sur la table ${d.weaponType} (${tableLabel}) : ${d.roll.toFixed(1)}/${d.rollTotal}.`;
+}
+
+function localizedTypeLabel(type: string): string {
+  switch (type) {
+    case "MAGAZINE":
+      return "Magasin";
+    case "TURRET":
+      return "Tourelle";
+    case "ENGINE":
+      return "Machines";
+    case "RUDDER":
+      return "Gouvernail";
+    case "FIRE_CONTROL":
+      return "Télépointage";
+    case "NONE":
+      return "Rien";
+    default:
+      return type;
   }
 }
 

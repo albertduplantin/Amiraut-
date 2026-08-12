@@ -85,6 +85,8 @@ type FireAction = {
   /** Tirage au sort (0-100) : touché si en-dessous de `hitChancePercent`. */
   hitRoll: number | null;
   narrative: string | null;
+  /** Détail des calculs (précision + tirage de localisation), affiché en repli — à des fins de débogage. */
+  debugInfo: string | null;
 };
 
 type LogEntry = {
@@ -96,6 +98,7 @@ type LogEntry = {
   hitChancePercent: number | null;
   hitRoll: number | null;
   narrative: string | null;
+  debugInfo: string | null;
 };
 
 type MovementAction = { unitId: string; speedKnots: number | null; movementPath: LatLng[] | null };
@@ -413,6 +416,7 @@ export function TacticalView(props: {
           hitChancePercent: result.result.hitChancePercent,
           hitRoll: result.result.hitRoll,
           narrative: result.result.narrative,
+          debugInfo: result.result.debugInfo,
         },
       }));
       advanceAfterShot(selectedShip, selectedWeaponSlot);
@@ -608,24 +612,6 @@ export function TacticalView(props: {
         </div>
       </header>
 
-      <div
-        className={`flex items-center gap-2 border-b px-4 py-2 text-sm font-medium ${
-          isMovementPhase ? "border-sky-800 bg-sky-950/40 text-sky-200" : "border-red-800 bg-red-950/40 text-red-200"
-        }`}
-      >
-        {isMovementPhase ? (
-          <>
-            <span className="text-base">🧭</span>
-            <span>PHASE DE MOUVEMENT — tracez le trajet de chaque navire (cap et vitesse), puis validez.</span>
-          </>
-        ) : (
-          <>
-            <span className="text-base">🎯</span>
-            <span>PHASE DE TIR — sélectionnez un navire, une arme, une cible, puis tirez. Chaque pièce peut tirer une fois.</span>
-          </>
-        )}
-      </div>
-
       <div className="flex flex-1 overflow-hidden">
         <aside className="w-64 shrink-0 overflow-y-auto border-r border-slate-800 p-3">
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-sky-400">Mes unités</h2>
@@ -752,12 +738,11 @@ export function TacticalView(props: {
                   <div className="text-slate-500">
                     Cap {Math.round(hoveredOwn.headingDeg ?? 0)}° · {hoveredOwn.lastSpeedKnots} nds (max {hoveredOwn.maxSpeedKnots})
                   </div>
-                  {(hoveredOwn.disabledWeaponSlots.length > 0 || hoveredOwn.speedCapKnots != null || hoveredOwn.rudderJammed || hoveredOwn.fireControlDamaged) && (
+                  {describeDamage(hoveredOwn).length > 0 && (
                     <ul className="mt-1 space-y-0.5 text-red-400">
-                      {hoveredOwn.disabledWeaponSlots.length > 0 && <li>✗ {hoveredOwn.disabledWeaponSlots.length} pièce(s) hors service</li>}
-                      {hoveredOwn.speedCapKnots != null && <li>🔧 Vitesse max réduite à {Math.round(hoveredOwn.speedCapKnots)} nds</li>}
-                      {hoveredOwn.rudderJammed && <li>⚠ Gouvernail bloqué</li>}
-                      {hoveredOwn.fireControlDamaged && <li>⚠ Télépointage endommagé</li>}
+                      {describeDamage(hoveredOwn).map((line, i) => (
+                        <li key={i}>⚠ {line}</li>
+                      ))}
                     </ul>
                   )}
                 </>
@@ -787,7 +772,25 @@ export function TacticalView(props: {
           )}
         </main>
 
-        <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-800 p-4 text-sm">
+        <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-800 text-sm">
+          <div
+            className={`flex items-center gap-2 border-b px-4 py-2 text-sm font-medium ${
+              isMovementPhase ? "border-sky-800 bg-sky-950/40 text-sky-200" : "border-red-800 bg-red-950/40 text-red-200"
+            }`}
+          >
+            {isMovementPhase ? (
+              <>
+                <span className="text-base">🧭</span>
+                <span>PHASE DE MOUVEMENT — tracez le trajet de chaque navire (cap et vitesse), puis validez.</span>
+              </>
+            ) : (
+              <>
+                <span className="text-base">🎯</span>
+                <span>PHASE DE TIR — sélectionnez un navire, une arme, une cible, puis tirez. Chaque pièce peut tirer une fois.</span>
+              </>
+            )}
+          </div>
+          <div className="p-4">
           {hasSubmittedThisPhase ? (
             <div className="mb-4 rounded-md border border-emerald-800 bg-emerald-950/20 p-4">
               <p className="text-emerald-300">Ordres soumis. En attente de l&apos;autre camp…</p>
@@ -895,6 +898,7 @@ export function TacticalView(props: {
                           {a.hits} impact{(a.hits ?? 0) > 1 ? "s" : ""} · {a.damagePoints?.toFixed(1)} pts
                         </div>
                       )}
+                      <DebugDetails text={a.debugInfo} />
                     </li>
                   ))}
               </ul>
@@ -928,6 +932,7 @@ export function TacticalView(props: {
                 Envoyer
               </button>
             </div>
+          </div>
           </div>
         </aside>
       </div>
@@ -976,9 +981,10 @@ function MovementDashboard({
         <p className="text-xs text-slate-500">{ship.className}</p>
       </div>
       <HealthBar unit={ship} />
+      <DamageReport ship={ship} />
       {ship.rudderJammed && (
         <p className="rounded-md border border-red-800 bg-red-950/30 px-2 py-1 text-xs text-red-300">
-          ⚠ Gouvernail bloqué — cap maintenu au {Math.round(ship.headingDeg ?? 0)}°, seule la vitesse est réglable.
+          ⚠ Cap maintenu au {Math.round(ship.headingDeg ?? 0)}°, seule la vitesse est réglable.
         </p>
       )}
       <label className="block text-xs">
@@ -1107,12 +1113,8 @@ function FireDashboard({
         <p className="pl-5 text-xs text-slate-500">{ship.className} — navire tireur</p>
       </div>
       <HealthBar unit={ship} />
+      <DamageReport ship={ship} />
       {ship.category === "SUBMARINE" && <p className="text-xs text-slate-500">Immersion : {formatDepthBand(ship.depthBand)}</p>}
-      {ship.fireControlDamaged && (
-        <p className="rounded-md border border-red-800 bg-red-950/30 px-2 py-1 text-xs text-red-300">
-          ⚠ Télépointage endommagé — précision réduite sur tous les tirs.
-        </p>
-      )}
 
       <div>
         <h3 className="mb-1 flex items-center text-xs font-semibold text-slate-300">
@@ -1151,6 +1153,7 @@ function FireDashboard({
                     </div>
                   )}
                   {fired.narrative && <div className="mt-1 text-slate-300">{fired.narrative}</div>}
+                  <DebugDetails text={fired.debugInfo} />
                 </li>
               );
             }
@@ -1202,6 +1205,7 @@ function FireDashboard({
               {firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.narrative && (
                 <div className="mt-1 text-slate-300">{firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.narrative}</div>
               )}
+              <DebugDetails text={firedBySlot[`${ship.id}|${TORPEDO_SLOT}`]?.debugInfo ?? null} />
             </li>
           )}
           {torpedoBattery && !ship.disabledWeaponSlots.includes(TORPEDO_SLOT) && !torpedoFired && (
@@ -1333,6 +1337,33 @@ function HealthBar({ unit }: { unit: OwnUnit }) {
   );
 }
 
+/** Détail des calculs d'un tir, replié par défaut — à des fins de débogage/transparence (voir tacticalNarrative.ts). */
+function DebugDetails({ text }: { text: string | null }) {
+  if (!text) return null;
+  return (
+    <details className="mt-1 text-[11px] text-slate-600">
+      <summary className="cursor-pointer select-none hover:text-slate-400">🔧 détails du calcul</summary>
+      <p className="mt-0.5 text-slate-500">{text}</p>
+    </details>
+  );
+}
+
+/** Avaries localisées du navire sélectionné, en plus de la barre de PV — utilisé dans les deux fiches (mouvement et tir). */
+function DamageReport({ ship }: { ship: OwnUnit }) {
+  const lines = describeDamage(ship);
+  if (lines.length === 0) return null;
+  return (
+    <div className="rounded-md border border-red-800 bg-red-950/30 p-2 text-xs text-red-300">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-red-400">Avaries localisées</div>
+      <ul className="space-y-0.5">
+        {lines.map((line, i) => (
+          <li key={i}>⚠ {line}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function formatArc(arc: string) {
   switch (arc) {
     case "FORWARD":
@@ -1346,6 +1377,25 @@ function formatArc(arc: string) {
     default:
       return arc;
   }
+}
+
+/** Nom lisible d'une pièce à partir de son weaponSlot (ex: "gun:0" -> "tourelle avant"), pour désigner une avarie sans jargon technique. */
+function weaponLabel(ship: OwnUnit, slot: string): string {
+  if (slot === TORPEDO_SLOT) return "tubes lance-torpilles";
+  const index = Number(slot.slice(4));
+  const gun = ship.combatProfile?.guns?.[index];
+  if (!gun) return slot;
+  return `batterie ${formatArc(gun.arc)} (${gun.calibreMm}mm)`;
+}
+
+/** Avaries localisées d'un navire, en phrases lisibles — utilisé par la fiche navire ET l'infobulle de survol, une seule source de vérité pour la terminologie. */
+function describeDamage(ship: OwnUnit): string[] {
+  const lines: string[] = [];
+  for (const slot of ship.disabledWeaponSlots) lines.push(`Batterie inopérante : ${weaponLabel(ship, slot)} détruite`);
+  if (ship.speedCapKnots != null) lines.push(`Salle des machines touchée : vitesse max réduite à ${Math.round(ship.speedCapKnots)} nds`);
+  if (ship.rudderJammed) lines.push("Gouvernail bloqué : cap maintenu, impossible de manœuvrer");
+  if (ship.fireControlDamaged) lines.push("Télépointage endommagé : précision réduite sur tous les tirs");
+  return lines;
 }
 
 function formatDuration(minutes: number) {

@@ -557,6 +557,10 @@ model TacticalAction {
   localizedEffect  Json?
   /// Récit du coup, affiché aux joueurs.
   narrative        String?
+  /// Détail des calculs (précision + tirage de localisation), à des fins de
+  /// débogage/transparence — voir describeHitChanceDebug/describeLocalizedRollDebug
+  /// dans tacticalNarrative.ts. Pas une règle du livret original, juste notre formule.
+  debugInfo        String?
   /// Le tir a trahi la position du tireur (feu de bouche, sillage) pour la manche suivante.
   revealedShooter  Boolean  @default(false)
   /// Les dégâts de ce tir ont été portés au potentiel de la cible : se fait en
