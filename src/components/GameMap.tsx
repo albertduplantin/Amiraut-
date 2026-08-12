@@ -178,6 +178,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   const isFirstFlyRef = useRef(true);
   const lastFlownToRef = useRef<LatLng | null>(null);
   const shipMarkersRef = useRef(new Map<string, ShipMarkerEntry>());
+  const appliedSourceIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
     onClickRef.current = onClick;
@@ -334,7 +335,16 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     const map = mapRef.current;
     if (!map) return;
     return onceStyleReady(map, () => {
+      const incomingIds = new Set(sources.map((s) => s.id));
+      // Une source qui a disparu de la liste (ex: le tracé de mouvement une
+      // fois passé en phase de tir) doit être retirée de la carte — sans
+      // ça, la dernière donnée appliquée reste affichée indéfiniment, même
+      // après que le composant ait cessé de la fournir.
+      for (const id of appliedSourceIdsRef.current) {
+        if (!incomingIds.has(id)) removeLayerAndSource(map, id);
+      }
       for (const source of sources) applyLayer(map, source);
+      appliedSourceIdsRef.current = incomingIds;
     });
   }, [sources]);
 
@@ -532,6 +542,14 @@ function applyShipMarkerLayout(map: MapLibreMap | null, markers: Map<string, Shi
       svg.setAttribute("height", String(heightPx));
     }
   }
+}
+
+/** Retire une source GeoJSON et toutes les couches qu'`applyLayer` a pu y attacher (ligne, cercle, étiquette). */
+function removeLayerAndSource(map: MapLibreMap, id: string) {
+  for (const layerId of [`${id}-line`, `${id}-circle`, `${id}-label`]) {
+    if (map.getLayer(layerId)) map.removeLayer(layerId);
+  }
+  if (map.getSource(id)) map.removeSource(id);
 }
 
 function applyLayer(map: MapLibreMap, config: MapSourceConfig) {

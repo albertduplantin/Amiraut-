@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
-import { budgetCircleFeatureCollection, lineFeatureCollection, multiLineFeatureCollection, pointsFeatureCollection } from "@/lib/mapData";
+import { budgetCircleFeatureCollection, lineFeatureCollection, pointsFeatureCollection } from "@/lib/mapData";
 import { clampPathToBudget, pathLengthNm, speedBudgetNm, turnPenaltyNm, bearingDeg, type LatLng } from "@/lib/geo";
 import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 import {
@@ -407,22 +407,6 @@ export function TacticalView(props: {
           dashed: true,
         });
       }
-    }
-
-    if (!isMovementPhase && selectedShip && selectedTarget) {
-      list.push({
-        id: "firing-line",
-        kind: "line",
-        data: multiLineFeatureCollection([
-          [
-            { lat: selectedShip.currentLat, lng: selectedShip.currentLng },
-            { lat: selectedTarget.lat, lng: selectedTarget.lng },
-          ],
-        ]),
-        color: "#facc15",
-        width: 2,
-        dashed: true,
-      });
     }
 
     return list;
