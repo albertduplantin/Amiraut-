@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { budgetCircleFeatureCollection, lineFeatureCollection, multiLineFeatureCollection, pointsFeatureCollection } from "@/lib/mapData";
 import { clampPathToBudget, pathLengthNm, speedBudgetNm, bearingDeg, type LatLng } from "@/lib/geo";
@@ -15,8 +14,7 @@ import {
   type CombatProfile,
   type GunBattery,
 } from "@/lib/combat";
-import { assessFiringReveal } from "@/lib/tacticalNarrative";
-import { submitMovementAction, submitFireAction, sendBattleChatAction } from "./actions";
+import { submitTacticalMovementAction, submitFireShotAction, finishFirePhaseAction, sendBattleChatAction } from "./tacticalActions";
 
 type OwnUnit = {
   id: string;
@@ -33,9 +31,7 @@ type OwnUnit = {
   currentLng: number;
   headingDeg: number | null;
   depthBand: string;
-  batteryChargePercent: number | null;
-  oxygenHoursRemaining: number | null;
-  oxygenEnduranceHours: number | null;
+  lastSpeedKnots: number;
   torpedoesRemaining: number | null;
 };
 
@@ -47,7 +43,6 @@ type Contact = {
   lengthMeters: number | null;
   beamMeters: number | null;
   maxSpeedKnots: number;
-  method: string;
   distanceNm: number;
   bearingDeg: number;
   lat: number;
@@ -55,50 +50,38 @@ type Contact = {
   status: string;
 };
 
-type OwnAction = {
+type FireAction = {
   unitId: string;
-  phase: string;
-  headingDeg: number | null;
-  speedKnots: number | null;
-  movementPath: LatLng[] | null;
-  depthBand: string | null;
   targetUnitId: string | null;
   weaponType: string | null;
-  torpedoTypeId: string | null;
-  resolved: boolean;
   hit: boolean | null;
   hits: number | null;
   damagePoints: number | null;
-  targetSunk: boolean | null;
   narrative: string | null;
 };
 
 type LogEntry = {
   roundNumber: number;
-  unitId: string;
   targetUnitId: string | null;
-  weaponType: string | null;
   hit: boolean | null;
   hits: number | null;
   damagePoints: number | null;
-  targetSunk: boolean | null;
   narrative: string | null;
 };
 
-type BattleMessage = { id: string; kind: string; authorName: string; body: string; roundNumber: number; teamId: string | null };
+type BattleMessage = { id: string; kind: string; authorName: string; body: string; roundNumber: number };
 
 type MovementDraft = { speedKnots: number; path: LatLng[] };
-type PlannedShot = { targetUnitId: string; weaponType: "GUN" | "TORPEDO"; torpedoTypeId?: string };
 
 const NM_TO_M = 1852;
 const ASSUMED_TARGET_SPEED_RATIO = 0.7;
 
-export function BattleClient(props: {
+export function TacticalView(props: {
   engagementId: string;
   status: string;
   roundNumber: number;
   roundMinutes: number;
-  syncMode: string;
+  turnNumber: number;
   arbiterPaused: boolean;
   endReason: string | null;
   teamId: string;
@@ -108,7 +91,7 @@ export function BattleClient(props: {
   submittedTeamIds: string[];
   ownUnits: OwnUnit[];
   contacts: Contact[];
-  ownActions: OwnAction[];
+  ownFireActionsThisRound: FireAction[];
   battleLog: LogEntry[];
   messages: BattleMessage[];
 }) {
@@ -125,26 +108,25 @@ export function BattleClient(props: {
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [selectedWeaponIndex, setSelectedWeaponIndex] = useState<number | null>(null);
   const [selectedTorpedoTypeId, setSelectedTorpedoTypeId] = useState<string | null>(null);
+  const [pickingTarget, setPickingTarget] = useState(false);
+  const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [freshResults, setFreshResults] = useState<Record<string, FireAction>>({});
 
   const [movementDrafts, setMovementDrafts] = useState<Record<string, MovementDraft>>(() => {
     const init: Record<string, MovementDraft> = {};
-    for (const u of props.ownUnits) {
-      const prior = props.ownActions.find((a) => a.unitId === u.id && a.phase === "MOVEMENT");
-      init[u.id] = { speedKnots: prior?.speedKnots ?? 0, path: prior?.movementPath ?? [] };
-    }
-    return init;
-  });
-  const [plannedShots, setPlannedShots] = useState<Record<string, PlannedShot>>(() => {
-    const init: Record<string, PlannedShot> = {};
-    for (const a of props.ownActions) {
-      if (a.phase === "FIRE" && a.targetUnitId && a.weaponType) {
-        init[a.unitId] = { targetUnitId: a.targetUnitId, weaponType: a.weaponType as "GUN" | "TORPEDO", torpedoTypeId: a.torpedoTypeId ?? undefined };
-      }
-    }
+    for (const u of props.ownUnits) init[u.id] = { speedKnots: u.lastSpeedKnots, path: [] };
     return init;
   });
 
   const hasSubmittedThisPhase = props.submittedTeamIds.includes(props.teamId);
+  const isMovementPhase = props.status === "AWAITING_MOVEMENT";
+
+  const firedByUnit = useMemo(() => {
+    const map: Record<string, FireAction> = {};
+    for (const a of props.ownFireActionsThisRound) map[a.unitId] = a;
+    for (const [unitId, a] of Object.entries(freshResults)) map[unitId] = a;
+    return map;
+  }, [props.ownFireActionsThisRound, freshResults]);
 
   // Rafraîchit automatiquement en attendant l'autre camp.
   useEffect(() => {
@@ -154,9 +136,22 @@ export function BattleClient(props: {
     return () => clearInterval(id);
   }, [hasSubmittedThisPhase, props.status, router]);
 
+  // Réinitialise la sélection de cible/arme quand on change de navire ou de
+  // phase — ajusté pendant le rendu plutôt que dans un effet (pattern
+  // recommandé par React pour "reset state on prop change", évite un rendu
+  // intermédiaire avec un état obsolète).
+  const [resetKey, setResetKey] = useState<string>(`${selectedShipId}|${isMovementPhase}`);
+  const currentResetKey = `${selectedShipId}|${isMovementPhase}`;
+  if (resetKey !== currentResetKey) {
+    setResetKey(currentResetKey);
+    setSelectedTargetId(null);
+    setSelectedWeaponIndex(null);
+    setPickingTarget(false);
+  }
+
   const selectedShip = livingOwnUnits.find((u) => u.id === selectedShipId) ?? null;
   const selectedTarget = liveContacts.find((c) => c.targetUnitId === selectedTargetId) ?? null;
-  const isMovementPhase = props.status === "AWAITING_MOVEMENT";
+  const selectedShipFired = selectedShip ? firedByUnit[selectedShip.id] : undefined;
 
   const draft = selectedShip ? movementDrafts[selectedShip.id] : null;
   const budgetNm = selectedShip && draft ? speedBudgetNm(draft.speedKnots, props.roundMinutes) : 0;
@@ -205,16 +200,25 @@ export function BattleClient(props: {
   function handleMarkerClick(markerId: string) {
     if (markerId.startsWith("own-")) {
       setSelectedShipId(markerId.slice(4));
-      setSelectedWeaponIndex(null);
     } else if (markerId.startsWith("contact-")) {
-      setSelectedTargetId(markerId.slice(8));
+      const targetId = markerId.slice(8);
+      if (pickingTarget) {
+        setSelectedTargetId(targetId);
+        setPickingTarget(false);
+      } else if (!isMovementPhase) {
+        setSelectedTargetId(targetId);
+      }
     }
+  }
+
+  function handleMarkerHover(id: string | null, pos: { x: number; y: number } | null) {
+    setHover(id && pos ? { id, x: pos.x, y: pos.y } : null);
   }
 
   function submitMovement() {
     setError(null);
     startTransition(async () => {
-      const result = await submitMovementAction({
+      const result = await submitTacticalMovementAction({
         engagementId: props.engagementId,
         moves: livingOwnUnits.map((u) => ({
           unitId: u.id,
@@ -227,16 +231,41 @@ export function BattleClient(props: {
     });
   }
 
-  function submitFire() {
+  function validateShot() {
+    if (!selectedShip || !selectedTarget || selectedWeaponIndex === null) return;
     setError(null);
     startTransition(async () => {
-      const shots = Object.entries(plannedShots).map(([unitId, s]) => ({
-        unitId,
-        targetUnitId: s.targetUnitId,
-        weaponType: s.weaponType,
-        torpedoTypeId: s.torpedoTypeId,
+      const result = await submitFireShotAction({
+        engagementId: props.engagementId,
+        unitId: selectedShip.id,
+        targetUnitId: selectedTarget.targetUnitId,
+        weaponType: selectedWeaponIndex === -1 ? "TORPEDO" : "GUN",
+        torpedoTypeId: selectedWeaponIndex === -1 ? (selectedTorpedoTypeId ?? undefined) : undefined,
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setFreshResults((prev) => ({
+        ...prev,
+        [selectedShip.id]: {
+          unitId: selectedShip.id,
+          targetUnitId: selectedTarget.targetUnitId,
+          weaponType: selectedWeaponIndex === -1 ? "TORPEDO" : "GUN",
+          hit: result.result.hit,
+          hits: result.result.hits,
+          damagePoints: result.result.damagePoints,
+          narrative: result.result.narrative,
+        },
       }));
-      const result = await submitFireAction({ engagementId: props.engagementId, shots });
+      router.refresh();
+    });
+  }
+
+  function finishFiring() {
+    setError(null);
+    startTransition(async () => {
+      const result = await finishFirePhaseAction({ engagementId: props.engagementId });
       if (!result.ok) setError(result.error);
       else router.refresh();
     });
@@ -350,6 +379,7 @@ export function BattleClient(props: {
         color: c.targetUnitId === selectedTargetId ? "#fbbf24" : "#f97316",
         silhouette,
         lengthMeters: c.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+        status: c.status as "ACTIVE" | "DAMAGED" | "SUNK",
       };
     });
     return [...own, ...enemies];
@@ -360,14 +390,17 @@ export function BattleClient(props: {
     ...props.contacts.map((c) => ({ lat: c.lat, lng: c.lng })),
   ];
 
+  const hoveredOwn = hover?.id.startsWith("own-") ? livingOwnUnits.find((u) => u.id === hover.id.slice(4)) : null;
+  const hoveredContact = hover?.id.startsWith("contact-") ? liveContacts.find((c) => c.targetUnitId === hover.id.slice(8)) : null;
+
   if (props.status === "RESOLVED") {
     return (
       <div className="chart-room-bg flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-slate-100">
         <h1 className="font-display text-2xl text-brass-300">Combat terminé</h1>
         <p className="text-slate-400">{formatEndReason(props.endReason)}</p>
-        <Link href="/team/orders" className="rounded-md bg-brass-600 px-4 py-2 font-medium hover:bg-brass-500">
-          Retour aux ordres
-        </Link>
+        <button onClick={() => router.refresh()} className="rounded-md bg-brass-600 px-4 py-2 font-medium hover:bg-brass-500">
+          Continuer
+        </button>
       </div>
     );
   }
@@ -377,15 +410,12 @@ export function BattleClient(props: {
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
         <div>
           <h1 className="font-display text-lg tracking-wide text-brass-300">
-            Bataille tactique — manche {props.roundNumber}
+            Tour {props.turnNumber} — Combat rapproché
             <span className="ml-2 text-xs font-normal text-slate-500">
-              ({formatDuration(props.roundMinutes)} · {props.syncMode === "SYNC" ? "synchrone" : "asynchrone"})
+              manche {props.roundNumber} · {formatDuration(props.roundMinutes)} · {isMovementPhase ? "mouvement" : "tir"}
             </span>
           </h1>
-          <p className="text-xs text-slate-500">
-            Phase : {isMovementPhase ? "mouvement" : "tir"}
-            {props.arbiterPaused && <span className="ml-2 text-amber-400">⏸ suspendu par l&apos;arbitre</span>}
-          </p>
+          {props.arbiterPaused && <p className="text-xs text-amber-400">⏸ suspendu par l&apos;arbitre</p>}
         </div>
         <div className="flex items-center gap-2 text-xs">
           {props.teams.map((t) => (
@@ -399,9 +429,6 @@ export function BattleClient(props: {
             </span>
           ))}
         </div>
-        <Link href="/team/orders" className="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-900">
-          Retour aux ordres
-        </Link>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -411,10 +438,7 @@ export function BattleClient(props: {
             {livingOwnUnits.map((u) => (
               <li key={u.id}>
                 <button
-                  onClick={() => {
-                    setSelectedShipId(u.id);
-                    setSelectedWeaponIndex(null);
-                  }}
+                  onClick={() => setSelectedShipId(u.id)}
                   className={`w-full rounded-md px-2 py-1.5 text-left text-xs transition ${
                     u.id === selectedShipId ? "bg-brass-900/50 ring-1 ring-brass-500" : "hover:bg-slate-900"
                   }`}
@@ -424,7 +448,7 @@ export function BattleClient(props: {
                       {u.name}
                       {u.status === "DAMAGED" && <span className="ml-1 text-amber-400">⚠</span>}
                     </span>
-                    {!isMovementPhase && plannedShots[u.id] && <span className="text-emerald-400">🎯</span>}
+                    {!isMovementPhase && firedByUnit[u.id] && <span className="text-emerald-400">✓ tiré</span>}
                     {isMovementPhase && (movementDrafts[u.id]?.path.length ?? 0) > 0 && <span className="text-emerald-400">➜</span>}
                   </div>
                   <div className="text-slate-500">{u.className}</div>
@@ -441,7 +465,12 @@ export function BattleClient(props: {
               {liveContacts.map((c) => (
                 <li key={c.targetUnitId}>
                   <button
-                    onClick={() => setSelectedTargetId(c.targetUnitId)}
+                    onClick={() => {
+                      if (pickingTarget || !isMovementPhase) {
+                        setSelectedTargetId(c.targetUnitId);
+                        setPickingTarget(false);
+                      }
+                    }}
                     className={`w-full rounded-md px-2 py-1.5 text-left text-xs transition ${
                       c.targetUnitId === selectedTargetId ? "bg-orange-950/60 ring-1 ring-orange-500" : "hover:bg-slate-900"
                     }`}
@@ -467,10 +496,40 @@ export function BattleClient(props: {
             fitToPoints={fitPoints}
             shipMarkers={shipMarkers}
             onShipMarkerClick={handleMarkerClick}
+            onShipMarkerHover={handleMarkerHover}
             shipMarkersMinZoom={0}
             showScaleAndRuler
             className="h-full w-full"
           />
+          {hover && (hoveredOwn || hoveredContact) && (
+            <div
+              className="pointer-events-none fixed z-20 max-w-xs rounded-md border border-slate-700 bg-slate-950/95 px-3 py-2 text-xs shadow-xl"
+              style={{ left: hover.x + 14, top: hover.y + 14 }}
+            >
+              {hoveredOwn && (
+                <>
+                  <div className="font-semibold text-sky-300">{hoveredOwn.name}</div>
+                  <div className="text-slate-400">{hoveredOwn.className}</div>
+                  {hoveredOwn.healthMax != null && (
+                    <div className="mt-1 text-slate-300">
+                      État : {hoveredOwn.status === "DAMAGED" ? "endommagé" : "actif"} — {Math.round(hoveredOwn.healthCurrent ?? 0)}/
+                      {Math.round(hoveredOwn.healthMax)} pts
+                    </div>
+                  )}
+                  <div className="text-slate-500">Vitesse max {hoveredOwn.maxSpeedKnots} nds</div>
+                </>
+              )}
+              {hoveredContact && (
+                <>
+                  <div className="font-semibold text-orange-300">{hoveredContact.className}</div>
+                  <div className="text-slate-400">
+                    {hoveredContact.distanceNm.toFixed(1)}nm, gis. {Math.round(hoveredContact.bearingDeg)}°
+                  </div>
+                  <div className="mt-1 text-slate-300">État (estimé) : {formatEnemyStatus(hoveredContact.status)}</div>
+                </>
+              )}
+            </div>
+          )}
         </main>
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-800 p-4 text-sm">
@@ -499,19 +558,15 @@ export function BattleClient(props: {
               <FireDashboard
                 ship={selectedShip}
                 target={selectedTarget}
-                plannedShot={plannedShots[selectedShip.id]}
+                alreadyFired={selectedShipFired}
+                pickingTarget={pickingTarget}
                 selectedWeaponIndex={selectedWeaponIndex}
                 setSelectedWeaponIndex={setSelectedWeaponIndex}
                 selectedTorpedoTypeId={selectedTorpedoTypeId}
                 setSelectedTorpedoTypeId={setSelectedTorpedoTypeId}
-                onPlan={(shot) => setPlannedShots((prev) => ({ ...prev, [selectedShip.id]: shot }))}
-                onClearPlan={() =>
-                  setPlannedShots((prev) => {
-                    const next = { ...prev };
-                    delete next[selectedShip.id];
-                    return next;
-                  })
-                }
+                onStartPicking={() => setPickingTarget(true)}
+                onValidate={validateShot}
+                isPending={isPending}
               />
             )
           ) : (
@@ -520,15 +575,22 @@ export function BattleClient(props: {
 
           {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
 
-          {!hasSubmittedThisPhase && !props.arbiterPaused && (
+          {!hasSubmittedThisPhase && !props.arbiterPaused && isMovementPhase && (
             <button
-              onClick={isMovementPhase ? submitMovement : submitFire}
+              onClick={submitMovement}
               disabled={isPending}
-              className={`mt-3 w-full rounded-md px-3 py-2 font-medium disabled:opacity-50 ${
-                isMovementPhase ? "bg-brass-600 hover:bg-brass-500" : "bg-red-800 hover:bg-red-700"
-              }`}
+              className="mt-3 w-full rounded-md bg-brass-600 px-3 py-2 font-medium hover:bg-brass-500 disabled:opacity-50"
             >
-              {isPending ? "Envoi…" : isMovementPhase ? "Valider le mouvement" : "Valider les tirs"}
+              {isPending ? "Envoi…" : "Valider le mouvement"}
+            </button>
+          )}
+          {!hasSubmittedThisPhase && !props.arbiterPaused && !isMovementPhase && (
+            <button
+              onClick={finishFiring}
+              disabled={isPending}
+              className="mt-3 w-full rounded-md bg-red-800 px-3 py-2 font-medium hover:bg-red-700 disabled:opacity-50"
+            >
+              {isPending ? "Envoi…" : "Passer à la phase de mouvement suivante"}
             </button>
           )}
 
@@ -545,7 +607,6 @@ export function BattleClient(props: {
                       {a.hit && (
                         <div className="mt-1 text-slate-400">
                           {a.hits} impact{(a.hits ?? 0) > 1 ? "s" : ""} · {a.damagePoints?.toFixed(1)} pts
-                          {a.targetSunk && <span className="text-red-400"> · coulé</span>}
                         </div>
                       )}
                     </li>
@@ -556,7 +617,7 @@ export function BattleClient(props: {
 
           <div className="mt-4">
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Communications</h2>
-            <div className="mb-2 max-h-40 space-y-1 overflow-y-auto text-xs">
+            <div className="mb-2 max-h-32 space-y-1 overflow-y-auto text-xs">
               {props.messages.length === 0 && <p className="text-slate-600">Aucun message.</p>}
               {props.messages.map((m) => (
                 <div
@@ -641,23 +702,27 @@ function MovementDashboard({
 function FireDashboard({
   ship,
   target,
-  plannedShot,
+  alreadyFired,
+  pickingTarget,
   selectedWeaponIndex,
   setSelectedWeaponIndex,
   selectedTorpedoTypeId,
   setSelectedTorpedoTypeId,
-  onPlan,
-  onClearPlan,
+  onStartPicking,
+  onValidate,
+  isPending,
 }: {
   ship: OwnUnit;
   target: Contact | null;
-  plannedShot: PlannedShot | undefined;
+  alreadyFired: FireAction | undefined;
+  pickingTarget: boolean;
   selectedWeaponIndex: number | null;
   setSelectedWeaponIndex: (i: number | null) => void;
   selectedTorpedoTypeId: string | null;
   setSelectedTorpedoTypeId: (id: string | null) => void;
-  onPlan: (shot: PlannedShot) => void;
-  onClearPlan: () => void;
+  onStartPicking: () => void;
+  onValidate: () => void;
+  isPending: boolean;
 }) {
   const relativeBearing = useMemo(() => {
     if (!target) return null;
@@ -665,10 +730,9 @@ function FireDashboard({
   }, [ship, target]);
 
   const rangeM = target ? target.distanceNm * NM_TO_M : null;
-
+  const allGuns = useMemo(() => ship.combatProfile?.guns ?? [], [ship.combatProfile]);
   const usableGuns: GunBattery[] =
     rangeM !== null ? listUsableGunBatteries(ship.combatProfile, rangeM, relativeBearing ?? undefined) : [];
-  const allGuns = useMemo(() => ship.combatProfile?.guns ?? [], [ship.combatProfile]);
   const torpedoTypes = ship.combatProfile?.torpedoTypes ?? null;
   const torpedoBattery = ship.combatProfile?.torpedoTubes ?? null;
   const torpedoInArc = torpedoBattery && relativeBearing !== null ? isTorpedoArcClear(torpedoBattery, relativeBearing) : null;
@@ -681,7 +745,7 @@ function FireDashboard({
     const targetBeamM = target.beamMeters ?? 12;
     const assumedSpeed = target.maxSpeedKnots * ASSUMED_TARGET_SPEED_RATIO;
 
-    if (selectedWeaponIndex !== null && allGuns[selectedWeaponIndex]) {
+    if (selectedWeaponIndex !== null && selectedWeaponIndex >= 0 && allGuns[selectedWeaponIndex]) {
       const battery = allGuns[selectedWeaponIndex];
       return gunHitChancePercent({
         calibreMm: battery.calibreMm,
@@ -707,23 +771,27 @@ function FireDashboard({
     return null;
   }, [target, rangeM, selectedWeaponIndex, allGuns, torpedoBattery, torpedoTypes, selectedTorpedoTypeId]);
 
-  const reveal =
-    selectedWeaponIndex !== null
-      ? assessFiringReveal({
-          weaponType: selectedWeaponIndex === -1 ? "TORPEDO" : "GUN",
-          calibreMm: selectedWeaponIndex >= 0 ? allGuns[selectedWeaponIndex]?.calibreMm : null,
-          torpedoWakeVisible: torpedoTypes?.find((t) => t.id === selectedTorpedoTypeId)?.wakeVisible ?? true,
-          isNight: false,
-        })
-      : null;
-
-  function plan() {
-    if (!target) return;
-    if (selectedWeaponIndex === -1) {
-      onPlan({ targetUnitId: target.targetUnitId, weaponType: "TORPEDO", torpedoTypeId: selectedTorpedoTypeId ?? undefined });
-    } else if (selectedWeaponIndex !== null) {
-      onPlan({ targetUnitId: target.targetUnitId, weaponType: "GUN" });
-    }
+  if (alreadyFired) {
+    return (
+      <div className="space-y-3">
+        <div>
+          <h2 className="font-semibold">{ship.name}</h2>
+          <p className="text-xs text-slate-500">{ship.className}</p>
+        </div>
+        <HealthBar unit={ship} />
+        <div className={`rounded-md border p-3 text-xs ${alreadyFired.hit ? "border-red-800 bg-red-950/30" : "border-slate-700 bg-slate-900"}`}>
+          <div className="mb-1 font-medium text-slate-300">Tir de cette manche</div>
+          {alreadyFired.narrative}
+          {alreadyFired.hit && (
+            <div className="mt-1 text-slate-400">
+              {alreadyFired.hits} impact{(alreadyFired.hits ?? 0) > 1 ? "s" : ""} · {alreadyFired.damagePoints?.toFixed(1)} pts (appliqués en fin de
+              manche)
+            </div>
+          )}
+        </div>
+        <p className="text-xs text-slate-500">Ce navire a déjà tiré cette manche.</p>
+      </div>
+    );
   }
 
   return (
@@ -733,26 +801,24 @@ function FireDashboard({
         <p className="text-xs text-slate-500">{ship.className}</p>
       </div>
       <HealthBar unit={ship} />
-      {ship.category === "SUBMARINE" && <SubmarineStatus unit={ship} />}
+      {ship.category === "SUBMARINE" && <p className="text-xs text-slate-500">Immersion : {formatDepthBand(ship.depthBand)}</p>}
 
       <div>
         <h3 className="mb-1 text-xs font-semibold text-slate-400">Armement</h3>
         <ul className="space-y-1">
           {allGuns.map((g, i) => {
-            const usable = usableGuns.includes(g);
+            const usable = target ? usableGuns.includes(g) : true;
             return (
               <li key={i}>
                 <button
                   onClick={() => setSelectedWeaponIndex(i)}
-                  disabled={!target}
                   className={`w-full rounded-md px-2 py-1.5 text-left text-xs transition ${
                     selectedWeaponIndex === i
                       ? "bg-brass-900/50 ring-1 ring-brass-500"
                       : usable
                         ? "border border-slate-700 hover:bg-slate-800"
-                        : "cursor-not-allowed opacity-40"
+                        : "cursor-not-allowed border border-slate-800 opacity-40"
                   }`}
-                  title={!target ? "Choisissez une cible" : !usable ? "Hors de portée ou hors arc de tir" : undefined}
                 >
                   <div className="flex items-center justify-between">
                     <span>
@@ -761,9 +827,7 @@ function FireDashboard({
                     <span className="text-slate-500">{g.roundsPerMinute} c/min</span>
                   </div>
                   {target && !usable && (
-                    <div className="text-[11px] text-amber-400">
-                      {rangeM !== null && g.rangeM < rangeM ? "hors de portée" : "hors arc de tir"}
-                    </div>
+                    <div className="text-[11px] text-amber-400">{rangeM !== null && g.rangeM < rangeM ? "hors de portée" : "hors arc de tir"}</div>
                   )}
                 </button>
               </li>
@@ -773,20 +837,19 @@ function FireDashboard({
             <li>
               <button
                 onClick={() => setSelectedWeaponIndex(-1)}
-                disabled={!target || outOfTorpedoes}
+                disabled={outOfTorpedoes}
                 className={`w-full rounded-md px-2 py-1.5 text-left text-xs transition ${
                   selectedWeaponIndex === -1
                     ? "bg-brass-900/50 ring-1 ring-brass-500"
-                    : torpedoInArc !== false && torpedoInRange !== false && !outOfTorpedoes
-                      ? "border border-slate-700 hover:bg-slate-800"
-                      : "cursor-not-allowed opacity-40"
+                    : outOfTorpedoes
+                      ? "cursor-not-allowed opacity-40"
+                      : "border border-slate-700 hover:bg-slate-800"
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <span>Torpilles ({formatArc(torpedoBattery.arc ?? "BROADSIDE")})</span>
                   {ship.torpedoesRemaining != null && <span className="text-slate-500">{ship.torpedoesRemaining} restantes</span>}
                 </div>
-                {target && outOfTorpedoes && <div className="text-[11px] text-amber-400">plus de torpilles</div>}
                 {target && !outOfTorpedoes && torpedoInRange === false && <div className="text-[11px] text-amber-400">hors de portée</div>}
                 {target && !outOfTorpedoes && torpedoInRange !== false && torpedoInArc === false && (
                   <div className="text-[11px] text-amber-400">hors arc de tir</div>
@@ -815,37 +878,37 @@ function FireDashboard({
         </div>
       )}
 
-      {!target && <p className="text-xs text-slate-500">Sélectionnez un contact (carte ou liste) pour viser.</p>}
+      {selectedWeaponIndex === null && <p className="text-xs text-slate-500">Choisissez une arme ci-dessus.</p>}
 
-      {target && selectedWeaponIndex !== null && (
-        <div className="rounded-md bg-slate-950/60 p-2 text-xs">
-          <div>
-            Cible : {target.className} — {target.distanceNm.toFixed(1)}nm, gis. {Math.round(target.bearingDeg)}°
-          </div>
-          {estimate !== null ? <div>Chance de toucher : ~{estimate.toFixed(0)}%</div> : <div className="text-slate-500">Non tirable.</div>}
-          {reveal && reveal.revealRadiusNm > 0 && (
-            <div className="mt-1 text-amber-400">
-              ⚠ {reveal.label} — {reveal.reason}
-            </div>
-          )}
-          <button
-            onClick={plan}
-            disabled={estimate === null}
-            className="mt-2 w-full rounded-md bg-red-800 px-2 py-1.5 text-xs font-medium hover:bg-red-700 disabled:opacity-40"
-          >
-            Prévoir ce tir
-          </button>
-        </div>
+      {selectedWeaponIndex !== null && !target && (
+        <button
+          onClick={onStartPicking}
+          className={`w-full rounded-md px-3 py-2 text-sm font-medium transition ${
+            pickingTarget ? "bg-orange-800 hover:bg-orange-700" : "bg-slate-700 hover:bg-slate-600"
+          }`}
+        >
+          {pickingTarget ? "Cliquez une cible sur la carte…" : "Sélectionner une cible"}
+        </button>
       )}
 
-      {plannedShot && (
-        <div className="rounded-md border border-emerald-800 bg-emerald-950/20 p-2 text-xs">
-          <div className="flex items-center justify-between">
-            <span>Tir prévu : {plannedShot.weaponType === "GUN" ? "canon" : "torpille"}</span>
-            <button onClick={onClearPlan} className="text-slate-400 underline hover:text-slate-200">
-              annuler
+      {selectedWeaponIndex !== null && target && (
+        <div className="rounded-md bg-slate-950/60 p-2 text-xs">
+          <div className="mb-2 flex items-center justify-between">
+            <div>
+              Cible : {target.className} — {target.distanceNm.toFixed(1)}nm, gis. {Math.round(target.bearingDeg)}°
+            </div>
+            <button onClick={onStartPicking} className="text-slate-400 underline hover:text-slate-200">
+              changer
             </button>
           </div>
+          {estimate !== null ? <div>Chance de toucher : ~{estimate.toFixed(0)}%</div> : <div className="text-amber-400">Ce tir n&apos;est pas possible.</div>}
+          <button
+            onClick={onValidate}
+            disabled={estimate === null || isPending}
+            className="mt-2 w-full rounded-md bg-red-800 px-2 py-1.5 text-sm font-medium hover:bg-red-700 disabled:opacity-40"
+          >
+            {isPending ? "Envoi…" : "Valider le tir"}
+          </button>
         </div>
       )}
     </div>
@@ -867,30 +930,6 @@ function HealthBar({ unit }: { unit: OwnUnit }) {
       </div>
       <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
         <div className={`h-full ${ratio < 0.6 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${ratio * 100}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function SubmarineStatus({ unit }: { unit: OwnUnit }) {
-  const battery = unit.batteryChargePercent ?? 100;
-  const oxygenMax = unit.oxygenEnduranceHours ?? 48;
-  const oxygen = unit.oxygenHoursRemaining ?? oxygenMax;
-  return (
-    <div className="rounded-md bg-slate-900 p-2 text-xs">
-      <div className="flex items-center justify-between">
-        <span className="text-slate-400">Immersion</span>
-        <span>{formatDepthBand(unit.depthBand)}</span>
-      </div>
-      <div className="flex items-center justify-between">
-        <span className="text-slate-400">Batterie</span>
-        <span>{battery.toFixed(0)}%</span>
-      </div>
-      <div className="flex items-center justify-between">
-        <span className="text-slate-400">Oxygène</span>
-        <span>
-          {oxygen.toFixed(1)}h / {oxygenMax.toFixed(0)}h
-        </span>
       </div>
     </div>
   );
@@ -930,6 +969,17 @@ function formatDepthBand(band: string) {
       return "Grande immersion";
     default:
       return band;
+  }
+}
+
+function formatEnemyStatus(status: string) {
+  switch (status) {
+    case "DAMAGED":
+      return "endommagé";
+    case "SUNK":
+      return "coulé";
+    default:
+      return "actif";
   }
 }
 

@@ -89,7 +89,6 @@ export default async function ReviewPage() {
         targetLngAtCpa: d.targetLngAtCpa,
         arbiterStatus: d.arbiterStatus,
         systemProposed: d.systemProposed,
-        tacticalModeRequested: d.tacticalModeRequested,
       }))}
     />
   );

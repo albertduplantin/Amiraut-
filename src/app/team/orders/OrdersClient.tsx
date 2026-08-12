@@ -83,7 +83,6 @@ export function OrdersClient(props: {
   turnId: string;
   turnNumber: number;
   turnDurationMinutes: number;
-  turnTacticalMode: boolean;
   weather: { visibilityNm: number; seaState: number; daylight: string; precipitation: string } | null;
   mapCenter: LatLng;
   mapZoom: number;
@@ -471,11 +470,6 @@ export function OrdersClient(props: {
         <h1 className="font-display text-lg tracking-wide text-brass-300">
           Tour {turnNumber} — Ordres de mouvement (
           {turnDurationMinutes < 60 ? `${turnDurationMinutes} min` : `${turnDurationMinutes / 60} h`})
-          {props.turnTacticalMode && (
-            <span className="ml-2 rounded bg-red-900/60 px-2 py-0.5 align-middle text-xs font-normal text-red-200">
-              ⚔ échelle tactique
-            </span>
-          )}
         </h1>
         <div className="flex gap-4 text-sm text-slate-400">
           <span>
@@ -903,7 +897,7 @@ function LastContactsPanel({
                       href={`/team/battle/open/${c.detectionEventId}`}
                       className="shrink-0 rounded border border-orange-800 px-1.5 py-0.5 text-[10px] text-orange-300 hover:bg-orange-950/50"
                     >
-                      Mode tactique
+                      Engager
                     </Link>
                   </div>
                   <div className="text-slate-500">

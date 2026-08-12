@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { setWeatherAction, acknowledgeTacticalModeAction } from "./actions";
+import { setWeatherAction } from "./actions";
 import { SubmitButton } from "./SubmitButton";
 
 export default async function ArbiterDashboardPage() {
@@ -44,23 +44,6 @@ export default async function ArbiterDashboardPage() {
       })
     : [];
 
-  // Cherchées indépendamment du tour actuellement en revue : une demande de
-  // mode tactique porte sur une détection déjà publiée (le joueur la voit
-  // dans son rapport), donc sur un tour différent de celui en cours.
-  const tacticalRequests = await prisma.detectionEvent.findMany({
-    where: {
-      tacticalModeRequested: true,
-      tacticalModeAcknowledged: false,
-      turn: { scenarioId: session.scenarioId },
-    },
-    include: {
-      turn: { select: { number: true } },
-      observerUnit: { select: { name: true, fleet: { select: { team: { select: { name: true } } } } } },
-      targetUnit: { select: { name: true, fleet: { select: { team: { select: { name: true } } } } } },
-    },
-    orderBy: { id: "asc" },
-  });
-
   const activeEngagements = await prisma.tacticalEngagement.findMany({
     where: { scenarioId: session.scenarioId, status: { not: "RESOLVED" } },
     include: { participants: { include: { unit: { select: { name: true } }, team: { select: { name: true } } } } },
@@ -77,36 +60,6 @@ export default async function ArbiterDashboardPage() {
           <span className="ml-2 rounded bg-red-900/60 px-2 py-0.5 text-xs text-red-200">⚔ échelle tactique</span>
         )}
       </p>
-
-      {tacticalRequests.length > 0 && (
-        <section className="panel-brass mt-4 max-w-2xl rounded-md border border-orange-800 bg-orange-950/30 p-4">
-          <h2 className="font-display mb-3 tracking-wide text-orange-300">
-            ⚔ Demandes de mode bataille tactique ({tacticalRequests.length})
-          </h2>
-          <ul className="space-y-2">
-            {tacticalRequests.map((d) => (
-              <li key={d.id} className="flex items-center justify-between gap-3 rounded-md bg-slate-950/60 px-3 py-2 text-sm">
-                <div>
-                  <span className="font-medium">{d.observerUnit.name}</span>{" "}
-                  <span className="text-xs text-slate-500">({d.observerUnit.fleet.team.name})</span> →{" "}
-                  <span className="font-medium">{d.targetUnit.name}</span>{" "}
-                  <span className="text-xs text-slate-500">({d.targetUnit.fleet.team.name})</span>
-                  <div className="text-xs text-slate-500">Détecté au tour {d.turn.number}</div>
-                </div>
-                <form action={acknowledgeTacticalModeAction}>
-                  <input type="hidden" name="detectionId" value={d.id} />
-                  <button
-                    type="submit"
-                    className="shrink-0 rounded-md border border-orange-700 px-2 py-1 text-xs hover:bg-orange-950/50"
-                  >
-                    Marquer comme vu
-                  </button>
-                </form>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
 
       {activeEngagements.length > 0 && (
         <section className="panel-brass mt-4 max-w-2xl rounded-md border border-red-800 bg-red-950/20 p-4">

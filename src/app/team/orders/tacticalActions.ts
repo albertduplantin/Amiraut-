@@ -4,22 +4,23 @@ import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
 import { assertPlayer, AccessDeniedError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { submitTacticalMovement, submitTacticalFire, postTacticalMessage } from "@/lib/tacticalEngine";
+import { submitTacticalMovement, submitTacticalFireShot, finishFirePhase, postTacticalMessage, type FireShotResult } from "@/lib/tacticalEngine";
 import { OrderValidationError } from "@/lib/turnEngine";
 import type { DepthBand, WeaponType } from "@/generated/prisma/client";
 import type { LatLng } from "@/lib/geo";
 
-export type BattleActionResult = { ok: true } | { ok: false; error: string };
+export type TacticalActionResult = { ok: true } | { ok: false; error: string };
+export type FireShotActionResult = { ok: true; result: FireShotResult } | { ok: false; error: string };
 
 async function assertOwnsUnits(teamId: string, unitIds: string[]) {
   const count = await prisma.unit.count({ where: { id: { in: unitIds }, fleet: { teamId } } });
   if (count !== unitIds.length) throw new AccessDeniedError("Une de ces unités ne vous appartient pas.");
 }
 
-export async function submitMovementAction(params: {
+export async function submitTacticalMovementAction(params: {
   engagementId: string;
   moves: { unitId: string; speedKnots: number; path: LatLng[]; depthBand?: DepthBand }[];
-}): Promise<BattleActionResult> {
+}): Promise<TacticalActionResult> {
   const session = await getSession();
   try {
     assertPlayer(session);
@@ -29,30 +30,54 @@ export async function submitMovementAction(params: {
     if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
     throw error;
   }
-  revalidatePath(`/team/battle/${params.engagementId}`);
+  revalidatePath("/team/orders");
   return { ok: true };
 }
 
-export async function submitFireAction(params: {
+/** Résout un tir immédiatement (voir tacticalEngine.submitTacticalFireShot) : le résultat est retourné pour affichage instantané. */
+export async function submitFireShotAction(params: {
   engagementId: string;
-  shots: { unitId: string; targetUnitId: string; weaponType: WeaponType; torpedoTypeId?: string }[];
-}): Promise<BattleActionResult> {
+  unitId: string;
+  targetUnitId: string;
+  weaponType: WeaponType;
+  torpedoTypeId?: string;
+}): Promise<FireShotActionResult> {
   const session = await getSession();
   try {
     assertPlayer(session);
-    await assertOwnsUnits(session.teamId, params.shots.map((s) => s.unitId));
-    await submitTacticalFire({ engagementId: params.engagementId, teamId: session.teamId, shots: params.shots });
+    await assertOwnsUnits(session.teamId, [params.unitId]);
+    const result = await submitTacticalFireShot({
+      engagementId: params.engagementId,
+      teamId: session.teamId,
+      unitId: params.unitId,
+      targetUnitId: params.targetUnitId,
+      weaponType: params.weaponType,
+      torpedoTypeId: params.torpedoTypeId,
+    });
+    revalidatePath("/team/orders");
+    return { ok: true, result };
   } catch (error) {
     if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
     throw error;
   }
-  revalidatePath(`/team/battle/${params.engagementId}`);
+}
+
+/** Le camp annonce qu'il a fini de tirer cette manche ; les dégâts s'appliquent dès que l'autre camp fait de même. */
+export async function finishFirePhaseAction(params: { engagementId: string }): Promise<TacticalActionResult> {
+  const session = await getSession();
+  try {
+    assertPlayer(session);
+    await finishFirePhase({ engagementId: params.engagementId, teamId: session.teamId });
+  } catch (error) {
+    if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
+    throw error;
+  }
   revalidatePath("/team/orders");
   revalidatePath("/team/reports");
   return { ok: true };
 }
 
-export async function sendBattleChatAction(params: { engagementId: string; body: string }): Promise<BattleActionResult> {
+export async function sendBattleChatAction(params: { engagementId: string; body: string }): Promise<TacticalActionResult> {
   const session = await getSession();
   try {
     assertPlayer(session);
@@ -68,6 +93,6 @@ export async function sendBattleChatAction(params: { engagementId: string; body:
     if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
     throw error;
   }
-  revalidatePath(`/team/battle/${params.engagementId}`);
+  revalidatePath("/team/orders");
   return { ok: true };
 }

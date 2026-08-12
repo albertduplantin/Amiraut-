@@ -13,8 +13,9 @@ import {
   type DepthBand as CombatDepthBand,
 } from "@/lib/combat";
 import { describeShot, assessFiringReveal } from "@/lib/tacticalNarrative";
-import { OrderValidationError, currentOpenTurn } from "@/lib/turnEngine";
+import { OrderValidationError, currentOpenTurn, switchTurnToTacticalScale } from "@/lib/turnEngine";
 import type { DepthBand, SensorType, WeaponType } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 
 const NM_TO_M = 1852;
 const ASDIC_ATTACK_RANGE_M = 2000;
@@ -83,6 +84,10 @@ export async function openTacticalEngagement(params: {
       },
     },
   });
+
+  // Le feu tactique n'est plus un simple transit : le tour stratégique
+  // (habituellement des heures) se resserre à l'échelle du combat.
+  await switchTurnToTacticalScale(params.turnId);
 
   // Contacts de départ : ce que chaque camp voit dès l'ouverture.
   await recomputeContacts(engagement.id, 1);
@@ -363,55 +368,244 @@ export async function submitTacticalMovement(params: {
   return maybeResolvePhase(params.engagementId);
 }
 
-export async function submitTacticalFire(params: {
+export type FireShotResult = {
+  hit: boolean;
+  hits: number;
+  damagePoints: number;
+  hitChancePercent: number;
+  narrative: string;
+  revealRadiusNm: number;
+};
+
+/**
+ * Résout un tir immédiatement à la validation, pour un compte rendu
+ * instantané — mais n'inflige les dégâts qu'à la résolution de la phase
+ * (voir `resolveFirePhase`) : le potentiel réel de la cible en base ne
+ * bouge pas tant que les deux camps n'ont pas fini de tirer, pour que tous
+ * les tirs de la manche restent simultanés (on ne sait pas encore, en
+ * tirant, si la cible a déjà encaissé un autre coup ailleurs).
+ */
+export async function submitTacticalFireShot(params: {
   engagementId: string;
   teamId: string;
-  shots: { unitId: string; targetUnitId: string; weaponType: WeaponType; torpedoTypeId?: string }[];
-}) {
-  const engagement = await assertEngagementOpen(params.engagementId, "AWAITING_FIRE");
+  unitId: string;
+  targetUnitId: string;
+  weaponType: WeaponType;
+  torpedoTypeId?: string;
+}): Promise<FireShotResult> {
+  const engagement = await prisma.tacticalEngagement.findUniqueOrThrow({
+    where: { id: params.engagementId },
+    include: { turn: { include: { weather: true } } },
+  });
+  if (engagement.status === "RESOLVED") throw new OrderValidationError("Cet engagement est terminé.");
+  if (engagement.arbiterPaused) throw new OrderValidationError("L'arbitre a suspendu le combat.");
+  if (engagement.status !== "AWAITING_FIRE") throw new OrderValidationError("Ce n'est pas la phase de tir.");
 
-  for (const s of params.shots) {
-    const participant = await prisma.tacticalParticipant.findUnique({
-      where: { engagementId_unitId: { engagementId: params.engagementId, unitId: s.unitId } },
-    });
-    if (!participant || participant.teamId !== params.teamId) {
-      throw new OrderValidationError("Cette unité ne participe pas à cet engagement pour votre camp.");
-    }
+  const participant = await prisma.tacticalParticipant.findUnique({
+    where: { engagementId_unitId: { engagementId: params.engagementId, unitId: params.unitId } },
+    include: { unit: { include: { unitClass: true } } },
+  });
+  if (!participant || participant.teamId !== params.teamId) {
+    throw new OrderValidationError("Cette unité ne participe pas à cet engagement pour votre camp.");
+  }
+  const attacker = participant.unit;
+  if (attacker.status === "SUNK") throw new OrderValidationError("Cette unité est coulée.");
 
-    // On ne tire que sur ce que son camp a détecté à l'issue du mouvement.
-    const contact = await prisma.tacticalContact.findFirst({
-      where: {
-        engagementId: params.engagementId,
-        roundNumber: engagement.roundNumber,
-        observerTeamId: params.teamId,
-        targetUnitId: s.targetUnitId,
-      },
-    });
-    if (!contact) throw new OrderValidationError("Cible non détectée par votre camp à cette manche.");
-
-    await prisma.tacticalAction.upsert({
-      where: {
-        engagementId_roundNumber_phase_unitId: {
-          engagementId: params.engagementId,
-          roundNumber: engagement.roundNumber,
-          phase: "FIRE",
-          unitId: s.unitId,
-        },
-      },
-      create: {
+  const alreadyFired = await prisma.tacticalAction.findUnique({
+    where: {
+      engagementId_roundNumber_phase_unitId: {
         engagementId: params.engagementId,
         roundNumber: engagement.roundNumber,
         phase: "FIRE",
-        unitId: s.unitId,
-        teamId: params.teamId,
-        targetUnitId: s.targetUnitId,
-        weaponType: s.weaponType,
-        torpedoTypeId: s.torpedoTypeId,
+        unitId: params.unitId,
       },
-      update: { targetUnitId: s.targetUnitId, weaponType: s.weaponType, torpedoTypeId: s.torpedoTypeId },
+    },
+  });
+  if (alreadyFired) throw new OrderValidationError(`${attacker.name} a déjà tiré cette manche.`);
+
+  // On ne tire que sur ce que son camp a détecté à l'issue du mouvement.
+  const contact = await prisma.tacticalContact.findFirst({
+    where: {
+      engagementId: params.engagementId,
+      roundNumber: engagement.roundNumber,
+      observerTeamId: params.teamId,
+      targetUnitId: params.targetUnitId,
+    },
+  });
+  if (!contact) throw new OrderValidationError("Cible non détectée par votre camp à cette manche.");
+
+  const target = await prisma.unit.findUniqueOrThrow({ where: { id: params.targetUnitId }, include: { unitClass: true } });
+  if (target.status === "SUNK") throw new OrderValidationError("Cette cible est déjà coulée.");
+
+  const profile = attacker.unitClass.combatProfile as CombatProfile | null;
+  const rangeM =
+    distanceNm({ lat: attacker.currentLat, lng: attacker.currentLng }, { lat: target.currentLat, lng: target.currentLng }) *
+    NM_TO_M;
+  const targetSubmerged = target.unitClass.category === "SUBMARINE" && target.depthBand !== "SURFACE";
+
+  const attackerHealthCurrent = attacker.healthCurrent ?? attacker.healthMax ?? 1;
+  const attackerHealthMax = attacker.healthMax ?? 1;
+
+  let outcome: { hitChancePercent: number; hit: boolean; hits: number; damagePoints: number } | null = null;
+  let calibreMm: number | null = null;
+  let wakeVisible = true;
+
+  if (params.weaponType === "DEPTH_CHARGE") {
+    if (!targetSubmerged) throw new OrderValidationError("Les grenades ASM ne visent qu'un sous-marin immergé.");
+    const dc = resolveDepthChargeAttack({
+      chargesAvailable: attacker.depthChargesRemaining ?? 0,
+      rangeM,
+      maxRangeM: ASDIC_ATTACK_RANGE_M,
+      targetDepthBand: target.depthBand as CombatDepthBand,
     });
+    if (!dc) throw new OrderValidationError("Pas assez de grenades ASM à bord pour une passe.");
+    outcome = { hitChancePercent: dc.hitChancePercent, hit: dc.hit, hits: dc.hit ? 1 : 0, damagePoints: dc.damagePoints };
+    await prisma.unit.update({
+      where: { id: attacker.id },
+      data: { depthChargesRemaining: Math.max(0, (attacker.depthChargesRemaining ?? 0) - dc.chargesUsed) },
+    });
+  } else if (params.weaponType === "GUN") {
+    if (targetSubmerged) throw new OrderValidationError("Un sous-marin immergé n'est pas canonnable.");
+    const bearingToTarget = bearingDeg(
+      { lat: attacker.currentLat, lng: attacker.currentLng },
+      { lat: target.currentLat, lng: target.currentLng }
+    );
+    const relativeBearing = bearingToTarget - (attacker.currentHeadingDeg ?? 0);
+    const battery = selectGunBattery(profile, rangeM, relativeBearing);
+    calibreMm = battery?.calibreMm ?? null;
+    if (!battery) throw new OrderValidationError("Aucune pièce à portée et dans l'arc de tir pour cette cible.");
+    outcome = resolveGunEngagement({
+      attackerProfile: profile,
+      attackerHealthCurrent,
+      attackerHealthMax,
+      targetLengthM: target.unitClass.lengthMeters ?? 100,
+      targetBeamM: target.unitClass.beamMeters ?? 12,
+      targetSpeedKnots: 0,
+      rangeM,
+      relativeBearingDeg: relativeBearing,
+    });
+  } else if (params.weaponType === "TORPEDO") {
+    if (targetSubmerged) throw new OrderValidationError("Une torpille classique ne touche pas un sous-marin immergé.");
+    if (attacker.unitClass.category === "SUBMARINE" && (attacker.depthBand === "MEDIUM" || attacker.depthBand === "DEEP")) {
+      throw new OrderValidationError("Torpilles impossibles en immersion moyenne ou grande.");
+    }
+    if (attacker.torpedoesRemaining != null && attacker.torpedoesRemaining <= 0) {
+      throw new OrderValidationError("Plus aucune torpille à bord.");
+    }
+    const battery = selectTorpedoBattery(profile, params.torpedoTypeId);
+    if (!battery) throw new OrderValidationError("Aucun tube lance-torpilles disponible.");
+    const bearingToTarget = bearingDeg(
+      { lat: attacker.currentLat, lng: attacker.currentLng },
+      { lat: target.currentLat, lng: target.currentLng }
+    );
+    if (!isTorpedoArcClear(battery, bearingToTarget - (attacker.currentHeadingDeg ?? 0))) {
+      throw new OrderValidationError("Cette cible est hors de l'arc de tir des tubes lance-torpilles.");
+    }
+    wakeVisible = profile?.torpedoTypes?.find((t) => t.id === params.torpedoTypeId)?.wakeVisible ?? true;
+    const lineOfFire = bearingDeg(
+      { lat: target.currentLat, lng: target.currentLng },
+      { lat: attacker.currentLat, lng: attacker.currentLng }
+    );
+    outcome = resolveTorpedoEngagement({
+      attackerProfile: { ...profile, torpedoTubes: battery },
+      attackerHealthCurrent,
+      attackerHealthMax,
+      targetLengthM: target.unitClass.lengthMeters ?? 100,
+      targetBeamM: target.unitClass.beamMeters ?? 12,
+      targetSpeedKnots: 0,
+      angleOfAttackDeg: lineOfFire - (target.currentHeadingDeg ?? 0),
+      rangeM,
+    });
+    if (outcome && attacker.torpedoesRemaining != null) {
+      await prisma.unit.update({
+        where: { id: attacker.id },
+        data: { torpedoesRemaining: Math.max(0, attacker.torpedoesRemaining - 1) },
+      });
+    }
+  } else {
+    throw new OrderValidationError("Type d'arme inconnu.");
   }
 
+  if (!outcome) throw new OrderValidationError("Ce tir n'est pas possible dans ces conditions.");
+
+  // Potentiel de la cible EN DÉBUT DE MANCHE (rien de cette manche n'est
+  // encore appliqué en base) : c'est la bonne référence pour une estimation
+  // individuelle, même si d'autres tirs simultanés viendront s'y ajouter.
+  const targetHealthMax = target.healthMax ?? 1;
+  const targetHealthBeforePhase = target.healthCurrent ?? targetHealthMax;
+  const provisionalRemaining = outcome.hit ? Math.max(0, targetHealthBeforePhase - outcome.damagePoints) : targetHealthBeforePhase;
+  const provisionalSunk = provisionalRemaining <= 0;
+  const damageRatio = targetHealthMax > 0 ? outcome.damagePoints / targetHealthMax : 0;
+
+  const isNight = isNightWeather(
+    engagement.turn.weather
+      ? {
+          visibilityNm: engagement.turn.weather.visibilityNm,
+          seaState: engagement.turn.weather.seaState,
+          daylight: engagement.turn.weather.daylight,
+          precipitation: engagement.turn.weather.precipitation,
+        }
+      : null
+  );
+  const reveal = assessFiringReveal({ weaponType: params.weaponType, calibreMm, torpedoWakeVisible: wakeVisible, isNight });
+
+  const narrative = describeShot({
+    attackerName: attacker.name,
+    targetName: target.name,
+    weaponType: params.weaponType,
+    hit: outcome.hit,
+    hits: outcome.hits,
+    damagePoints: outcome.damagePoints,
+    damageRatio,
+    targetSunk: provisionalSunk,
+    rangeNm: rangeM / NM_TO_M,
+  });
+
+  try {
+    await prisma.tacticalAction.create({
+      data: {
+        engagementId: params.engagementId,
+        roundNumber: engagement.roundNumber,
+        phase: "FIRE",
+        unitId: params.unitId,
+        teamId: params.teamId,
+        targetUnitId: params.targetUnitId,
+        weaponType: params.weaponType,
+        torpedoTypeId: params.torpedoTypeId,
+        resolved: true,
+        hit: outcome.hit,
+        hits: outcome.hits,
+        damagePoints: outcome.damagePoints,
+        targetSunk: provisionalSunk,
+        hitChancePercent: outcome.hitChancePercent,
+        narrative,
+        revealedShooter: reveal.revealRadiusNm > 0,
+        applied: false,
+      },
+    });
+  } catch (error) {
+    // Filet de sécurité contre un double clic quasi simultané : la
+    // contrainte unique (engagement, manche, phase, navire) protège la
+    // règle « un seul tir par navire et par manche » même en cas de course.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw new OrderValidationError(`${attacker.name} a déjà tiré cette manche.`);
+    }
+    throw error;
+  }
+
+  return {
+    hit: outcome.hit,
+    hits: outcome.hits,
+    damagePoints: outcome.damagePoints,
+    hitChancePercent: outcome.hitChancePercent,
+    narrative,
+    revealRadiusNm: reveal.revealRadiusNm,
+  };
+}
+
+/** Un camp annonce qu'il a fini de tirer cette manche ; la manche se résout dès que les deux camps l'ont fait. */
+export async function finishFirePhase(params: { engagementId: string; teamId: string }) {
+  const engagement = await assertEngagementOpen(params.engagementId, "AWAITING_FIRE");
   await markSubmitted(params.engagementId, engagement.roundNumber, "FIRE", params.teamId);
   return maybeResolvePhase(params.engagementId);
 }
@@ -513,188 +707,45 @@ export async function resolveMovementPhase(engagementId: string) {
 
 // ── Résolution : tir ────────────────────────────────────────
 
+/**
+ * Applique en bloc les dégâts de tous les tirs de la manche, déjà calculés
+ * individuellement au moment de chaque tir (voir `submitTacticalFireShot`) :
+ * c'est ici, et seulement ici, que le potentiel réel des unités bouge en
+ * base — ce qui garantit que deux tirs simultanés sur la même cible se
+ * cumulent avant qu'elle ne soit déclarée coulée, plutôt que de dépendre de
+ * l'ordre d'arrivée des validations.
+ */
 export async function resolveFirePhase(engagementId: string) {
-  const engagement = await prisma.tacticalEngagement.findUniqueOrThrow({
-    where: { id: engagementId },
-    include: {
-      turn: { include: { weather: true } },
-      participants: { include: { unit: { include: { unitClass: true } } } },
-    },
-  });
-  const isNight = isNightWeather(
-    engagement.turn.weather
-      ? {
-          visibilityNm: engagement.turn.weather.visibilityNm,
-          seaState: engagement.turn.weather.seaState,
-          daylight: engagement.turn.weather.daylight,
-          precipitation: engagement.turn.weather.precipitation,
-        }
-      : null
-  );
+  const engagement = await prisma.tacticalEngagement.findUniqueOrThrow({ where: { id: engagementId } });
 
   const shots = await prisma.tacticalAction.findMany({
-    where: { engagementId, roundNumber: engagement.roundNumber, phase: "FIRE" },
+    where: { engagementId, roundNumber: engagement.roundNumber, phase: "FIRE", resolved: true },
   });
 
-  const byUnit = new Map(engagement.participants.map((p) => [p.unitId, p.unit]));
-  // Santé tenue en mémoire : tous les tirs d'une manche sont simultanés, un
-  // navire coulé pendant la manche a quand même tiré.
-  const health = new Map<string, { current: number; max: number }>();
-  const getHealth = (unitId: string) => {
-    if (!health.has(unitId)) {
-      const u = byUnit.get(unitId)!;
-      health.set(unitId, { current: u.healthCurrent ?? u.healthMax ?? 1, max: u.healthMax ?? 1 });
-    }
-    return health.get(unitId)!;
-  };
-
+  const damageByTarget = new Map<string, number>();
   for (const shot of shots) {
-    const attacker = byUnit.get(shot.unitId);
-    const target = shot.targetUnitId ? byUnit.get(shot.targetUnitId) : null;
-    if (!attacker || !target || !shot.weaponType) continue;
-    if (attacker.status === "SUNK") continue;
+    if (!shot.hit || !shot.targetUnitId || !shot.damagePoints) continue;
+    damageByTarget.set(shot.targetUnitId, (damageByTarget.get(shot.targetUnitId) ?? 0) + shot.damagePoints);
+  }
 
-    const targetHealth = getHealth(target.id);
-    if (targetHealth.current <= 0) continue;
-
-    const attackerHealth = getHealth(attacker.id);
-    const profile = attacker.unitClass.combatProfile as CombatProfile | null;
-    const rangeM =
-      distanceNm(
-        { lat: attacker.currentLat, lng: attacker.currentLng },
-        { lat: target.currentLat, lng: target.currentLng }
-      ) * NM_TO_M;
-
-    const targetSubmerged = target.unitClass.category === "SUBMARINE" && target.depthBand !== "SURFACE";
-
-    let outcome: { hitChancePercent: number; hit: boolean; hits: number; damagePoints: number } | null = null;
-    let calibreMm: number | null = null;
-    let wakeVisible = true;
-
-    if (shot.weaponType === "DEPTH_CHARGE") {
-      if (!targetSubmerged || attacker.depthChargesRemaining == null) continue;
-      const dc = resolveDepthChargeAttack({
-        chargesAvailable: attacker.depthChargesRemaining,
-        rangeM,
-        maxRangeM: ASDIC_ATTACK_RANGE_M,
-        targetDepthBand: target.depthBand as CombatDepthBand,
-      });
-      if (!dc) continue;
-      outcome = { hitChancePercent: dc.hitChancePercent, hit: dc.hit, hits: dc.hit ? 1 : 0, damagePoints: dc.damagePoints };
+  if (damageByTarget.size > 0) {
+    const targets = await prisma.unit.findMany({ where: { id: { in: Array.from(damageByTarget.keys()) } } });
+    for (const target of targets) {
+      const totalDamage = damageByTarget.get(target.id) ?? 0;
+      const max = target.healthMax ?? 1;
+      const current = target.healthCurrent ?? max;
+      const next = Math.max(0, current - totalDamage);
       await prisma.unit.update({
-        where: { id: attacker.id },
-        data: { depthChargesRemaining: Math.max(0, attacker.depthChargesRemaining - dc.chargesUsed) },
+        where: { id: target.id },
+        data: { healthCurrent: next, status: next <= 0 ? "SUNK" : next < max * 0.6 ? "DAMAGED" : "ACTIVE" },
       });
-    } else if (shot.weaponType === "GUN") {
-      if (targetSubmerged) continue; // un immergé n'est pas canonnable
-      // Relèvement de la cible par rapport à la proue de l'attaquant : une
-      // tourelle avant ne peut pas viser pile derrière, et inversement.
-      const bearingToTarget = bearingDeg(
-        { lat: attacker.currentLat, lng: attacker.currentLng },
-        { lat: target.currentLat, lng: target.currentLng }
-      );
-      const relativeBearing = bearingToTarget - (attacker.currentHeadingDeg ?? 0);
-      const battery = selectGunBattery(profile, rangeM, relativeBearing);
-      calibreMm = battery?.calibreMm ?? null;
-      if (!battery) continue; // à portée mais hors arc : aucune pièce ne peut viser
-      const r = resolveGunEngagement({
-        attackerProfile: profile,
-        attackerHealthCurrent: attackerHealth.current,
-        attackerHealthMax: attackerHealth.max,
-        targetLengthM: target.unitClass.lengthMeters ?? 100,
-        targetBeamM: target.unitClass.beamMeters ?? 12,
-        targetSpeedKnots: 0,
-        rangeM,
-        relativeBearingDeg: relativeBearing,
-      });
-      if (!r) continue;
-      outcome = r;
-    } else if (shot.weaponType === "TORPEDO") {
-      if (targetSubmerged) continue;
-      if (attacker.unitClass.category === "SUBMARINE" && (attacker.depthBand === "MEDIUM" || attacker.depthBand === "DEEP")) continue;
-      if (attacker.torpedoesRemaining != null && attacker.torpedoesRemaining <= 0) continue;
-      const battery = selectTorpedoBattery(profile, shot.torpedoTypeId);
-      if (!battery) continue;
-      // Tubes montés sur l'axe du navire : pas de tir devant/derrière (ou
-      // uniquement devant pour un sous-marin, cf. arc "FORWARD" du U-Boot).
-      const bearingToTarget = bearingDeg(
-        { lat: attacker.currentLat, lng: attacker.currentLng },
-        { lat: target.currentLat, lng: target.currentLng }
-      );
-      if (!isTorpedoArcClear(battery, bearingToTarget - (attacker.currentHeadingDeg ?? 0))) continue;
-      wakeVisible = profile?.torpedoTypes?.find((t) => t.id === shot.torpedoTypeId)?.wakeVisible ?? true;
-      const lineOfFire = bearingDeg(
-        { lat: target.currentLat, lng: target.currentLng },
-        { lat: attacker.currentLat, lng: attacker.currentLng }
-      );
-      const r = resolveTorpedoEngagement({
-        attackerProfile: { ...profile, torpedoTubes: battery },
-        attackerHealthCurrent: attackerHealth.current,
-        attackerHealthMax: attackerHealth.max,
-        targetLengthM: target.unitClass.lengthMeters ?? 100,
-        targetBeamM: target.unitClass.beamMeters ?? 12,
-        targetSpeedKnots: 0,
-        angleOfAttackDeg: lineOfFire - (target.currentHeadingDeg ?? 0),
-        rangeM,
-      });
-      if (!r) continue;
-      outcome = r;
-      if (attacker.torpedoesRemaining != null) {
-        await prisma.unit.update({
-          where: { id: attacker.id },
-          data: { torpedoesRemaining: Math.max(0, attacker.torpedoesRemaining - 1) },
-        });
-      }
     }
-
-    if (!outcome) continue;
-
-    if (outcome.hit) targetHealth.current = Math.max(0, targetHealth.current - outcome.damagePoints);
-    const sunk = targetHealth.current <= 0;
-    const damageRatio = targetHealth.max > 0 ? outcome.damagePoints / targetHealth.max : 0;
-
-    const reveal = assessFiringReveal({
-      weaponType: shot.weaponType,
-      calibreMm,
-      torpedoWakeVisible: wakeVisible,
-      isNight,
-    });
-
-    await prisma.tacticalAction.update({
-      where: { id: shot.id },
-      data: {
-        resolved: true,
-        hit: outcome.hit,
-        hits: outcome.hits,
-        damagePoints: outcome.damagePoints,
-        targetSunk: sunk,
-        hitChancePercent: outcome.hitChancePercent,
-        revealedShooter: reveal.revealRadiusNm > 0,
-        narrative: describeShot({
-          attackerName: attacker.name,
-          targetName: target.name,
-          weaponType: shot.weaponType,
-          hit: outcome.hit,
-          hits: outcome.hits,
-          damagePoints: outcome.damagePoints,
-          damageRatio,
-          targetSunk: sunk,
-          rangeNm: rangeM / NM_TO_M,
-        }),
-      },
-    });
   }
 
-  // Potentiel réajusté une fois tous les tirs de la manche résolus.
-  for (const [unitId, h] of health) {
-    await prisma.unit.update({
-      where: { id: unitId },
-      data: {
-        healthCurrent: h.current,
-        status: h.current <= 0 ? "SUNK" : h.current < h.max * 0.6 ? "DAMAGED" : "ACTIVE",
-      },
-    });
-  }
+  await prisma.tacticalAction.updateMany({
+    where: { engagementId, roundNumber: engagement.roundNumber, phase: "FIRE", resolved: true },
+    data: { applied: true },
+  });
 
   await advanceOrEnd(engagementId);
 }

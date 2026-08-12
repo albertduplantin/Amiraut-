@@ -80,6 +80,12 @@ type GameMapProps = {
    */
   onShipMarkerClick?: (id: string) => void;
   /**
+   * Survol d'une silhouette de navire : appelé avec son id et la position
+   * écran du curseur à l'entrée/déplacement, puis avec `null` à la sortie —
+   * au parent d'afficher une infobulle positionnée à ces coordonnées.
+   */
+  onShipMarkerHover?: (id: string | null, clientPos: { x: number; y: number } | null) => void;
+  /**
    * Affiche une barre d'échelle (en milles nautiques, recalculée à chaque
    * zoom) et un outil de mesure de distance activable par le joueur.
    */
@@ -149,6 +155,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     shipMarkers,
     shipMarkersMinZoom = 7,
     onShipMarkerClick,
+    onShipMarkerHover,
     showScaleAndRuler = false,
   },
   ref
@@ -157,6 +164,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   const mapRef = useRef<MapLibreMap | null>(null);
   const onClickRef = useRef(onClick);
   const onShipMarkerClickRef = useRef(onShipMarkerClick);
+  const onShipMarkerHoverRef = useRef(onShipMarkerHover);
   const fitToPointsRef = useRef(fitToPoints);
   const [rulerActive, setRulerActive] = useState(false);
   const [rulerPoints, setRulerPoints] = useState<LatLng[]>([]);
@@ -172,6 +180,10 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
   useEffect(() => {
     onShipMarkerClickRef.current = onShipMarkerClick;
   }, [onShipMarkerClick]);
+
+  useEffect(() => {
+    onShipMarkerHoverRef.current = onShipMarkerHover;
+  }, [onShipMarkerHover]);
 
   useEffect(() => {
     rulerActiveRef.current = rulerActive;
@@ -339,7 +351,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
       const current = existing.get(config.id);
       if (!current) {
         const el = buildSilhouetteElement(config);
-        attachShipMarkerClick(el, config.id, onShipMarkerClickRef);
+        attachShipMarkerInteractions(el, config.id, onShipMarkerClickRef, onShipMarkerHoverRef);
         const marker = new Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" })
           .setLngLat([config.lng, config.lat])
           .setRotation(config.headingDeg)
@@ -350,7 +362,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
       if (current.signature !== signature) {
         current.marker.remove();
         const el = buildSilhouetteElement(config);
-        attachShipMarkerClick(el, config.id, onShipMarkerClickRef);
+        attachShipMarkerInteractions(el, config.id, onShipMarkerClickRef, onShipMarkerHoverRef);
         const marker = new Marker({ element: el, rotationAlignment: "map", pitchAlignment: "map" })
           .setLngLat([config.lng, config.lat])
           .setRotation(config.headingDeg)
@@ -451,12 +463,26 @@ function cumulativeNm(points: LatLng[], upToIndex: number): number {
  * cliquables et on empêche ce clic de aussi déclencher un point de trajet
  * sous le navire.
  */
-function attachShipMarkerClick(el: HTMLDivElement, id: string, handlerRef: { current: ((id: string) => void) | undefined }) {
+function attachShipMarkerInteractions(
+  el: HTMLDivElement,
+  id: string,
+  clickHandlerRef: { current: ((id: string) => void) | undefined },
+  hoverHandlerRef: { current: ((id: string | null, clientPos: { x: number; y: number } | null) => void) | undefined }
+) {
   el.style.pointerEvents = "auto";
   el.style.cursor = "pointer";
   el.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    handlerRef.current?.(id);
+    clickHandlerRef.current?.(id);
+  });
+  el.addEventListener("mouseenter", (ev) => {
+    hoverHandlerRef.current?.(id, { x: ev.clientX, y: ev.clientY });
+  });
+  el.addEventListener("mousemove", (ev) => {
+    hoverHandlerRef.current?.(id, { x: ev.clientX, y: ev.clientY });
+  });
+  el.addEventListener("mouseleave", () => {
+    hoverHandlerRef.current?.(null, null);
   });
 }
 

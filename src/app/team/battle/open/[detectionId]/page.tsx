@@ -4,9 +4,10 @@ import { assertPlayer, assertCanViewDetection } from "@/lib/auth";
 import { openOrJoinEngagementForDetection } from "@/lib/tacticalEngine";
 
 /**
- * Point d'entrée sans interface : ouvre (ou rejoint) le combat tactique sur
- * ce contact, puis redirige vers la salle de bataille. Séparé en route
- * dédiée pour que le lien « Mode tactique » reste un simple clic, sans
+ * Point d'entrée sans interface : ouvre (ou rejoint) le combat rapproché sur
+ * ce contact, puis renvoie vers /team/orders — qui bascule automatiquement
+ * en vue tactique dès qu'un engagement est actif pour l'équipe. Séparé en
+ * route dédiée pour que le lien « Engager » reste un simple clic, sans
  * étape de confirmation intermédiaire.
  */
 export default async function OpenBattlePage({ params }: { params: Promise<{ detectionId: string }> }) {
@@ -16,17 +17,14 @@ export default async function OpenBattlePage({ params }: { params: Promise<{ det
     redirect("/");
   }
 
-  // `redirect()` lève une exception interne Next.js : elle ne doit surtout
-  // pas être interceptée par le catch ci-dessous, sinon la redirection de
-  // succès finirait elle-même renvoyée vers /team/orders.
-  let engagementId: string | null = null;
   try {
     assertPlayer(session);
     await assertCanViewDetection(session, detectionId);
-    const engagement = await openOrJoinEngagementForDetection(detectionId);
-    engagementId = engagement.id;
+    await openOrJoinEngagementForDetection(detectionId);
   } catch {
-    redirect("/team/orders");
+    // `redirect()` lève une exception interne Next.js qu'il ne faut pas
+    // avaler ici — mais dans tous les cas (succès ou échec), la destination
+    // est la même page, qui réévaluera l'état à jour.
   }
-  redirect(`/team/battle/${engagementId}`);
+  redirect("/team/orders");
 }

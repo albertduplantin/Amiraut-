@@ -322,15 +322,6 @@ model DetectionEvent {
   arbiterStatus            ArbiterStatus @default(PROPOSED)
   arbiterNote              String?
   decidedById              String?
-  // Un joueur d'un des deux camps a demandé le mode bataille tactique pour
-  // cet engagement (vue rapprochée dédiée, voir /team/tactical/[id]) : signal
-  // à l'arbitre, qui reste libre d'en tenir compte (ex: raccourcir le tour
-  // suivant pour une résolution plus fine).
-  tacticalModeRequested    Boolean       @default(false)
-  // Vu par l'arbitre (voir arbiter/page.tsx) : permet de faire disparaître la
-  // demande une fois traitée, sans quoi elle resterait affichée pour toujours
-  // même une fois le tour concerné publié depuis longtemps.
-  tacticalModeAcknowledged Boolean       @default(false)
 
   combatEvents CombatEvent[]
 
@@ -514,17 +505,26 @@ model TacticalAction {
   weaponType    WeaponType?
   torpedoTypeId String?
 
-  // Résultat, rempli à la résolution
+  // Résultat, calculé immédiatement à la validation du tir (pas d'attente de
+  // l'autre camp) : le joueur voit le compte rendu tout de suite.
   resolved         Boolean  @default(false)
   hit              Boolean?
   hits             Int?
   damagePoints     Float?
+  /// Estimation provisoire (ce tir seul suffit-il à couler la cible ?), affichée
+  /// immédiatement ; peut être corrigée à la baisse si la cible encaisse aussi
+  /// d'autres tirs simultanés — voir `applied`.
   targetSunk       Boolean?
   hitChancePercent Float?
   /// Récit du coup, affiché aux joueurs.
   narrative        String?
   /// Le tir a trahi la position du tireur (feu de bouche, sillage) pour la manche suivante.
   revealedShooter  Boolean  @default(false)
+  /// Les dégâts de ce tir ont été portés au potentiel de la cible : se fait en
+  /// bloc, avec tous les tirs de la manche, une fois les deux camps prêts à
+  /// passer à la manche suivante — pour que les tirs restent simultanés (on ne
+  /// sait pas encore, en tirant, si la cible a déjà été touchée ailleurs).
+  applied          Boolean  @default(false)
 
   createdAt DateTime @default(now())
 

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
 import { assertArbiter, AccessDeniedError } from "@/lib/auth";
-import { setTurnWeather, setDetectionStatus, addManualDetection, publishTurn, acknowledgeTacticalMode } from "@/lib/turnEngine";
+import { setTurnWeather, setDetectionStatus, addManualDetection, publishTurn } from "@/lib/turnEngine";
 import { prisma } from "@/lib/prisma";
 
 export async function setWeatherAction(formData: FormData) {
@@ -108,13 +108,6 @@ export async function updateFleetPositionAction(params: {
   revalidatePath("/arbiter/positions");
   revalidatePath("/team/orders");
   return { ok: true };
-}
-
-export async function acknowledgeTacticalModeAction(formData: FormData) {
-  const session = await getSession();
-  assertArbiter(session);
-  await acknowledgeTacticalMode(String(formData.get("detectionId")));
-  revalidatePath("/arbiter");
 }
 
 export async function publishTurnAction(formData: FormData) {

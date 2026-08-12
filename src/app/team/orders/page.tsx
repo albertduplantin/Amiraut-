@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { bearingDeg, destinationPoint } from "@/lib/geo";
 import { OrdersClient } from "./OrdersClient";
+import { TacticalView } from "./TacticalView";
 
 export default async function OrdersPage() {
   const session = await getSession();
@@ -9,8 +11,194 @@ export default async function OrdersPage() {
     redirect("/");
   }
 
+  // Dès qu'un combat rapproché est en cours pour cette équipe, il remplace
+  // l'écran d'ordres longue durée sur cette même page — pas de bascule
+  // d'URL ni de bandeau "mode tactique" : le joueur reste sur la carte.
+  const activeEngagement = await prisma.tacticalEngagement.findFirst({
+    where: { status: { not: "RESOLVED" }, participants: { some: { teamId: session.teamId } } },
+    orderBy: { startedAt: "desc" },
+  });
+
+  if (activeEngagement) {
+    return renderTacticalView(activeEngagement.id, session.teamId);
+  }
+  return renderStrategicView(session.scenarioId, session.teamId, session.fleetIds ?? null);
+}
+
+async function renderTacticalView(engagementId: string, teamId: string) {
+  const engagement = await prisma.tacticalEngagement.findUniqueOrThrow({
+    where: { id: engagementId },
+    include: {
+      participants: { select: { unitId: true, teamId: true } },
+      turn: { select: { number: true } },
+      scenario: { select: { mapCenterLat: true, mapCenterLng: true, mapDefaultZoom: true } },
+    },
+  });
+  if (!engagement.participants.some((p) => p.teamId === teamId)) {
+    redirect("/team/orders");
+  }
+
+  const ownUnits = await prisma.unit.findMany({
+    where: { id: { in: engagement.participants.filter((p) => p.teamId === teamId).map((p) => p.unitId) } },
+    include: { unitClass: true },
+    orderBy: { name: "asc" },
+  });
+
+  const enemyUnitIds = engagement.participants.filter((p) => p.teamId !== teamId).map((p) => p.unitId);
+  const enemyUnits = await prisma.unit.findMany({
+    where: { id: { in: enemyUnitIds } },
+    select: { id: true, currentLat: true, currentLng: true, status: true },
+  });
+  const enemyById = new Map(enemyUnits.map((u) => [u.id, u]));
+
+  const contacts = await prisma.tacticalContact.findMany({
+    where: { engagementId, roundNumber: engagement.roundNumber, observerTeamId: teamId },
+    include: { targetUnit: { include: { unitClass: true } } },
+  });
+  // Un même ennemi peut être vu par plusieurs de nos unités : on garde le
+  // meilleur relevé (distance la plus courte).
+  const bestContactByTarget = new Map<string, (typeof contacts)[number]>();
+  for (const c of contacts) {
+    const existing = bestContactByTarget.get(c.targetUnitId);
+    if (!existing || c.distanceNm < existing.distanceNm) bestContactByTarget.set(c.targetUnitId, c);
+  }
+
+  const ownFireActionsThisRound = await prisma.tacticalAction.findMany({
+    where: { engagementId, roundNumber: engagement.roundNumber, phase: "FIRE", teamId },
+  });
+
+  // Vitesse de départ par défaut à la manche 1 : celle du dernier ordre
+  // stratégique soumis pour ce navire (la vitesse qu'il avait juste avant
+  // le passage à l'échelle de combat). Aux manches suivantes : sa propre
+  // vitesse soumise à la manche tactique précédente.
+  const lastSpeedByUnit = new Map<string, number>();
+  if (engagement.roundNumber > 1) {
+    const priorMoves = await prisma.tacticalAction.findMany({
+      where: { engagementId, phase: "MOVEMENT", roundNumber: { lt: engagement.roundNumber }, unitId: { in: ownUnits.map((u) => u.id) } },
+      orderBy: { roundNumber: "desc" },
+      select: { unitId: true, speedKnots: true },
+    });
+    for (const m of priorMoves) {
+      if (!lastSpeedByUnit.has(m.unitId) && m.speedKnots != null) lastSpeedByUnit.set(m.unitId, m.speedKnots);
+    }
+  }
+  const missingSpeedUnitIds = ownUnits.map((u) => u.id).filter((id) => !lastSpeedByUnit.has(id));
+  if (missingSpeedUnitIds.length > 0) {
+    const lastOrders = await Promise.all(
+      missingSpeedUnitIds.map((unitId) =>
+        prisma.unitOrder.findFirst({ where: { unitId }, orderBy: { submittedAt: "desc" }, select: { unitId: true, speedKnots: true } })
+      )
+    );
+    for (const o of lastOrders) if (o) lastSpeedByUnit.set(o.unitId, o.speedKnots);
+  }
+
+  const battleLog = await prisma.tacticalAction.findMany({
+    where: { engagementId, phase: "FIRE", resolved: true, teamId },
+    orderBy: [{ roundNumber: "desc" }, { createdAt: "desc" }],
+    take: 30,
+  });
+  const messages = await prisma.tacticalMessage.findMany({
+    where: { engagementId },
+    orderBy: { createdAt: "asc" },
+    take: 100,
+  });
+  const submissions = await prisma.tacticalSubmission.findMany({
+    where: {
+      engagementId,
+      roundNumber: engagement.roundNumber,
+      phase: engagement.status === "AWAITING_MOVEMENT" ? "MOVEMENT" : "FIRE",
+    },
+  });
+  const teamsInEngagement = Array.from(new Set(engagement.participants.map((p) => p.teamId)));
+  const teams = await prisma.team.findMany({ where: { id: { in: teamsInEngagement } }, select: { id: true, name: true } });
+
+  return (
+    <TacticalView
+      engagementId={engagementId}
+      status={engagement.status}
+      roundNumber={engagement.roundNumber}
+      roundMinutes={engagement.roundMinutes}
+      turnNumber={engagement.turn.number}
+      arbiterPaused={engagement.arbiterPaused}
+      endReason={engagement.endReason}
+      teamId={teamId}
+      teams={teams}
+      mapCenter={{ lat: engagement.scenario.mapCenterLat, lng: engagement.scenario.mapCenterLng }}
+      mapZoom={engagement.scenario.mapDefaultZoom}
+      submittedTeamIds={submissions.map((s) => s.teamId)}
+      ownUnits={ownUnits.map((u) => ({
+        id: u.id,
+        name: u.name,
+        className: u.unitClass.name,
+        category: u.unitClass.category,
+        lengthMeters: u.unitClass.lengthMeters,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        combatProfile: u.unitClass.combatProfile as any,
+        maxSpeedKnots: u.unitClass.maxSpeedKnots,
+        healthCurrent: u.healthCurrent,
+        healthMax: u.healthMax,
+        status: u.status,
+        currentLat: u.currentLat,
+        currentLng: u.currentLng,
+        headingDeg: u.currentHeadingDeg,
+        depthBand: u.depthBand,
+        lastSpeedKnots: lastSpeedByUnit.get(u.id) ?? 0,
+        torpedoesRemaining: u.torpedoesRemaining,
+      }))}
+      contacts={Array.from(bestContactByTarget.values()).map((c) => {
+        const observer = ownUnits.find((u) => u.id === c.observerUnitId);
+        const enemy = enemyById.get(c.targetUnitId);
+        const relBearing =
+          observer && enemy
+            ? bearingDeg({ lat: observer.currentLat, lng: observer.currentLng }, { lat: enemy.currentLat, lng: enemy.currentLng })
+            : 0;
+        const normalizedBearing = ((relBearing % 360) + 360) % 360;
+        // Position du marqueur reconstruite depuis le relèvement/distance déjà
+        // partagés (pas une nouvelle fuite d'information) : nécessaire pour
+        // placer le contact sur la carte.
+        const markerPos = observer
+          ? destinationPoint({ lat: observer.currentLat, lng: observer.currentLng }, normalizedBearing, c.distanceNm)
+          : { lat: 0, lng: 0 };
+        return {
+          targetUnitId: c.targetUnitId,
+          name: c.targetUnit.name,
+          className: c.targetUnit.unitClass.name,
+          category: c.targetUnit.unitClass.category,
+          lengthMeters: c.targetUnit.unitClass.lengthMeters,
+          beamMeters: c.targetUnit.unitClass.beamMeters,
+          maxSpeedKnots: c.targetUnit.unitClass.maxSpeedKnots,
+          distanceNm: c.distanceNm,
+          bearingDeg: normalizedBearing,
+          lat: markerPos.lat,
+          lng: markerPos.lng,
+          status: enemy?.status ?? "ACTIVE",
+        };
+      })}
+      ownFireActionsThisRound={ownFireActionsThisRound.map((a) => ({
+        unitId: a.unitId,
+        targetUnitId: a.targetUnitId,
+        weaponType: a.weaponType,
+        hit: a.hit,
+        hits: a.hits,
+        damagePoints: a.damagePoints,
+        narrative: a.narrative,
+      }))}
+      battleLog={battleLog.map((a) => ({
+        roundNumber: a.roundNumber,
+        targetUnitId: a.targetUnitId,
+        hit: a.hit,
+        hits: a.hits,
+        damagePoints: a.damagePoints,
+        narrative: a.narrative,
+      }))}
+      messages={messages.map((m) => ({ id: m.id, kind: m.kind, authorName: m.authorName, body: m.body, roundNumber: m.roundNumber }))}
+    />
+  );
+}
+
+async function renderStrategicView(scenarioId: string, teamId: string, fleetIds: string[] | null) {
   const turn = await prisma.turn.findFirst({
-    where: { scenarioId: session.scenarioId, status: "PENDING_ORDERS" },
+    where: { scenarioId, status: "PENDING_ORDERS" },
     orderBy: { number: "desc" },
     include: { weather: true },
   });
@@ -20,25 +208,22 @@ export default async function OrdersPage() {
   }
 
   const lastPublishedTurn = await prisma.turn.findFirst({
-    where: { scenarioId: session.scenarioId, status: "PUBLISHED" },
+    where: { scenarioId, status: "PUBLISHED" },
     orderBy: { number: "desc" },
   });
   const lastReport = lastPublishedTurn
     ? await prisma.report.findUnique({
-        where: { turnId_teamId: { turnId: lastPublishedTurn.id, teamId: session.teamId } },
+        where: { turnId_teamId: { turnId: lastPublishedTurn.id, teamId } },
       })
     : null;
 
   const [scenario, units, teamFleets, teamUnitCount, teamOrderCount, allActiveUnitCount, allOrderCount] = await Promise.all([
-    prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
+    prisma.scenario.findUniqueOrThrow({ where: { id: scenarioId } }),
     prisma.unit.findMany({
       where: {
-        scenarioId: session.scenarioId,
+        scenarioId,
         status: { in: ["ACTIVE", "DAMAGED"] },
-        fleet: {
-          teamId: session.teamId,
-          ...(session.fleetIds ? { id: { in: session.fleetIds } } : {}),
-        },
+        fleet: { teamId, ...(fleetIds ? { id: { in: fleetIds } } : {}) },
       },
       include: {
         unitClass: {
@@ -66,20 +251,13 @@ export default async function OrdersPage() {
       orderBy: [{ fleet: { name: "asc" } }, { name: "asc" }],
     }),
     prisma.fleet.findMany({
-      where: {
-        teamId: session.teamId,
-        ...(session.fleetIds ? { id: { in: session.fleetIds } } : {}),
-      },
+      where: { teamId, ...(fleetIds ? { id: { in: fleetIds } } : {}) },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
-    prisma.unit.count({
-      where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] }, fleet: { teamId: session.teamId } },
-    }),
-    prisma.unitOrder.count({
-      where: { turnId: turn.id, unit: { fleet: { teamId: session.teamId } } },
-    }),
-    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } } }),
+    prisma.unit.count({ where: { scenarioId, status: { in: ["ACTIVE", "DAMAGED"] }, fleet: { teamId } } }),
+    prisma.unitOrder.count({ where: { turnId: turn.id, unit: { fleet: { teamId } } } }),
+    prisma.unit.count({ where: { scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } } }),
     prisma.unitOrder.count({ where: { turnId: turn.id } }),
   ]);
 
@@ -88,7 +266,6 @@ export default async function OrdersPage() {
       turnId={turn.id}
       turnNumber={turn.number}
       turnDurationMinutes={turn.durationMinutes}
-      turnTacticalMode={turn.tacticalMode}
       weather={
         turn.weather
           ? {

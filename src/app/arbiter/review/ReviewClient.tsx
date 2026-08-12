@@ -92,7 +92,6 @@ type DetectionDto = {
   targetLngAtCpa: number;
   arbiterStatus: string;
   systemProposed: boolean;
-  tacticalModeRequested: boolean;
 };
 
 export function ReviewClient(props: {
@@ -270,11 +269,6 @@ export function ReviewClient(props: {
                   {formatMethod(d.method)} · CPA {d.cpaDistanceNm.toFixed(1)}nm à +{Math.round(d.cpaMinutesIntoTurn)}min ·{" "}
                   {statusLabel(d.arbiterStatus)}
                 </div>
-                {d.tacticalModeRequested && (
-                  <div className="mt-1 inline-block rounded bg-orange-950/50 px-1.5 py-0.5 text-[10px] text-orange-300">
-                    ⚔ Bataille tactique demandée
-                  </div>
-                )}
                 <div className="mt-1 flex gap-2">
                   <form action={confirmDetectionAction}>
                     <input type="hidden" name="detectionId" value={d.id} />
