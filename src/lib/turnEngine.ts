@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { buildTimedTrack, distanceNm, pathLengthNm, speedBudgetNm, bearingDeg, type LatLng } from "@/lib/geo";
+import { buildTimedTrack, distanceNm, pathLengthNm, speedBudgetNm, bearingDeg, destinationPoint, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm } from "@/lib/weather";
 import {
   resolveGunEngagement,
@@ -130,8 +130,14 @@ export async function saveUnitOrder(params: {
   speedKnots: number;
   waypoints: LatLng[];
   depthBand?: DepthBand;
+  // Bloc 3 : marque cet ordre comme permanent — reconduit automatiquement
+  // (même cap, même vitesse) chaque tour suivant jusqu'à ce qu'une
+  // détection impliquant l'unité soit confirmée, ou annulation manuelle.
+  // Une soumission sans ce drapeau annule un éventuel ordre permanent
+  // précédent : reprendre la main manuellement redevient un ordre ponctuel.
+  standing?: boolean;
 }) {
-  const { turnId, unitId, submittedById, speedKnots, waypoints, depthBand } = params;
+  const { turnId, unitId, submittedById, speedKnots, waypoints, depthBand, standing } = params;
 
   const [turn, unit] = await Promise.all([
     prisma.turn.findUniqueOrThrow({ where: { id: turnId } }),
@@ -204,9 +210,106 @@ export async function saveUnitOrder(params: {
         },
       },
     });
+
+    // Un ordre manuel dessiné à la main remplace toujours un éventuel plan
+    // de vol de patrouille aérienne (le joueur reprend la main sur l'avion) ;
+    // le statut "permanent" du cap tenu, lui, suit le drapeau `standing`.
+    await tx.unit.update({
+      where: { id: unitId },
+      data: standing
+        ? { standingOrderActive: true, standingOrderKind: "TRANSIT", standingSpeedKnots: speedKnots }
+        : {
+            standingOrderActive: false,
+            standingOrderKind: null,
+            standingSpeedKnots: null,
+            airMissionState: null,
+            airHomeLat: null,
+            airHomeLng: null,
+            airPatrolLat: null,
+            airPatrolLng: null,
+            fuelMinutesRemaining: null,
+          },
+    });
   });
 
-  await maybeResolveTurn(turnId);
+  await checkTurnProgress(turnId);
+}
+
+/**
+ * Ordre permanent de patrouille aérienne (bloc 3) — avions uniquement.
+ * Lance immédiatement le premier décollage (ordre de ce tour vers la zone
+ * de recherche) puis le cycle décollage → recherche → retour se reconduit
+ * automatiquement tant que l'ordre reste actif (voir applyAirPatrolLeg).
+ */
+export async function saveAirPatrolOrder(params: { turnId: string; unitId: string; patrolPoint: LatLng }) {
+  const { turnId, unitId, patrolPoint } = params;
+
+  const [turn, unit] = await Promise.all([
+    prisma.turn.findUniqueOrThrow({ where: { id: turnId } }),
+    prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } }),
+  ]);
+
+  if (turn.status !== "PENDING_ORDERS") throw new OrderValidationError("Ce tour n'accepte plus d'ordres.");
+  if (!turn.weatherId) throw new OrderValidationError("La météo du tour n'a pas encore été définie par l'arbitre.");
+  if (unit.unitClass.category !== "AIRCRAFT") {
+    throw new OrderValidationError("Seul un avion peut recevoir un ordre de patrouille aérienne.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.unitOrder.findUnique({ where: { turnId_unitId: { turnId, unitId } } });
+    if (existing) {
+      await tx.waypoint.deleteMany({ where: { orderId: existing.id } });
+      await tx.unitOrder.delete({ where: { id: existing.id } });
+    }
+
+    await tx.unit.update({
+      where: { id: unitId },
+      data: {
+        standingOrderActive: true,
+        standingOrderKind: "AIR_PATROL",
+        standingSpeedKnots: null,
+        airMissionState: "OUTBOUND",
+        airHomeLat: unit.currentLat,
+        airHomeLng: unit.currentLng,
+        airPatrolLat: patrolPoint.lat,
+        airPatrolLng: patrolPoint.lng,
+        fuelMinutesRemaining: unit.unitClass.enduranceMinutes ?? DEFAULT_ENDURANCE_MINUTES,
+      },
+    });
+  });
+
+  await applyAirPatrolLeg(turnId, turn.durationMinutes, unitId);
+  await checkTurnProgress(turnId);
+}
+
+/**
+ * Annule l'ordre permanent d'une unité (bloc 3). Pour une patrouille
+ * aérienne en vol, l'avion termine sa jambe en cours puis rentre se poser
+ * normalement (voir applyAirPatrolLeg) — il ne disparaît pas en plein vol,
+ * il cesse seulement de redécoller une fois posé.
+ */
+export async function cancelStandingOrder(unitId: string) {
+  const unit = await prisma.unit.findUniqueOrThrow({ where: { id: unitId } });
+  if (unit.standingOrderKind === "AIR_PATROL" && unit.airMissionState && unit.airMissionState !== "RETURNING") {
+    // En l'air, pas encore sur le chemin du retour : on le fait rentrer
+    // dès la prochaine reconduction automatique plutôt que de l'arrêter net.
+    await prisma.unit.update({ where: { id: unitId }, data: { standingOrderActive: false, airMissionState: "RETURNING" } });
+    return;
+  }
+  await prisma.unit.update({
+    where: { id: unitId },
+    data: {
+      standingOrderActive: false,
+      standingOrderKind: null,
+      standingSpeedKnots: null,
+      airMissionState: null,
+      airHomeLat: null,
+      airHomeLng: null,
+      airPatrolLat: null,
+      airPatrolLng: null,
+      fuelMinutesRemaining: null,
+    },
+  });
 }
 
 /**
@@ -239,7 +342,12 @@ export async function cancelFleetTransfer(unitId: string) {
   await prisma.unit.update({ where: { id: unitId }, data: { pendingFleetId: null } });
 }
 
-async function maybeResolveTurn(turnId: string) {
+export async function checkTurnProgress(turnId: string) {
+  // Reconduit d'abord les ordres permanents (bloc 3) : sans ça, un tour où
+  // toutes les unités restantes sont en ordre permanent ne se résoudrait
+  // jamais, faute d'atteindre activeUnitCount ordres soumis.
+  await applyStandingOrders(turnId);
+
   const turn = await prisma.turn.findUniqueOrThrow({ where: { id: turnId } });
   if (turn.status !== "PENDING_ORDERS") return;
 
@@ -251,6 +359,182 @@ async function maybeResolveTurn(turnId: string) {
   if (orderCount >= activeUnitCount) {
     await resolveTurnDetections(turnId);
   }
+}
+
+/** Autonomie de repli si l'avion n'a pas de UnitClass.enduranceMinutes renseigné. */
+const DEFAULT_ENDURANCE_MINUTES = 240;
+/** Régime de croisière retenu en patrouille automatique : on économise le
+ * carburant plutôt que de foncer à pleine vitesse vers la zone de recherche. */
+const AIR_PATROL_CRUISE_RATIO = 0.6;
+/** Marge de sécurité (minutes) avant de faire demi-tour : on rentre dès que
+ * le carburant restant ne couvre plus que le vol retour + cette marge. */
+const AIR_PATROL_FUEL_MARGIN_MINUTES = 15;
+/** Rayon du circuit de recherche autour du point de patrouille (nm). */
+const AIR_PATROL_SEARCH_RADIUS_NM = 15;
+
+/**
+ * Reconduit automatiquement, pour un tour donné, les ordres permanents des
+ * unités qui n'ont pas reçu d'ordre manuel ce tour-ci (bloc 3) : maintien
+ * de cap/vitesse pour un TRANSIT, jambe suivante du cycle décollage →
+ * recherche → retour pour un AIR_PATROL. Idempotente.
+ */
+async function applyStandingOrders(turnId: string) {
+  const turn = await prisma.turn.findUniqueOrThrow({ where: { id: turnId } });
+  if (turn.status !== "PENDING_ORDERS" || !turn.weatherId) return;
+
+  const candidates = await prisma.unit.findMany({
+    where: {
+      scenarioId: turn.scenarioId,
+      status: { in: ["ACTIVE", "DAMAGED"] },
+      standingOrderActive: true,
+      orders: { none: { turnId } },
+    },
+    select: { id: true, standingOrderKind: true },
+  });
+
+  for (const candidate of candidates) {
+    if (candidate.standingOrderKind === "AIR_PATROL") {
+      await applyAirPatrolLeg(turnId, turn.durationMinutes, candidate.id);
+    } else {
+      await applyTransitLeg(turnId, turn.durationMinutes, candidate.id);
+    }
+  }
+}
+
+/** Reconduit un ordre TRANSIT : même cap, même vitesse que le dernier ordre. */
+async function applyTransitLeg(turnId: string, turnDurationMinutes: number, unitId: string) {
+  const unit = await prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } });
+  const turnDurationHours = turnDurationMinutes / 60;
+
+  let depthBand: DepthBand | undefined;
+  if (unit.unitClass.category === "SUBMARINE" && unit.depthBand !== "SURFACE") {
+    const oxygenRemaining = unit.oxygenHoursRemaining ?? unit.unitClass.oxygenEnduranceHours ?? 48;
+    const baselineHours = (unit.unitClass.submergedRangeNmAt4kt ?? 80) / BATTERY_REFERENCE_SPEED_KNOTS;
+    const consumptionRatio = Math.pow(
+      Math.max(unit.standingSpeedKnots ?? 0, 0.1) / BATTERY_REFERENCE_SPEED_KNOTS,
+      BATTERY_SPEED_EXPONENT
+    );
+    const batteryNeededPercent = baselineHours > 0 ? ((turnDurationHours * consumptionRatio) / baselineHours) * 100 : 0;
+    const batteryRemaining = unit.batteryChargePercent ?? 100;
+
+    if (oxygenRemaining < turnDurationHours || batteryRemaining < batteryNeededPercent) {
+      // Autonomie insuffisante pour rester immergé sans surveillance :
+      // remontée automatique, l'ordre permanent s'arrête là — le joueur
+      // reprend la main au tour suivant plutôt que de tomber en panne.
+      depthBand = "SURFACE";
+      await prisma.unit.update({
+        where: { id: unitId },
+        data: { standingOrderActive: false, standingOrderKind: null, standingSpeedKnots: null },
+      });
+    }
+  }
+
+  const maxSpeed = unit.speedCapKnots ?? unit.unitClass.maxSpeedKnots;
+  const speedKnots = Math.min(unit.standingSpeedKnots && unit.standingSpeedKnots > 0 ? unit.standingSpeedKnots : maxSpeed, maxSpeed);
+  const budgetNm = speedBudgetNm(speedKnots, turnDurationMinutes);
+  const destination = destinationPoint({ lat: unit.currentLat, lng: unit.currentLng }, unit.currentHeadingDeg ?? 0, budgetNm);
+
+  await prisma.unitOrder.create({
+    data: {
+      turnId,
+      unitId,
+      speedKnots,
+      depthBand,
+      isStanding: true,
+      waypoints: { create: [{ sequence: 0, lat: destination.lat, lng: destination.lng }] },
+    },
+  });
+}
+
+/**
+ * Reconduit un ordre AIR_PATROL : décollage → recherche → retour. Consomme
+ * le carburant du tour, décide du demi-tour dès que l'autonomie restante ne
+ * couvre plus le trajet retour + marge, et relance un nouveau décollage dès
+ * l'atterrissage si l'ordre permanent est toujours actif.
+ */
+async function applyAirPatrolLeg(turnId: string, turnDurationMinutes: number, unitId: string) {
+  const unit = await prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } });
+  const turn = await prisma.turn.findUniqueOrThrow({ where: { id: turnId } });
+
+  const cruiseSpeedKnots = unit.unitClass.maxSpeedKnots * AIR_PATROL_CRUISE_RATIO;
+  const enduranceMinutes = unit.unitClass.enduranceMinutes ?? DEFAULT_ENDURANCE_MINUTES;
+  const home: LatLng = { lat: unit.airHomeLat ?? unit.currentLat, lng: unit.airHomeLng ?? unit.currentLng };
+  const patrolPoint: LatLng = { lat: unit.airPatrolLat ?? unit.currentLat, lng: unit.airPatrolLng ?? unit.currentLng };
+  const current: LatLng = { lat: unit.currentLat, lng: unit.currentLng };
+
+  const fuelRemaining = Math.max(0, (unit.fuelMinutesRemaining ?? enduranceMinutes) - turnDurationMinutes);
+  const budgetNm = speedBudgetNm(cruiseSpeedKnots, turnDurationMinutes);
+
+  let state = unit.airMissionState ?? "OUTBOUND";
+  if (state !== "RETURNING") {
+    const timeHomeMinutes = cruiseSpeedKnots > 0 ? (distanceNm(current, home) / cruiseSpeedKnots) * 60 : 0;
+    if (fuelRemaining <= timeHomeMinutes + AIR_PATROL_FUEL_MARGIN_MINUTES) state = "RETURNING";
+  }
+
+  let destination: LatLng;
+  let nextState: "OUTBOUND" | "SEARCHING" | "RETURNING" = state;
+  let landed = false;
+
+  if (state === "RETURNING") {
+    const distanceHome = distanceNm(current, home);
+    if (distanceHome <= budgetNm) {
+      destination = home;
+      landed = true;
+    } else {
+      destination = destinationPoint(current, bearingDeg(current, home), budgetNm);
+    }
+  } else if (state === "OUTBOUND") {
+    const distanceToPatrol = distanceNm(current, patrolPoint);
+    if (distanceToPatrol <= budgetNm) {
+      destination = patrolPoint;
+      nextState = "SEARCHING";
+    } else {
+      destination = destinationPoint(current, bearingDeg(current, patrolPoint), budgetNm);
+    }
+  } else {
+    // SEARCHING : circuit de recherche en boîte autour du point de
+    // patrouille — le cap tourne de 90° à chaque tour (déterminé par le
+    // numéro de tour, pas d'état supplémentaire à stocker), pour une
+    // trajectoire crédible plutôt qu'un vol stationnaire.
+    const legBearing = (turn.number * 90) % 360;
+    destination = destinationPoint(patrolPoint, legBearing, Math.min(AIR_PATROL_SEARCH_RADIUS_NM, budgetNm));
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.unitOrder.create({
+      data: {
+        turnId,
+        unitId,
+        speedKnots: cruiseSpeedKnots,
+        isStanding: true,
+        waypoints: { create: [{ sequence: 0, lat: destination.lat, lng: destination.lng }] },
+      },
+    });
+
+    if (landed) {
+      const relaunch = unit.standingOrderActive;
+      await tx.unit.update({
+        where: { id: unitId },
+        data: relaunch
+          ? { airMissionState: "OUTBOUND", fuelMinutesRemaining: enduranceMinutes }
+          : {
+              standingOrderActive: false,
+              standingOrderKind: null,
+              airMissionState: null,
+              airHomeLat: null,
+              airHomeLng: null,
+              airPatrolLat: null,
+              airPatrolLng: null,
+              fuelMinutesRemaining: null,
+            },
+      });
+    } else {
+      await tx.unit.update({
+        where: { id: unitId },
+        data: { airMissionState: nextState, fuelMinutesRemaining: fuelRemaining },
+      });
+    }
+  });
 }
 
 /**
@@ -608,6 +892,24 @@ export async function publishTurn(turnId: string) {
       });
       for (const u of pendingTransfers) {
         await tx.unit.update({ where: { id: u.id }, data: { fleetId: u.pendingFleetId!, pendingFleetId: null } });
+      }
+
+      // Ordres permanents « jusqu'à détection » (bloc 3) : une détection
+      // confirmée ce tour, dans un sens ou dans l'autre, rend la main au
+      // joueur — le cap tenu automatiquement s'arrête là. Ne concerne que
+      // le maintien de cap (TRANSIT) : une patrouille aérienne continue son
+      // cycle malgré une détection, puisque repérer l'adversaire est
+      // justement sa mission.
+      const confirmedDetections = await tx.detectionEvent.findMany({
+        where: { turnId, arbiterStatus: { in: ["CONFIRMED", "ADDED_MANUALLY"] } },
+        select: { observerUnitId: true, targetUnitId: true },
+      });
+      const detectedUnitIds = new Set(confirmedDetections.flatMap((d) => [d.observerUnitId, d.targetUnitId]));
+      if (detectedUnitIds.size > 0) {
+        await tx.unit.updateMany({
+          where: { id: { in: Array.from(detectedUnitIds) }, standingOrderKind: "TRANSIT" },
+          data: { standingOrderActive: false, standingOrderKind: null, standingSpeedKnots: null },
+        });
       }
 
       // Pas de combat automatique à la publication : une détection

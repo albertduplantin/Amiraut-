@@ -57,6 +57,7 @@ export async function instantiateScenario(
         iconKey: uc.iconKey,
         profileImageUrl: uc.profileImageUrl,
         historicalNote: uc.historicalNote,
+        enduranceMinutes: uc.enduranceMinutes,
         combatProfile: uc.combatProfile ?? undefined,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         weaponSystems: (uc.weaponSystems as any) ?? undefined,

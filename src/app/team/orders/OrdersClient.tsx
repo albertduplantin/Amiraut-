@@ -11,9 +11,16 @@ import {
   multiLineFeatureCollectionColored,
   pointsFeatureCollection,
 } from "@/lib/mapData";
-import { clampPathToBudget, pathLengthNm, speedBudgetNm, type LatLng } from "@/lib/geo";
+import { clampPathToBudget, pathLengthNm, speedBudgetNm, distanceNm, type LatLng } from "@/lib/geo";
 import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
-import { submitOrderAction, submitFleetOrderAction, requestFleetTransferAction, cancelFleetTransferAction } from "./actions";
+import {
+  submitOrderAction,
+  submitFleetOrderAction,
+  requestFleetTransferAction,
+  cancelFleetTransferAction,
+  submitAirPatrolAction,
+  cancelStandingOrderAction,
+} from "./actions";
 
 type SensorSpec = { type: string; rangeNm: number };
 
@@ -45,7 +52,19 @@ type UnitDto = {
   oxygenHoursRemaining: number | null;
   oxygenEnduranceHours: number | null;
   torpedoesRemaining: number | null;
-  existingOrder: { speedKnots: number; waypoints: LatLng[]; depthBand: string | null } | null;
+  turningRadiusM: number;
+  accelerationKnotsPerMin: number;
+  enduranceMinutes: number | null;
+  // Bloc 3 — ordres permanents.
+  standingOrderActive: boolean;
+  standingOrderKind: "TRANSIT" | "AIR_PATROL" | null;
+  airMissionState: "OUTBOUND" | "SEARCHING" | "RETURNING" | null;
+  airPatrolLat: number | null;
+  airPatrolLng: number | null;
+  airHomeLat: number | null;
+  airHomeLng: number | null;
+  fuelMinutesRemaining: number | null;
+  existingOrder: { speedKnots: number; waypoints: LatLng[]; depthBand: string | null; isStanding: boolean } | null;
 };
 
 /**
@@ -60,7 +79,8 @@ const LISTENING_SPEED_KNOTS = 4;
 const DEPTH_BAND_ORDER = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"] as const;
 type DepthBandKey = (typeof DEPTH_BAND_ORDER)[number];
 
-type UnitDraft = { speedKnots: number; waypoints: LatLng[]; saved: boolean; depthBand: DepthBandKey | null };
+type UnitDraft = { speedKnots: number; waypoints: LatLng[]; saved: boolean; depthBand: DepthBandKey | null; standing: boolean };
+type UnitOrderTab = "path" | "airPatrol";
 type FleetDraft = { speedKnots: number; waypoints: LatLng[] };
 type Mode = "unit" | "fleet";
 type SortMode = "fleet" | "type" | "name";
@@ -147,11 +167,15 @@ export function OrdersClient(props: {
             waypoints: unit.existingOrder.waypoints,
             saved: true,
             depthBand: (unit.existingOrder.depthBand as DepthBandKey | null) ?? null,
+            standing: unit.standingOrderKind === "TRANSIT",
           }
-        : { speedKnots: defaultSpeed(unit.maxSpeedKnots), waypoints: [], saved: false, depthBand: null };
+        : { speedKnots: defaultSpeed(unit.maxSpeedKnots), waypoints: [], saved: false, depthBand: null, standing: false };
     }
     return initial;
   });
+  const [unitOrderTab, setUnitOrderTab] = useState<UnitOrderTab>("path");
+  const [airPatrolPoint, setAirPatrolPoint] = useState<LatLng | null>(null);
+  const [isStandingPending, startStandingTransition] = useTransition();
   const [fleetDrafts, setFleetDrafts] = useState<Record<string, FleetDraft>>(() => {
     const initial: Record<string, FleetDraft> = {};
     for (const fleet of fleets) {
@@ -198,6 +222,11 @@ export function OrdersClient(props: {
   const fleetAllSaved = selectedFleet ? selectedFleet.units.every((u) => unitDrafts[u.id]?.saved) : false;
 
   function handleMapClick(pos: LatLng) {
+    if (mode === "unit" && selectedUnit?.category === "AIRCRAFT" && unitOrderTab === "airPatrol") {
+      setAirPatrolPoint(pos);
+      return;
+    }
+
     if (mode === "unit") {
       if (!selectedUnit || !selectedUnitDraft) return;
       const start = { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
@@ -274,6 +303,7 @@ export function OrdersClient(props: {
         speedKnots: selectedUnitDraft.speedKnots,
         waypoints: selectedUnitDraft.waypoints,
         depthBand: selectedUnitDraft.depthBand ?? undefined,
+        standing: selectedUnitDraft.standing,
       });
       if (!result.ok) {
         setError(result.error);
@@ -302,7 +332,16 @@ export function OrdersClient(props: {
         for (const unit of selectedFleet.units) {
           const offset = { lat: unit.currentLat - selectedFleet.centroid.lat, lng: unit.currentLng - selectedFleet.centroid.lng };
           const translated = selectedFleetDraft.waypoints.map((w) => ({ lat: w.lat + offset.lat, lng: w.lng + offset.lng }));
-          next[unit.id] = { speedKnots: selectedFleetDraft.speedKnots, waypoints: translated, saved: true, depthBand: prev[unit.id]?.depthBand ?? null };
+          next[unit.id] = {
+            speedKnots: selectedFleetDraft.speedKnots,
+            waypoints: translated,
+            saved: true,
+            depthBand: prev[unit.id]?.depthBand ?? null,
+            // Un ordre de flotte est toujours ponctuel : il annule l'ordre
+            // permanent d'un navire éventuellement laissé en arrière (voir
+            // saveUnitOrder côté moteur, appelé pour chaque navire).
+            standing: false,
+          };
         }
         return next;
       });
@@ -331,9 +370,41 @@ export function OrdersClient(props: {
     });
   }
 
+  function selectUnit(unitId: string) {
+    setSelectedUnitId(unitId);
+    setUnitOrderTab("path");
+    setAirPatrolPoint(null);
+  }
+
   function inspectUnit(unitId: string) {
     setMode("unit");
-    setSelectedUnitId(unitId);
+    selectUnit(unitId);
+  }
+
+  function toggleUnitStanding(standing: boolean) {
+    if (!selectedUnit) return;
+    setUnitDrafts((prev) => ({ ...prev, [selectedUnit.id]: { ...prev[selectedUnit.id], standing, saved: false } }));
+  }
+
+  function launchAirPatrol() {
+    if (!selectedUnit || !airPatrolPoint) return;
+    setError(null);
+    startStandingTransition(async () => {
+      const result = await submitAirPatrolAction({ turnId, unitId: selectedUnit.id, patrolPoint: airPatrolPoint });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setAirPatrolPoint(null);
+    });
+  }
+
+  function cancelStanding(unitId: string) {
+    setError(null);
+    startStandingTransition(async () => {
+      const result = await cancelStandingOrderAction({ unitId });
+      if (!result.ok) setError(result.error);
+    });
   }
 
   function handleShipMarkerClick(unitId: string) {
@@ -389,6 +460,57 @@ export function OrdersClient(props: {
       });
     }
 
+    // Bloc 3 — patrouilles aériennes en cours : trait pointillé base ↔ zone
+    // de recherche, et le point de patrouille lui-même. Affiché quel que
+    // soit le mode/la sélection : c'est un rappel utile pour toute l'équipe.
+    const activePatrols = units.filter(
+      (u): u is UnitDto & { airHomeLat: number; airHomeLng: number; airPatrolLat: number; airPatrolLng: number } =>
+        u.standingOrderKind === "AIR_PATROL" && u.airHomeLat != null && u.airHomeLng != null && u.airPatrolLat != null && u.airPatrolLng != null
+    );
+    if (activePatrols.length > 0) {
+      list.push({
+        id: "air-patrol-lines",
+        kind: "line",
+        data: multiLineFeatureCollection(
+          activePatrols.map((u) => [
+            { lat: u.airHomeLat, lng: u.airHomeLng },
+            { lat: u.airPatrolLat, lng: u.airPatrolLng },
+          ])
+        ),
+        color: "#a78bfa",
+        width: 1,
+        dashed: true,
+      });
+      list.push({
+        id: "air-patrol-points",
+        kind: "points",
+        data: pointsFeatureCollection(
+          activePatrols.map((u) => ({ lat: u.airPatrolLat, lng: u.airPatrolLng, properties: { name: `${u.name} (patrouille)` } }))
+        ),
+        color: "#a78bfa",
+        radius: 4,
+        showLabels: true,
+      });
+    }
+
+    if (mode === "unit" && selectedUnit?.category === "AIRCRAFT" && unitOrderTab === "airPatrol" && airPatrolPoint) {
+      list.push({
+        id: "air-patrol-draft-line",
+        kind: "line",
+        data: lineFeatureCollection([{ lat: selectedUnit.currentLat, lng: selectedUnit.currentLng }, airPatrolPoint]),
+        color: "#facc15",
+        width: 2,
+        dashed: true,
+      });
+      list.push({
+        id: "air-patrol-draft-point",
+        kind: "points",
+        data: pointsFeatureCollection([{ lat: airPatrolPoint.lat, lng: airPatrolPoint.lng, properties: {} }]),
+        color: "#facc15",
+        radius: 8,
+      });
+    }
+
     if (mode === "unit" && selectedUnit) {
       list.push({
         id: "highlight",
@@ -399,7 +521,7 @@ export function OrdersClient(props: {
       });
     }
 
-    if (mode === "unit" && selectedUnit && selectedUnitDraft) {
+    if (mode === "unit" && selectedUnit && selectedUnitDraft && unitOrderTab === "path") {
       const start = { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
       list.push({ id: "draft-path", kind: "line", data: lineFeatureCollection([start, ...selectedUnitDraft.waypoints]), color: "#facc15", width: 3 });
       if (unitLastPoint) {
@@ -444,7 +566,20 @@ export function OrdersClient(props: {
 
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [units, unitDrafts, mode, selectedUnitId, selectedUnitDraft, unitRemainingNm, selectedFleetId, selectedFleetDraft, fleetRemainingNm, lastContacts]);
+  }, [
+    units,
+    unitDrafts,
+    mode,
+    selectedUnitId,
+    selectedUnitDraft,
+    unitRemainingNm,
+    selectedFleetId,
+    selectedFleetDraft,
+    fleetRemainingNm,
+    lastContacts,
+    unitOrderTab,
+    airPatrolPoint,
+  ]);
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(
     () =>
@@ -525,7 +660,7 @@ export function OrdersClient(props: {
                 return (
                   <li key={unit.id}>
                     <button
-                      onClick={() => setSelectedUnitId(unit.id)}
+                      onClick={() => selectUnit(unit.id)}
                       className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
                         unit.id === selectedUnitId ? "bg-brass-900/50 ring-1 ring-brass-500" : "hover:bg-slate-900"
                       }`}
@@ -548,6 +683,11 @@ export function OrdersClient(props: {
                           {unit.status === "DAMAGED" && (
                             <span className="text-amber-400" title="Endommagé">
                               ⚠
+                            </span>
+                          )}
+                          {unit.standingOrderActive && (
+                            <span className="text-sky-400" title="Ordre permanent en cours">
+                              ⚓
                             </span>
                           )}
                         </span>
@@ -622,60 +762,111 @@ export function OrdersClient(props: {
                 </p>
               </div>
 
-              <label className="block text-sm">
-                Vitesse : {selectedUnitDraft.speedKnots} nds (max {selectedUnit.maxSpeedKnots})
-                <input
-                  type="range"
-                  min={1}
-                  max={selectedUnit.maxSpeedKnots}
-                  value={selectedUnitDraft.speedKnots}
-                  onChange={(e) => updateUnitSpeed(Number(e.target.value))}
-                  className="mt-1 w-full"
-                />
-              </label>
-
-              {selectedUnit.category === "SUBMARINE" && (
-                <button
-                  onClick={() => updateUnitSpeed(LISTENING_SPEED_KNOTS)}
-                  className={`w-full rounded-md border px-3 py-1.5 text-xs transition ${
-                    selectedUnitDraft.speedKnots === LISTENING_SPEED_KNOTS
-                      ? "border-brass-500 bg-brass-900/50"
-                      : "border-slate-700 hover:bg-slate-900"
-                  }`}
-                  title="À cette vitesse, l'hydrophone reste efficace : au-delà, le bruit propre du sous-marin masque le signal (voir GHG, uboat.net/articles/id/52)."
-                >
-                  🎧 Vitesse d&apos;écoute ({LISTENING_SPEED_KNOTS} nds)
-                </button>
+              {selectedUnit.standingOrderActive && (
+                <StandingOrderStatus unit={selectedUnit} onCancel={() => cancelStanding(selectedUnit.id)} pending={isStandingPending} />
               )}
 
-              <div className="rounded-md bg-slate-900 p-3 text-sm">
-                <div>Budget : {unitBudgetNm.toFixed(1)} nm</div>
-                <div>Utilisé : {unitUsedNm.toFixed(1)} nm</div>
-                <div>Restant : {unitRemainingNm.toFixed(1)} nm</div>
-              </div>
-
-              {selectedUnit.category === "SUBMARINE" && (
-                <DepthBandControl
-                  currentDepthBand={selectedUnit.depthBand as DepthBandKey}
-                  draftDepthBand={selectedUnitDraft.depthBand}
-                  onChange={updateUnitDepthBand}
-                />
+              {selectedUnit.category === "AIRCRAFT" && (
+                <div className="flex rounded-md border border-slate-800 text-xs">
+                  <button
+                    onClick={() => setUnitOrderTab("path")}
+                    className={`flex-1 rounded-l-md px-2 py-1.5 ${unitOrderTab === "path" ? "bg-brass-900/50" : "hover:bg-slate-900"}`}
+                  >
+                    Vol manuel
+                  </button>
+                  <button
+                    onClick={() => setUnitOrderTab("airPatrol")}
+                    className={`flex-1 rounded-r-md px-2 py-1.5 ${unitOrderTab === "airPatrol" ? "bg-brass-900/50" : "hover:bg-slate-900"}`}
+                  >
+                    Patrouille auto
+                  </button>
+                </div>
               )}
 
-              <div className="flex gap-2">
-                <button onClick={clearUnitPath} className="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-900">
-                  Effacer
-                </button>
-                <button
-                  onClick={saveUnitOrderClick}
-                  disabled={isPending}
-                  className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 text-sm font-medium hover:bg-brass-500 disabled:opacity-50"
-                >
-                  {isPending ? "Enregistrement…" : "Enregistrer l'ordre"}
-                </button>
-              </div>
+              {selectedUnit.category === "AIRCRAFT" && unitOrderTab === "airPatrol" ? (
+                <AirPatrolControls
+                  unit={selectedUnit}
+                  patrolPoint={airPatrolPoint}
+                  onLaunch={launchAirPatrol}
+                  onClear={() => setAirPatrolPoint(null)}
+                  pending={isStandingPending}
+                  error={error}
+                />
+              ) : (
+                <>
+                  <label className="block text-sm">
+                    Vitesse : {selectedUnitDraft.speedKnots} nds (max {selectedUnit.maxSpeedKnots})
+                    <input
+                      type="range"
+                      min={1}
+                      max={selectedUnit.maxSpeedKnots}
+                      value={selectedUnitDraft.speedKnots}
+                      onChange={(e) => updateUnitSpeed(Number(e.target.value))}
+                      className="mt-1 w-full"
+                    />
+                  </label>
 
-              {error && <p className="text-sm text-red-400">{error}</p>}
+                  {selectedUnit.category === "SUBMARINE" && (
+                    <button
+                      onClick={() => updateUnitSpeed(LISTENING_SPEED_KNOTS)}
+                      className={`w-full rounded-md border px-3 py-1.5 text-xs transition ${
+                        selectedUnitDraft.speedKnots === LISTENING_SPEED_KNOTS
+                          ? "border-brass-500 bg-brass-900/50"
+                          : "border-slate-700 hover:bg-slate-900"
+                      }`}
+                      title="À cette vitesse, l'hydrophone reste efficace : au-delà, le bruit propre du sous-marin masque le signal (voir GHG, uboat.net/articles/id/52)."
+                    >
+                      🎧 Vitesse d&apos;écoute ({LISTENING_SPEED_KNOTS} nds)
+                    </button>
+                  )}
+
+                  <div className="rounded-md bg-slate-900 p-3 text-sm">
+                    <div>Budget : {unitBudgetNm.toFixed(1)} nm</div>
+                    <div>Utilisé : {unitUsedNm.toFixed(1)} nm</div>
+                    <div>Restant : {unitRemainingNm.toFixed(1)} nm</div>
+                  </div>
+
+                  {selectedUnit.category === "SUBMARINE" && (
+                    <DepthBandControl
+                      currentDepthBand={selectedUnit.depthBand as DepthBandKey}
+                      draftDepthBand={selectedUnitDraft.depthBand}
+                      onChange={updateUnitDepthBand}
+                    />
+                  )}
+
+                  {selectedUnit.category !== "AIRCRAFT" && (
+                    <label
+                      className="flex items-start gap-2 rounded-md border border-slate-800 p-2 text-xs text-slate-300"
+                      title="Reconduit ce cap et cette vitesse automatiquement chaque tour, sans ressaisie, jusqu'à ce qu'une détection impliquant ce navire soit confirmée par l'arbitre."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedUnitDraft.standing}
+                        onChange={(e) => toggleUnitStanding(e.target.checked)}
+                        className="mt-0.5 h-3.5 w-3.5"
+                      />
+                      <span>
+                        Ordre permanent <span className="text-slate-500">— tient ce cap et cette vitesse tour après tour, jusqu&apos;à détection</span>
+                      </span>
+                    </label>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button onClick={clearUnitPath} className="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-900">
+                      Effacer
+                    </button>
+                    <button
+                      onClick={saveUnitOrderClick}
+                      disabled={isPending}
+                      className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 text-sm font-medium hover:bg-brass-500 disabled:opacity-50"
+                    >
+                      {isPending ? "Enregistrement…" : "Enregistrer l'ordre"}
+                    </button>
+                  </div>
+
+                  {error && <p className="text-sm text-red-400">{error}</p>}
+                </>
+              )}
 
               <div className="space-y-2 border-t border-slate-800 pt-4">
                 <h3 className="text-sm font-semibold text-slate-400">Flotte</h3>
@@ -972,6 +1163,20 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
             <td className="py-0.5 pr-2 text-slate-500">Détectabilité</td>
             <td>{unit.detectability.toFixed(2)}×</td>
           </tr>
+          <tr>
+            <td className="py-0.5 pr-2 text-slate-500">Rayon de giration</td>
+            <td>{Math.round(unit.turningRadiusM)} m</td>
+          </tr>
+          <tr>
+            <td className="py-0.5 pr-2 text-slate-500">Accélération</td>
+            <td>{unit.accelerationKnotsPerMin.toFixed(1)} nds/min</td>
+          </tr>
+          {unit.enduranceMinutes != null && (
+            <tr>
+              <td className="py-0.5 pr-2 text-slate-500">Autonomie de vol</td>
+              <td>{unit.enduranceMinutes} min</td>
+            </tr>
+          )}
           {unit.depthChargesRemaining != null && (
             <tr>
               <td className="py-0.5 pr-2 text-slate-500">Grenades ASM</td>
@@ -1010,6 +1215,93 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
         </tbody>
       </table>
       {unit.historicalNote && <p className="text-xs italic text-slate-400">{unit.historicalNote}</p>}
+    </div>
+  );
+}
+
+/**
+ * Bandeau d'état d'un ordre permanent (bloc 3) : cap tenu ou patrouille
+ * aérienne en cours, avec un bouton pour reprendre la main.
+ */
+function StandingOrderStatus({ unit, onCancel, pending }: { unit: UnitDto; onCancel: () => void; pending: boolean }) {
+  const label =
+    unit.standingOrderKind === "AIR_PATROL"
+      ? `Patrouille en cours — ${formatAirState(unit.airMissionState)}${
+          unit.fuelMinutesRemaining != null ? ` · carburant ${Math.round(unit.fuelMinutesRemaining)} min` : ""
+        }`
+      : "Ordre permanent — tient son cap et sa vitesse jusqu'à détection";
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border border-sky-800 bg-sky-950/30 px-3 py-2 text-xs text-sky-200">
+      <span>⚓ {label}</span>
+      <button
+        onClick={onCancel}
+        disabled={pending}
+        className="shrink-0 rounded border border-sky-700 px-2 py-1 text-[11px] hover:bg-sky-900 disabled:opacity-50"
+      >
+        {unit.standingOrderKind === "AIR_PATROL" ? "Rappeler" : "Annuler"}
+      </button>
+    </div>
+  );
+}
+
+function formatAirState(state: UnitDto["airMissionState"]) {
+  switch (state) {
+    case "OUTBOUND":
+      return "en transit vers la zone";
+    case "SEARCHING":
+      return "en recherche";
+    case "RETURNING":
+      return "retour à la base";
+    default:
+      return "au sol, prête à décoller";
+  }
+}
+
+/** Réglage d'un ordre de patrouille aérienne (bloc 3) : choix de la zone puis lancement. */
+function AirPatrolControls({
+  unit,
+  patrolPoint,
+  onLaunch,
+  onClear,
+  pending,
+  error,
+}: {
+  unit: UnitDto;
+  patrolPoint: LatLng | null;
+  onLaunch: () => void;
+  onClear: () => void;
+  pending: boolean;
+  error: string | null;
+}) {
+  const distance = patrolPoint ? distanceNm({ lat: unit.currentLat, lng: unit.currentLng }, patrolPoint) : null;
+  return (
+    <div className="space-y-2 rounded-md border border-slate-800 bg-slate-900 p-3 text-xs">
+      <p className="text-slate-400">
+        Cliquez sur la carte pour choisir la zone de recherche. L&apos;avion décolle, patrouille en boucle sur zone,
+        puis rentre se poser automatiquement dès que le carburant l&apos;impose — et redécolle aussitôt si l&apos;ordre
+        reste actif.
+      </p>
+      {unit.enduranceMinutes != null && <p className="text-slate-500">Autonomie : {unit.enduranceMinutes} min</p>}
+      {patrolPoint ? (
+        <>
+          <p className="text-slate-300">Zone choisie, à {distance?.toFixed(0)} nm.</p>
+          <div className="flex gap-2">
+            <button onClick={onClear} className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
+              Effacer
+            </button>
+            <button
+              onClick={onLaunch}
+              disabled={pending}
+              className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 font-medium hover:bg-brass-500 disabled:opacity-50"
+            >
+              {pending ? "Lancement…" : "Lancer la patrouille"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="italic text-slate-600">Aucune zone choisie pour l&apos;instant.</p>
+      )}
+      {error && <p className="text-red-400">{error}</p>}
     </div>
   );
 }

@@ -190,6 +190,27 @@ export const denmarkStrait: ScenarioDefinition = {
         torpedoes: "12 x 533mm",
       },
     },
+    {
+      key: "sunderland",
+      name: "Hydravion Short Sunderland Mk I (RAF Coastal Command)",
+      nation: "Royaume-Uni",
+      category: "AIRCRAFT",
+      maxSpeedKnots: 125, // vitesse de croisière de patrouille, pas la max en palier (~165nds) — voir tacticalEngine/AIR_PATROL_CRUISE_RATIO.
+      lengthMeters: 26,
+      turningRadiusM: 500,
+      accelerationKnotsPerMin: 8,
+      sensors: [
+        { type: "VISUAL", rangeNm: 30 }, // veille depuis l'altitude : portée bien supérieure à celle d'un navire.
+        { type: "RADAR", rangeNm: 10 }, // ASV Mk.II, en cours de généralisation sur Coastal Command au printemps 1941 : courte portée, peu fiable.
+      ],
+      detectability: 1,
+      iconKey: "aircraft",
+      resistancePoints: 4,
+      enduranceMinutes: 780, // ~13h de patrouille (Sunderland Mk I, Coastal Command).
+      historicalNote:
+        "Coastal Command maintenait des patrouilles de recherche depuis l'Islande pendant la traque du Bismarck. Aucun de ces appareils n'a directement participé au combat du détroit du Danemark — repéré par radar par le Suffolk puis le Norfolk — mais ils quadrillaient la zone à la même période.",
+      weaponSystems: { role: "Patrouille maritime / lutte anti-sous-marine", equipage: "10-13 hommes" },
+    },
   ],
 
   teams: [
@@ -217,6 +238,19 @@ export const denmarkStrait: ScenarioDefinition = {
               lng: -32.035,
               headingDeg: 300,
               historicalNote: "En ligne de file derrière le Hood, à environ 800 m. Commandant : capitaine John Leach.",
+            },
+          ],
+        },
+        {
+          name: "RAF Coastal Command",
+          units: [
+            {
+              name: "Sunderland T/210",
+              classKey: "sunderland",
+              lat: 63.6,
+              lng: -29.9,
+              headingDeg: 210,
+              historicalNote: "En patrouille de recherche dans le détroit au moment du contact — exemple de la couverture aérienne alliée pendant la traque du Bismarck.",
             },
           ],
         },

@@ -56,6 +56,8 @@ export type ScenarioUnitClass = {
   submergedRangeNmAt4kt?: number;
   oxygenEnduranceHours?: number;
   torpedoStock?: number;
+  /** Autonomie de vol (avions uniquement) — voir Unit.fuelMinutesRemaining et le bloc 3 (patrouilles). */
+  enduranceMinutes?: number;
 };
 
 export type ScenarioUnit = {

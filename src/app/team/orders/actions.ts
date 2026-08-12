@@ -3,7 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
 import { assertPlayer, assertCanOrderUnit, assertCanOrderFleet, AccessDeniedError } from "@/lib/auth";
-import { saveUnitOrder, requestFleetTransfer, cancelFleetTransfer, OrderValidationError } from "@/lib/turnEngine";
+import {
+  saveUnitOrder,
+  saveAirPatrolOrder,
+  cancelStandingOrder,
+  requestFleetTransfer,
+  cancelFleetTransfer,
+  OrderValidationError,
+} from "@/lib/turnEngine";
 import { prisma } from "@/lib/prisma";
 import type { LatLng } from "@/lib/geo";
 import type { DepthBand } from "@/generated/prisma/client";
@@ -16,6 +23,7 @@ export async function submitOrderAction(params: {
   speedKnots: number;
   waypoints: LatLng[];
   depthBand?: DepthBand;
+  standing?: boolean;
 }): Promise<SubmitOrderResult> {
   const session = await getSession();
 
@@ -29,6 +37,7 @@ export async function submitOrderAction(params: {
       speedKnots: params.speedKnots,
       waypoints: params.waypoints,
       depthBand: params.depthBand,
+      standing: params.standing,
     });
   } catch (error) {
     if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {
@@ -39,6 +48,52 @@ export async function submitOrderAction(params: {
 
   revalidatePath("/team/orders");
   revalidatePath("/team/waiting");
+  return { ok: true };
+}
+
+/**
+ * Ordre permanent de patrouille aérienne (bloc 3) : décollage → recherche →
+ * retour, reconduit automatiquement tant qu'il n'est pas annulé.
+ */
+export async function submitAirPatrolAction(params: {
+  turnId: string;
+  unitId: string;
+  patrolPoint: LatLng;
+}): Promise<SubmitOrderResult> {
+  const session = await getSession();
+
+  try {
+    assertPlayer(session);
+    await assertCanOrderUnit(session, params.unitId);
+    await saveAirPatrolOrder({ turnId: params.turnId, unitId: params.unitId, patrolPoint: params.patrolPoint });
+  } catch (error) {
+    if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+
+  revalidatePath("/team/orders");
+  revalidatePath("/team/waiting");
+  return { ok: true };
+}
+
+/** Annule l'ordre permanent (maintien de cap ou patrouille aérienne) d'une unité. */
+export async function cancelStandingOrderAction(params: { unitId: string }): Promise<SubmitOrderResult> {
+  const session = await getSession();
+
+  try {
+    assertPlayer(session);
+    await assertCanOrderUnit(session, params.unitId);
+    await cancelStandingOrder(params.unitId);
+  } catch (error) {
+    if (error instanceof AccessDeniedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+
+  revalidatePath("/team/orders");
   return { ok: true };
 }
 

@@ -163,6 +163,29 @@ model Unit {
   rudderJammed          Boolean   @default(false) // gouvernail bloqué : ne peut plus manœuvrer, cap maintenu
   fireControlDamaged    Boolean   @default(false) // télépointage endommagé : pénalité de précision sur ses propres tirs
 
+  // ── Ordres permanents (bloc 3) ──────────────────────────────────────
+  // Un ordre marqué permanent est reconduit automatiquement par le moteur
+  // chaque tour (même cap et vitesse pour un TRANSIT, cycle décollage →
+  // recherche → retour pour un AIR_PATROL) sans que le joueur ait à le
+  // ressaisir — voir turnEngine.ts, applyStandingOrders. Il s'interrompt
+  // (standingOrderActive repasse à false) dès qu'une détection impliquant
+  // l'unité est confirmée par l'arbitre à la publication, ou sur annulation
+  // du joueur, ou — sous-marin immergé — si l'autonomie ne suit plus (renvoi
+  // automatique en surface).
+  standingOrderActive  Boolean            @default(false)
+  standingOrderKind    StandingOrderKind?
+  standingSpeedKnots   Float?
+  // Patrouille aérienne (avions uniquement) : décollage depuis airHome →
+  // recherche en boucle autour de airPatrol → retour se poser à airHome dès
+  // que le carburant restant ne permet plus qu'un aller simple, puis nouveau
+  // décollage si l'ordre permanent est toujours actif.
+  airMissionState      AirMissionState?
+  airHomeLat           Float?
+  airHomeLng           Float?
+  airPatrolLat         Float?
+  airPatrolLng         Float?
+  fuelMinutesRemaining Float?
+
   orders           UnitOrder[]
   detectedAs       DetectionEvent[] @relation("TargetUnit")
   observedFrom     DetectionEvent[] @relation("ObserverUnit")
@@ -192,6 +215,18 @@ enum DepthBand {
   SHALLOW
   MEDIUM
   DEEP
+}
+
+// Bloc 3 — ordres longue durée : voir Unit.standingOrderActive.
+enum StandingOrderKind {
+  TRANSIT // maintien du cap et de la vitesse du dernier ordre
+  AIR_PATROL // décollage → recherche → retour, en boucle (avions)
+}
+
+enum AirMissionState {
+  OUTBOUND // en transit vers la zone de recherche
+  SEARCHING // en boucle sur la zone de recherche
+  RETURNING // en transit retour vers la base
 }
 
 // ── Accès (pas de comptes — token d'invitation opaque) ────
@@ -295,19 +330,24 @@ enum Precipitation {
 // ── Ordres / trajets ────────────────────────────────────────
 
 model UnitOrder {
-  id            String      @id @default(cuid())
+  id            String       @id @default(cuid())
   turnId        String
-  turn          Turn        @relation(fields: [turnId], references: [id])
+  turn          Turn         @relation(fields: [turnId], references: [id])
   unitId        String
-  unit          Unit        @relation(fields: [unitId], references: [id])
-  submittedById String
-  submittedBy   Participant @relation(fields: [submittedById], references: [id])
+  unit          Unit         @relation(fields: [unitId], references: [id])
+  // Nul quand l'ordre est reconduit automatiquement par un ordre permanent
+  // (voir Unit.standingOrderActive) plutôt que saisi par un joueur ce tour-ci.
+  submittedById String?
+  submittedBy   Participant? @relation(fields: [submittedById], references: [id])
   speedKnots    Float
   // Palier d'immersion demandé pour ce tour (sous-marins uniquement) ; null =
   // pas de changement, l'unité garde son Unit.depthBand actuel. Doit être
   // adjacent au palier courant (un seul changement de palier par tour).
   depthBand     DepthBand?
-  submittedAt   DateTime    @default(now())
+  // Généré par le moteur (ordre permanent reconduit ou patrouille aérienne)
+  // plutôt que dessiné par le joueur ce tour-ci — affiché différemment côté UI.
+  isStanding    Boolean      @default(false)
+  submittedAt   DateTime     @default(now())
 
   waypoints Waypoint[]
 

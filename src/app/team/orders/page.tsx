@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { bearingDeg, distanceNm, type LatLng } from "@/lib/geo";
 import { getLastKnownSpeedsByUnit, defaultTurningRadiusM, defaultAccelerationKnotsPerMin } from "@/lib/tacticalEngine";
+import { checkTurnProgress } from "@/lib/turnEngine";
 import { OrdersClient } from "./OrdersClient";
 import { TacticalView } from "./TacticalView";
 
@@ -310,6 +311,13 @@ async function renderTacticalView(engagementId: string, teamId: string) {
 }
 
 async function renderStrategicView(scenarioId: string, teamId: string, fleetIds: string[] | null) {
+  // Ordres permanents (bloc 3) : reconduit d'abord ceux des unités qui n'ont
+  // pas d'ordre manuel ce tour-ci, et fait avancer le tour s'il ne restait
+  // plus que ça à attendre — sinon un tour où plus personne n'a besoin de
+  // dessiner de trajet ne se résoudrait jamais (rien d'autre ne le déclenche).
+  const openTurn = await prisma.turn.findFirst({ where: { scenarioId, status: "PENDING_ORDERS" }, orderBy: { number: "desc" } });
+  if (openTurn) await checkTurnProgress(openTurn.id);
+
   const turn = await prisma.turn.findFirst({
     where: { scenarioId, status: "PENDING_ORDERS" },
     orderBy: { number: "desc" },
@@ -352,6 +360,9 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
             historicalNote: true,
             profileImageUrl: true,
             oxygenEnduranceHours: true,
+            enduranceMinutes: true,
+            turningRadiusM: true,
+            accelerationKnotsPerMin: true,
           },
         },
         fleet: { select: { name: true } },
@@ -426,12 +437,25 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
         oxygenHoursRemaining: u.oxygenHoursRemaining,
         oxygenEnduranceHours: u.unitClass.oxygenEnduranceHours,
         torpedoesRemaining: u.torpedoesRemaining,
+        turningRadiusM: u.unitClass.turningRadiusM ?? defaultTurningRadiusM(u.unitClass.category, u.unitClass.name),
+        accelerationKnotsPerMin:
+          u.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(u.unitClass.category, u.unitClass.name),
+        enduranceMinutes: u.unitClass.enduranceMinutes,
+        standingOrderActive: u.standingOrderActive,
+        standingOrderKind: u.standingOrderKind,
+        airMissionState: u.airMissionState,
+        airPatrolLat: u.airPatrolLat,
+        airPatrolLng: u.airPatrolLng,
+        airHomeLat: u.airHomeLat,
+        airHomeLng: u.airHomeLng,
+        fuelMinutesRemaining: u.fuelMinutesRemaining,
         existingOrder:
           u.orders.length > 0
             ? {
                 speedKnots: u.orders[0].speedKnots,
                 waypoints: u.orders[0].waypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
                 depthBand: u.orders[0].depthBand,
+                isStanding: u.orders[0].isStanding,
               }
             : null,
       }))}
