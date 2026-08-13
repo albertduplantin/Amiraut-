@@ -67,6 +67,8 @@ export const northCape: ScenarioDefinition = {
       detectability: 1.2,
       iconKey: "battleship",
       resistancePoints: 42,
+      // Silhouette de profil : Shipbucket (CC BY-NC 4.0, www.shipbucket.com), fournie par l'utilisateur.
+      profileImageUrl: "/ships/scharnhorst.png",
       historicalNote:
         "32 100 t. Rapide et increvable — il encaissera plus de 55 obus et 11 torpilles avant de couler — mais ses deux radars Seetakt, l'un en tête de mât avant, l'autre sur le directeur arrière, sont d'une portée et d'une fiabilité déjà dépassées par le radar centimétrique britannique de 1943. Le premier accrochage avec le Norfolk lui coûtera justement son radar avant.",
       combatProfile: {
@@ -104,6 +106,8 @@ export const northCape: ScenarioDefinition = {
       detectability: 1.2,
       iconKey: "battleship",
       resistancePoints: 48,
+      // Silhouette de profil : Shipbucket (CC BY-NC 4.0, www.shipbucket.com), fournie par l'utilisateur.
+      profileImageUrl: "/ships/duke-of-york.png",
       historicalNote:
         "43 786 t, navire amiral de la Home Fleet (amiral Fraser). Son radar de conduite de tir accroche le Scharnhorst dès 16h15 à plus de 20nm sans aucun contact visuel — c'est lui qui referme la nasse pour l'ultime combat, avec l'aide des fusées éclairantes du Belfast.",
       combatProfile: {
