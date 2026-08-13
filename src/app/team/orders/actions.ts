@@ -148,13 +148,18 @@ export async function cancelFleetTransferAction(params: { unitId: string }): Pro
 /**
  * Applique un trajet unique à toute une flotte : chaque navire suit le même
  * tracé, décalé pour conserver sa position relative actuelle au sein de la
- * flotte (formation simple préservée, pas de rotation).
+ * flotte (formation simple préservée, pas de rotation). `standing` (bloc 3)
+ * marque l'ordre comme permanent pour toute la flotte d'un coup — jusque-là
+ * réservé à un ordre navire par navire.
  */
 export async function submitFleetOrderAction(params: {
   turnId: string;
   fleetId: string;
   speedKnots: number;
   waypoints: LatLng[];
+  // Bloc 3 (extension flotte) : même drapeau qu'un ordre individuel, propagé
+  // tel quel à chaque navire de la flotte — voir saveUnitOrder.
+  standing?: boolean;
 }): Promise<SubmitOrderResult> {
   const session = await getSession();
 
@@ -186,6 +191,7 @@ export async function submitFleetOrderAction(params: {
           submittedById: session.participantId,
           speedKnots: params.speedKnots,
           waypoints: translatedWaypoints,
+          standing: params.standing,
         });
       } catch (error) {
         if (error instanceof OrderValidationError) {

@@ -101,7 +101,7 @@ type DepthBandKey = (typeof DEPTH_BAND_ORDER)[number];
 
 type UnitDraft = { speedKnots: number; waypoints: LatLng[]; saved: boolean; depthBand: DepthBandKey | null; standing: boolean };
 type UnitOrderTab = "path" | "airPatrol";
-type FleetDraft = { speedKnots: number; waypoints: LatLng[] };
+type FleetDraft = { speedKnots: number; waypoints: LatLng[]; standing: boolean };
 type Mode = "unit" | "fleet";
 type SortMode = "fleet" | "type" | "name";
 
@@ -200,7 +200,7 @@ export function OrdersClient(props: {
   const [fleetDrafts, setFleetDrafts] = useState<Record<string, FleetDraft>>(() => {
     const initial: Record<string, FleetDraft> = {};
     for (const fleet of fleets) {
-      initial[fleet.fleetId] = { speedKnots: defaultSpeed(fleet.minMaxSpeedKnots), waypoints: [] };
+      initial[fleet.fleetId] = { speedKnots: defaultSpeed(fleet.minMaxSpeedKnots), waypoints: [], standing: false };
     }
     return initial;
   });
@@ -295,7 +295,7 @@ export function OrdersClient(props: {
     setFleetDrafts((prev) => {
       const budget = speedBudgetNm(speedKnots, turnDurationMinutes);
       const clamped = clampPathToBudget([selectedFleet.centroid, ...prev[selectedFleet.fleetId].waypoints], budget);
-      return { ...prev, [selectedFleet.fleetId]: { speedKnots, waypoints: clamped.slice(1) } };
+      return { ...prev, [selectedFleet.fleetId]: { ...prev[selectedFleet.fleetId], speedKnots, waypoints: clamped.slice(1) } };
     });
   }
 
@@ -343,6 +343,7 @@ export function OrdersClient(props: {
         fleetId: selectedFleet.fleetId,
         speedKnots: selectedFleetDraft.speedKnots,
         waypoints: selectedFleetDraft.waypoints,
+        standing: selectedFleetDraft.standing,
       });
       if (!result.ok) {
         setError(result.error);
@@ -358,15 +359,20 @@ export function OrdersClient(props: {
             waypoints: translated,
             saved: true,
             depthBand: prev[unit.id]?.depthBand ?? null,
-            // Un ordre de flotte est toujours ponctuel : il annule l'ordre
-            // permanent d'un navire éventuellement laissé en arrière (voir
-            // saveUnitOrder côté moteur, appelé pour chaque navire).
-            standing: false,
+            // Reflète le drapeau choisi pour la flotte entière — voir
+            // saveUnitOrder côté moteur, appelé pour chaque navire avec le
+            // même drapeau `standing`.
+            standing: selectedFleetDraft.standing,
           };
         }
         return next;
       });
     });
+  }
+
+  function toggleFleetStanding(standing: boolean) {
+    if (!selectedFleet) return;
+    setFleetDrafts((prev) => ({ ...prev, [selectedFleet.fleetId]: { ...prev[selectedFleet.fleetId], standing } }));
   }
 
   function requestTransfer() {
@@ -1001,6 +1007,24 @@ export function OrdersClient(props: {
                 <div>Utilisé : {fleetUsedNm.toFixed(1)} nm</div>
                 <div>Restant : {fleetRemainingNm.toFixed(1)} nm</div>
               </div>
+
+              {selectedFleet.units.every((u) => u.category !== "AIRCRAFT") && (
+                <label
+                  className="flex items-start gap-2 rounded-md border border-slate-800 p-2 text-xs text-slate-300"
+                  title="Reconduit ce cap et cette vitesse automatiquement chaque tour pour toute la flotte, sans ressaisie, jusqu'à ce qu'une détection impliquant l'un de ses navires soit confirmée par l'arbitre."
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedFleetDraft.standing}
+                    onChange={(e) => toggleFleetStanding(e.target.checked)}
+                    className="mt-0.5 h-3.5 w-3.5"
+                  />
+                  <span>
+                    Ordre permanent pour toute la flotte{" "}
+                    <span className="text-slate-500">— tient ce cap et cette vitesse tour après tour, jusqu&apos;à détection</span>
+                  </span>
+                </label>
+              )}
 
               <div className="flex gap-2">
                 <button onClick={clearFleetPath} className="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-900">
