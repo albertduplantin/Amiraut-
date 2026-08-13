@@ -11,8 +11,24 @@ type ScenarioSummary = {
   dateLabel: string;
   defaultTurnMinutes: number;
   teamNames: string[];
+  teams: { name: string; fleetNames: string[] }[];
   custom: boolean;
 };
+
+/** Palette pour les codes couleur des joueurs partageant une équipe (bloc 2) — lisible sur fond sombre, sans redite avec le rouge/bleu déjà utilisés pour les deux camps. */
+const PLAYER_COLORS = ["#38bdf8", "#facc15", "#4ade80", "#f472b6", "#c084fc", "#fb923c"];
+
+type TeamPlayer = { displayName: string; colorHex: string };
+type TeamMultiplayerState = {
+  enabled: boolean;
+  players: TeamPlayer[];
+  /** Nom de flotte → index dans `players`. */
+  fleetAssignment: Record<string, number>;
+};
+
+function defaultTeamState(): TeamMultiplayerState {
+  return { enabled: false, players: [{ displayName: "Joueur 1", colorHex: PLAYER_COLORS[0] }], fleetAssignment: {} };
+}
 
 export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) {
   const [scenarioKey, setScenarioKey] = useState(scenarios[0]?.key ?? "");
@@ -23,18 +39,83 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Extract<CreateGameResult, { ok: true }> | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [teamStates, setTeamStates] = useState<Record<string, TeamMultiplayerState>>({});
 
   function selectScenario(key: string) {
     setScenarioKey(key);
     const s = scenarios.find((sc) => sc.key === key);
     if (s) setTurnMinutes(s.defaultTurnMinutes);
+    setTeamStates({});
+  }
+
+  function teamState(teamName: string): TeamMultiplayerState {
+    return teamStates[teamName] ?? defaultTeamState();
+  }
+
+  function updateTeamState(teamName: string, next: TeamMultiplayerState) {
+    setTeamStates((prev) => ({ ...prev, [teamName]: next }));
+  }
+
+  function toggleMultiplayer(teamName: string, enabled: boolean) {
+    const current = teamState(teamName);
+    updateTeamState(teamName, { ...current, enabled });
+  }
+
+  function addPlayer(teamName: string) {
+    const current = teamState(teamName);
+    const nextIndex = current.players.length;
+    const players = [...current.players, { displayName: `Joueur ${nextIndex + 1}`, colorHex: PLAYER_COLORS[nextIndex % PLAYER_COLORS.length] }];
+    updateTeamState(teamName, { ...current, players });
+  }
+
+  function removePlayer(teamName: string, index: number) {
+    const current = teamState(teamName);
+    if (current.players.length <= 1) return;
+    const players = current.players.filter((_, i) => i !== index);
+    // Réaffecte les flottes qui pointaient sur le joueur retiré (ou sur un
+    // index désormais décalé) au premier joueur restant, plutôt que de
+    // laisser une flotte orpheline.
+    const fleetAssignment: Record<string, number> = {};
+    for (const [fleet, playerIndex] of Object.entries(current.fleetAssignment)) {
+      if (playerIndex === index) fleetAssignment[fleet] = 0;
+      else fleetAssignment[fleet] = playerIndex > index ? playerIndex - 1 : playerIndex;
+    }
+    updateTeamState(teamName, { ...current, players, fleetAssignment });
+  }
+
+  function renamePlayer(teamName: string, index: number, displayName: string) {
+    const current = teamState(teamName);
+    const players = current.players.map((p, i) => (i === index ? { ...p, displayName } : p));
+    updateTeamState(teamName, { ...current, players });
+  }
+
+  function assignFleet(teamName: string, fleetName: string, playerIndex: number) {
+    const current = teamState(teamName);
+    updateTeamState(teamName, { ...current, fleetAssignment: { ...current.fleetAssignment, [fleetName]: playerIndex } });
   }
 
   function submit() {
     if (!selected) return;
     setError(null);
+
+    const playersByTeamName: Record<string, { displayName: string; colorHex: string; fleetNames: string[] | null }[]> = {};
+    for (const team of selected.teams) {
+      const state = teamStates[team.name];
+      if (!state?.enabled || state.players.length <= 1) continue;
+      playersByTeamName[team.name] = state.players.map((player, index) => ({
+        displayName: player.displayName.trim() || `Joueur ${index + 1}`,
+        colorHex: player.colorHex,
+        fleetNames: team.fleetNames.filter((f) => (state.fleetAssignment[f] ?? 0) === index),
+      }));
+    }
+
     startTransition(async () => {
-      const res = await createGameAction({ scenarioKey: selected.key, withArbiter, turnMinutes });
+      const res = await createGameAction({
+        scenarioKey: selected.key,
+        withArbiter,
+        turnMinutes,
+        playersByTeamName: Object.keys(playersByTeamName).length > 0 ? playersByTeamName : undefined,
+      });
       if (!res.ok) {
         setError(res.error);
         return;
@@ -63,7 +144,8 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
             {result.participants.map((p) => (
               <li key={p.token} className="rounded-md border border-slate-800 bg-slate-900 p-4">
                 <div className="mb-1 flex items-center justify-between">
-                  <span className="font-medium">
+                  <span className="flex items-center gap-2 font-medium">
+                    {p.colorHex && <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: p.colorHex }} />}
                     {p.label} <span className="text-xs text-slate-500">({p.role === "ARBITER" ? "arbitre" : "joueur"})</span>
                   </span>
                   <button
@@ -157,6 +239,91 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
             </span>
           </label>
         </div>
+
+        {selected && selected.teams.length > 0 && (
+          <div className="mt-6 space-y-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Joueurs par camp</h2>
+            <p className="text-xs text-slate-500">
+              Par défaut, un seul lien par camp donne accès à toute l&apos;équipe. Activez « plusieurs joueurs » pour répartir les
+              flottes entre coéquipiers, chacun avec son propre lien et son code couleur.
+            </p>
+            {selected.teams.map((team) => {
+              const state = teamState(team.name);
+              return (
+                <div key={team.name} className="rounded-md border border-slate-800 bg-slate-900 p-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-medium">{team.name}</h3>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={state.enabled}
+                        onChange={(e) => toggleMultiplayer(team.name, e.target.checked)}
+                        className="h-3.5 w-3.5"
+                      />
+                      Plusieurs joueurs
+                    </label>
+                  </div>
+
+                  {!state.enabled ? (
+                    <p className="mt-1 text-xs text-slate-600">1 joueur — accès à toute l&apos;équipe ({team.fleetNames.join(", ")}).</p>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <ul className="space-y-1.5">
+                        {state.players.map((player, index) => (
+                          <li key={index} className="flex items-center gap-2">
+                            <span className="inline-block h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: player.colorHex }} />
+                            <input
+                              value={player.displayName}
+                              onChange={(e) => renamePlayer(team.name, index, e.target.value)}
+                              className="flex-1 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
+                            />
+                            {state.players.length > 1 && (
+                              <button
+                                onClick={() => removePlayer(team.name, index)}
+                                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
+                                title="Retirer ce joueur"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        onClick={() => addPlayer(team.name)}
+                        className="rounded-md border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800"
+                      >
+                        + Ajouter un joueur
+                      </button>
+
+                      <div className="border-t border-slate-800 pt-2">
+                        <p className="mb-1 text-xs text-slate-500">Flotte confiée à :</p>
+                        <ul className="space-y-1">
+                          {team.fleetNames.map((fleetName) => (
+                            <li key={fleetName} className="flex items-center justify-between gap-2 text-xs">
+                              <span>{fleetName}</span>
+                              <select
+                                value={state.fleetAssignment[fleetName] ?? 0}
+                                onChange={(e) => assignFleet(team.name, fleetName, Number(e.target.value))}
+                                className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
+                              >
+                                {state.players.map((player, index) => (
+                                  <option key={index} value={index}>
+                                    {player.displayName || `Joueur ${index + 1}`}
+                                  </option>
+                                ))}
+                              </select>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
 

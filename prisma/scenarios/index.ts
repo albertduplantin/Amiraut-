@@ -25,6 +25,10 @@ export type ScenarioSummary = {
   dateLabel: string;
   defaultTurnMinutes: number;
   teamNames: string[];
+  // Détail flotte par équipe (bloc 2, plusieurs joueurs par camp) : permet
+  // à /create de proposer, flotte par flotte, à quel joueur elle est
+  // confiée — sans instancier le scénario au préalable.
+  teams: { name: string; fleetNames: string[] }[];
   custom: boolean;
 };
 
@@ -36,6 +40,7 @@ function toSummary(def: ScenarioDefinition, custom: boolean): ScenarioSummary {
     dateLabel: def.dateLabel,
     defaultTurnMinutes: def.defaultTurnMinutes,
     teamNames: def.teams.map((t) => t.name),
+    teams: def.teams.map((t) => ({ name: t.name, fleetNames: t.fleets.map((f) => f.name) })),
     custom,
   };
 }
@@ -68,10 +73,24 @@ export async function findScenarioAsync(prisma: PrismaClient, key: string): Prom
  * Instancie une définition de scénario en base : classes d'unités, équipes,
  * flottes, unités, météo et premier tour. Retourne les jetons d'invitation.
  */
+export type PlayerSlotConfig = {
+  displayName: string;
+  colorHex: string;
+  /** null = accès à toute l'équipe (comportement historique) ; sinon, liste de noms de flottes (voir ScenarioFleet.name). */
+  fleetNames: string[] | null;
+};
+
 export async function instantiateScenario(
   prisma: PrismaClient,
   definition: ScenarioDefinition,
-  options: { withArbiter?: boolean; turnMinutesOverride?: number } = {}
+  options: {
+    withArbiter?: boolean;
+    turnMinutesOverride?: number;
+    // Bloc 2 (plusieurs joueurs par camp) : un ou plusieurs joueurs par
+    // équipe, chacun scopé à un sous-ensemble de flottes. Équipe absente de
+    // cette table = comportement historique (un seul joueur, toute l'équipe).
+    playersByTeamName?: Record<string, PlayerSlotConfig[]>;
+  } = {}
 ) {
   // Échelle de temps initiale ajustable à la création (Lobby) : ne change
   // que la durée du premier tour stratégique, pas l'échelle du combat
@@ -126,6 +145,9 @@ export async function instantiateScenario(
 
   // Équipes, flottes, unités
   const teamIdByName = new Map<string, string>();
+  // Clé "équipe::flotte" — plusieurs équipes peuvent réutiliser le même nom
+  // de flotte, d'où le namespacing (voir playersByTeamName ci-dessous).
+  const fleetIdByTeamAndName = new Map<string, string>();
   for (const t of definition.teams) {
     const team = await prisma.team.create({
       data: { scenarioId: scenario.id, name: t.name, colorHex: t.colorHex },
@@ -134,6 +156,7 @@ export async function instantiateScenario(
 
     for (const f of t.fleets) {
       const fleet = await prisma.fleet.create({ data: { teamId: team.id, name: f.name } });
+      fleetIdByTeamAndName.set(`${t.name}::${f.name}`, fleet.id);
       for (const u of f.units) {
         const classId = classIdByKey.get(u.classKey);
         if (!classId) throw new Error(`Classe inconnue « ${u.classKey} » pour l'unité ${u.name}`);
@@ -185,7 +208,7 @@ export async function instantiateScenario(
   });
 
   // Participants
-  const participants: { role: string; label: string; token: string }[] = [];
+  const participants: { role: string; label: string; token: string; colorHex?: string }[] = [];
   if (options.withArbiter !== false) {
     const arbiter = await prisma.participant.create({
       data: { scenarioId: scenario.id, role: "ARBITER", displayName: "Arbitre" },
@@ -193,6 +216,32 @@ export async function instantiateScenario(
     participants.push({ role: "ARBITER", label: "Arbitre", token: arbiter.token });
   }
   for (const t of definition.teams) {
+    const slots = options.playersByTeamName?.[t.name];
+    if (slots && slots.length > 0) {
+      // Plusieurs joueurs pour cette équipe (bloc 2) : un participant scopé
+      // par joueur, plutôt que l'unique participant "toute l'équipe" par défaut.
+      for (const slot of slots) {
+        const fleetIds =
+          slot.fleetNames?.map((name) => {
+            const id = fleetIdByTeamAndName.get(`${t.name}::${name}`);
+            if (!id) throw new Error(`Flotte inconnue « ${name} » pour l'équipe ${t.name}`);
+            return id;
+          }) ?? null;
+        const p = await prisma.participant.create({
+          data: {
+            scenarioId: scenario.id,
+            role: "PLAYER",
+            teamId: teamIdByName.get(t.name)!,
+            displayName: slot.displayName,
+            colorHex: slot.colorHex,
+            scopeAllFleetsInTeam: fleetIds === null,
+            ...(fleetIds ? { fleetScopes: { create: fleetIds.map((fleetId) => ({ fleetId })) } } : {}),
+          },
+        });
+        participants.push({ role: "PLAYER", label: `${t.name} — ${slot.displayName}`, token: p.token, colorHex: slot.colorHex });
+      }
+      continue;
+    }
     const p = await prisma.participant.create({
       data: {
         scenarioId: scenario.id,
