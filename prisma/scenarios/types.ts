@@ -70,6 +70,16 @@ export type ScenarioUnit = {
   lng: number;
   headingDeg?: number;
   historicalNote?: string;
+  /**
+   * Base aérienne d'affectation (avions uniquement) — distincte de lat/lng,
+   * qui reste la position de départ affichée sur la carte au premier tour
+   * (éventuellement en vol de transit). Un ordre de patrouille aérienne
+   * ramène l'avion ici, pas à sa position de départ. Repli sur lat/lng côté
+   * moteur si absent.
+   */
+  baseLat?: number;
+  baseLng?: number;
+  baseName?: string;
 };
 
 export type ScenarioFleet = {

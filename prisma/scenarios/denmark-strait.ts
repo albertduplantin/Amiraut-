@@ -251,6 +251,13 @@ export const denmarkStrait: ScenarioDefinition = {
               lng: -29.9,
               headingDeg: 210,
               historicalNote: "En patrouille de recherche dans le détroit au moment du contact — exemple de la couverture aérienne alliée pendant la traque du Bismarck.",
+              // Position de départ = en plein vol de transit dans le détroit,
+              // pas sa base : un ordre de patrouille le ramène à Reykjavik
+              // (240 Squadron, hydravions amarrés dans Skerjafjörður), pas au
+              // point où il se trouvait quand l'ordre est donné.
+              baseLat: 64.13,
+              baseLng: -21.94,
+              baseName: "Reykjavik (Islande)",
             },
           ],
         },

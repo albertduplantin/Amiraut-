@@ -56,6 +56,8 @@ type UnitDto = {
   turningRadiusM: number;
   accelerationKnotsPerMin: number;
   enduranceMinutes: number | null;
+  /** Base aérienne d'affectation (avions), distincte de la position de départ — voir Unit.baseName. */
+  baseName: string | null;
   /** Installation immobile (ex: station d'écoute côtière) — un seul ordre permanent suffit pour toute la partie. */
   passive: boolean;
   // Bloc 3 — ordres permanents.
@@ -1259,6 +1261,12 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
             <tr>
               <td className="py-0.5 pr-2 text-slate-500">Autonomie de vol</td>
               <td>{unit.enduranceMinutes} min</td>
+            </tr>
+          )}
+          {unit.baseName && (
+            <tr>
+              <td className="py-0.5 pr-2 text-slate-500">Base d&apos;attache</td>
+              <td>{unit.baseName}</td>
             </tr>
           )}
           {unit.depthChargesRemaining != null && (

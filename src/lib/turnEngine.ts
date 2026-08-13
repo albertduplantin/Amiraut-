@@ -298,8 +298,12 @@ export async function saveAirPatrolOrder(params: { turnId: string; unitId: strin
         standingOrderKind: "AIR_PATROL",
         standingSpeedKnots: null,
         airMissionState: "OUTBOUND",
-        airHomeLat: unit.currentLat,
-        airHomeLng: unit.currentLng,
+        // Base d'affectation si le scénario en définit une (voir
+        // Unit.baseLat/Lng) — sinon repli sur la position courante, comme
+        // avant : compatible avec les scénarios qui n'ont pas encore de
+        // base distincte renseignée.
+        airHomeLat: unit.baseLat ?? unit.currentLat,
+        airHomeLng: unit.baseLng ?? unit.currentLng,
         airPatrolLat: patrolPoint.lat,
         airPatrolLng: patrolPoint.lng,
         fuelMinutesRemaining: unit.unitClass.enduranceMinutes ?? DEFAULT_ENDURANCE_MINUTES,

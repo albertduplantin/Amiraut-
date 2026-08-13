@@ -475,6 +475,7 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
         accelerationKnotsPerMin:
           u.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(u.unitClass.category, u.unitClass.name),
         enduranceMinutes: u.unitClass.enduranceMinutes,
+        baseName: u.baseName,
         passive: u.unitClass.passive,
         standingOrderActive: u.standingOrderActive,
         standingOrderKind: u.standingOrderKind,

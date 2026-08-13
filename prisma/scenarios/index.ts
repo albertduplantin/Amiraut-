@@ -179,6 +179,9 @@ export async function instantiateScenario(
             torpedoesRemaining: unitClass.torpedoStock ?? undefined,
             batteryChargePercent: unitClass.category === "SUBMARINE" ? 100 : undefined,
             oxygenHoursRemaining: unitClass.category === "SUBMARINE" ? unitClass.oxygenEnduranceHours : undefined,
+            baseLat: u.baseLat,
+            baseLng: u.baseLng,
+            baseName: u.baseName,
           },
         });
       }

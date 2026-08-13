@@ -201,6 +201,16 @@ model Unit {
   standingOrderActive  Boolean            @default(false)
   standingOrderKind    StandingOrderKind?
   standingSpeedKnots   Float?
+  // Base aérienne d'affectation (avions uniquement) — distincte de la
+  // position courante : un terrain fixe (ex. RAF Sullom Voe), pas
+  // l'endroit où l'avion se trouve au moment où l'ordre de patrouille est
+  // donné (qui peut être un point de transit ad hoc). saveAirPatrolOrder
+  // s'en sert pour airHomeLat/Lng, avec repli sur la position courante si
+  // absente (compatible avec les scénarios existants, non renseignés).
+  // Nullable pour toute unité non aérienne.
+  baseLat              Float?
+  baseLng              Float?
+  baseName             String?
   // Patrouille aérienne (avions uniquement) : décollage depuis airHome →
   // recherche en boucle autour de airPatrol → retour se poser à airHome dès
   // que le carburant restant ne permet plus qu'un aller simple, puis nouveau

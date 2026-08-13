@@ -80,6 +80,9 @@ const UnitSchema = z.object({
   lng: z.number().min(-180).max(180),
   headingDeg: z.number().min(0).max(360).optional(),
   historicalNote: z.string().optional(),
+  baseLat: z.number().min(-90).max(90).optional(),
+  baseLng: z.number().min(-180).max(180).optional(),
+  baseName: z.string().optional(),
 });
 
 const FleetSchema = z.object({
