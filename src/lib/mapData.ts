@@ -70,7 +70,7 @@ export function colorForId(id: string): string {
 }
 
 export function multiLineFeatureCollectionColored(
-  paths: { points: LatLng[]; color: string }[]
+  paths: { points: LatLng[]; color: string; opacity?: number; width?: number }[]
 ): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
@@ -79,7 +79,7 @@ export function multiLineFeatureCollectionColored(
       .map((p) => ({
         type: "Feature" as const,
         geometry: { type: "LineString" as const, coordinates: p.points.map((pt) => [pt.lng, pt.lat]) },
-        properties: { color: p.color },
+        properties: { color: p.color, opacity: p.opacity ?? 1, width: p.width ?? 3 },
       })),
   };
 }

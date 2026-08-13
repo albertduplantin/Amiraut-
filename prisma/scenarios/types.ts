@@ -58,6 +58,8 @@ export type ScenarioUnitClass = {
   torpedoStock?: number;
   /** Autonomie de vol (avions uniquement) — voir Unit.fuelMinutesRemaining et le bloc 3 (patrouilles). */
   enduranceMinutes?: number;
+  /** Installation immobile (ex: station d'écoute côtière) — voir UnitClass.passive. */
+  passive?: boolean;
 };
 
 export type ScenarioUnit = {

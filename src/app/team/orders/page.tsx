@@ -64,6 +64,23 @@ async function renderTacticalView(engagementId: string, teamId: string) {
     const existing = bestContactByTarget.get(c.targetUnitId);
     if (!existing || c.distanceNm < existing.distanceNm) bestContactByTarget.set(c.targetUnitId, c);
   }
+  // Une cible coulée n'est plus « en contact » au sens capteur — elle
+  // disparaît normalement de TacticalContact — mais si on l'a nous-mêmes
+  // envoyée par le fond, on le sait déjà : pas une fuite de brouillard de
+  // guerre que de garder son dernier relevé un tour de plus avec le statut
+  // à jour, plutôt que de la voir s'évaporer sans explication (voir la
+  // fenêtre surgissante "navire coulé" dans TacticalView, qui a besoin de
+  // ce statut pour se déclencher côté ennemi).
+  for (const targetUnitId of enemyUnitIds) {
+    if (bestContactByTarget.has(targetUnitId)) continue;
+    if (enemyById.get(targetUnitId)?.status !== "SUNK") continue;
+    const lastKnown = await prisma.tacticalContact.findFirst({
+      where: { engagementId, observerTeamId: teamId, targetUnitId },
+      include: { targetUnit: { include: { unitClass: true } } },
+      orderBy: { roundNumber: "desc" },
+    });
+    if (lastKnown) bestContactByTarget.set(targetUnitId, lastKnown);
+  }
 
   // Sillage estompé des dernières manches (retour joueur : "voir la
   // trajectoire" sans encombrer la carte indéfiniment) : jusqu'à 3 segments
@@ -363,6 +380,7 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
             enduranceMinutes: true,
             turningRadiusM: true,
             accelerationKnotsPerMin: true,
+            passive: true,
           },
         },
         fleet: { select: { name: true } },
@@ -384,6 +402,21 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
     prisma.unit.count({ where: { scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } } }),
     prisma.unitOrder.count({ where: { turnId: turn.id } }),
   ]);
+
+  // Épaves du camp : uniquement pour l'affichage (marqueur d'épave sur la
+  // carte) — jamais mêlées à `units` ci-dessus, qui reste réservé aux
+  // unités pouvant recevoir un ordre (liste, flottes, brouillons...).
+  const wrecks = await prisma.unit.findMany({
+    where: { scenarioId, status: "SUNK", fleet: { teamId, ...(fleetIds ? { id: { in: fleetIds } } : {}) } },
+    select: {
+      id: true,
+      name: true,
+      currentLat: true,
+      currentLng: true,
+      currentHeadingDeg: true,
+      unitClass: { select: { name: true, category: true, lengthMeters: true } },
+    },
+  });
 
   return (
     <OrdersClient
@@ -428,6 +461,7 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
         status: u.status,
         healthCurrent: u.healthCurrent,
         healthMax: u.healthMax,
+        damageRatio: u.healthMax && u.healthMax > 0 ? 1 - Math.max(0, u.healthCurrent ?? u.healthMax) / u.healthMax : 0,
         currentLat: u.currentLat,
         currentLng: u.currentLng,
         currentHeadingDeg: u.currentHeadingDeg,
@@ -441,6 +475,7 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
         accelerationKnotsPerMin:
           u.unitClass.accelerationKnotsPerMin ?? defaultAccelerationKnotsPerMin(u.unitClass.category, u.unitClass.name),
         enduranceMinutes: u.unitClass.enduranceMinutes,
+        passive: u.unitClass.passive,
         standingOrderActive: u.standingOrderActive,
         standingOrderKind: u.standingOrderKind,
         airMissionState: u.airMissionState,
@@ -458,6 +493,16 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
                 isStanding: u.orders[0].isStanding,
               }
             : null,
+      }))}
+      wrecks={wrecks.map((w) => ({
+        id: w.id,
+        name: w.name,
+        className: w.unitClass.name,
+        category: w.unitClass.category,
+        lengthMeters: w.unitClass.lengthMeters,
+        currentLat: w.currentLat,
+        currentLng: w.currentLng,
+        currentHeadingDeg: w.currentHeadingDeg,
       }))}
     />
   );

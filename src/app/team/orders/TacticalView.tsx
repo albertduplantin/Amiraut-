@@ -10,7 +10,7 @@ import {
   multiLineFeatureCollectionColored,
   pointsFeatureCollection,
 } from "@/lib/mapData";
-import { clampPathToBudget, destinationPoint, pathLengthNm, speedBudgetNm, turnPenaltyNm, bearingDeg, type LatLng } from "@/lib/geo";
+import { clampPathToBudget, destinationPoint, pathLengthNm, speedBudgetNm, turnPenaltyNm, bearingDeg, filletPath, type LatLng } from "@/lib/geo";
 import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 import {
   gunHitChancePercent,
@@ -26,6 +26,7 @@ import {
   finishFirePhaseAction,
   sendBattleChatAction,
 } from "./tacticalActions";
+import { SunkShipModal, type SunkShipInfo } from "./SunkShipModal";
 
 const NM_TO_M = 1852;
 
@@ -38,14 +39,26 @@ const GUN_SOUND_URLS = [
   "/sounds/guns/gun-05.mp3",
 ];
 
-/** Teintes du sillage estompé, du segment le plus récent (le plus visible) au plus ancien — au-delà, plus rien ne s'affiche. */
-const TRAIL_SHADES = ["#0f172a", "#334155", "#64748b"];
+/**
+ * Sillage qui s'estompe avec l'âge : une seule teinte claire (écume plutôt
+ * que trait sombre), l'opacité et l'épaisseur diminuant à chaque manche de
+ * plus en plus ancienne jusqu'à disparaître — TRAIL_STEPS segments maximum.
+ */
+const TRAIL_COLOR = "#e0f2fe";
+const TRAIL_STEPS = 4;
 
-/** Découpe un historique de positions (le plus ancien en premier) en segments consécutifs, du plus récent au plus ancien, colorés en dégradé — au plus TRAIL_SHADES.length segments. */
-function buildTrailSegments(trail: LatLng[]): { points: LatLng[]; color: string }[] {
-  const segments: { points: LatLng[]; color: string }[] = [];
-  for (let i = trail.length - 1; i > 0 && segments.length < TRAIL_SHADES.length; i--) {
-    segments.push({ points: [trail[i - 1], trail[i]], color: TRAIL_SHADES[segments.length] });
+/** Découpe un historique de positions (le plus ancien en premier) en segments consécutifs, du plus récent au plus ancien, opacité/épaisseur dégressives — au plus TRAIL_STEPS segments. */
+function buildTrailSegments(trail: LatLng[]): { points: LatLng[]; color: string; opacity: number; width: number }[] {
+  const segments: { points: LatLng[]; color: string; opacity: number; width: number }[] = [];
+  for (let i = trail.length - 1; i > 0 && segments.length < TRAIL_STEPS; i--) {
+    const age = segments.length; // 0 = le plus récent
+    const t = age / (TRAIL_STEPS - 1); // 0 (récent) .. 1 (le plus ancien affiché)
+    segments.push({
+      points: [trail[i - 1], trail[i]],
+      color: TRAIL_COLOR,
+      opacity: 0.8 - t * 0.65,
+      width: 3 - t * 1.6,
+    });
   }
   return segments;
 }
@@ -205,6 +218,41 @@ export function TacticalView(props: {
 
   const livingOwnUnits = props.ownUnits.filter((u) => u.status !== "SUNK");
   const liveContacts = props.contacts.filter((c) => c.status !== "SUNK");
+
+  // Fenêtre surgissante "navire coulé" : détecte les transitions vers SUNK
+  // d'un relevé de props au suivant (navire propre coulé par l'adversaire,
+  // ou contact ennemi dont on apprend qu'il a coulé) plutôt que de dépendre
+  // d'un champ spécifique dans le résultat de tir — couvre les deux sens
+  // uniformément, y compris quand ce n'est pas nous qui avons tiré le coup
+  // fatal. Ajustement de state pendant le rendu (comparaison à un relevé
+  // précédent mémorisé), pas dans un effect : évite un aller-retour de
+  // rendu supplémentaire pour une simple dérivation de props.
+  const [prevStatusMap, setPrevStatusMap] = useState<Map<string, string> | null>(null);
+  const [sunkQueue, setSunkQueue] = useState<SunkShipInfo[]>([]);
+  const currentStatusMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const u of props.ownUnits) m.set(u.id, u.status);
+    for (const c of props.contacts) m.set(`contact:${c.targetUnitId}`, c.status);
+    return m;
+  }, [props.ownUnits, props.contacts]);
+  if (currentStatusMap !== prevStatusMap) {
+    if (prevStatusMap) {
+      const newlySunk: SunkShipInfo[] = [];
+      for (const u of props.ownUnits) {
+        if (prevStatusMap.get(u.id) && prevStatusMap.get(u.id) !== "SUNK" && u.status === "SUNK") {
+          newlySunk.push({ id: u.id, name: u.name, className: u.className, profileImageUrl: u.profileImageUrl, own: true });
+        }
+      }
+      for (const c of props.contacts) {
+        const key = `contact:${c.targetUnitId}`;
+        if (prevStatusMap.get(key) && prevStatusMap.get(key) !== "SUNK" && c.status === "SUNK") {
+          newlySunk.push({ id: c.targetUnitId, name: c.name, className: c.className, profileImageUrl: c.profileImageUrl, own: false });
+        }
+      }
+      if (newlySunk.length > 0) setSunkQueue((prev) => [...prev, ...newlySunk]);
+    }
+    setPrevStatusMap(currentStatusMap);
+  }
 
   const [selectedShipId, setSelectedShipId] = useState<string | null>(livingOwnUnits[0]?.id ?? null);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
@@ -410,19 +458,24 @@ export function TacticalView(props: {
     });
   }
 
-  /** Après un tir réussi : passe à la prochaine pièce non tirée du même navire (cible conservée), sinon au prochain navire n'ayant pas fini de tirer — le joueur reste libre d'en choisir un autre à tout moment. */
+  /**
+   * Après un tir réussi : passe à la prochaine pièce non tirée du même
+   * navire (cible conservée). Quand c'était sa dernière arme — souvent le
+   * cas dès le premier tir pour un navire n'ayant qu'une seule batterie de
+   * torpilles — on reste sur son panneau plutôt que de sauter aussitôt vers
+   * un autre navire : sinon le résultat (« ✓ tiré », jet, narration)
+   * s'affiche bien sous la ligne de l'arme, mais personne ne le voit avant
+   * d'être déjà passé à autre chose. Le joueur choisit lui-même le navire
+   * suivant dans la liste, à son rythme.
+   */
   function advanceAfterShot(ship: OwnUnit, firedSlot: string) {
     const remainingSlots = activeWeaponSlotsForShip(ship).filter((s) => s !== firedSlot && !firedBySlot[`${ship.id}|${s}`]);
     if (remainingSlots.length > 0) {
       setSelectedWeaponSlot(remainingSlots[0]);
       return;
     }
-    const nextShip = unfiredShips.find((u) => u.id !== ship.id);
-    if (nextShip) setSelectedShipId(nextShip.id);
-    else {
-      setSelectedWeaponSlot(null);
-      setSelectedTargetId(null);
-    }
+    setSelectedWeaponSlot(null);
+    setSelectedTargetId(null);
   }
 
   function validateShot() {
@@ -530,7 +583,7 @@ export function TacticalView(props: {
       // submitTacticalMovementForUnit) — à pleine vitesse disponible.
       const previewPath = selectedShip.rudderJammed
         ? [start, destinationPoint(start, selectedShip.headingDeg ?? 0, maxBudgetNm)]
-        : [start, ...draft.path];
+        : filletPath([start, ...draft.path], selectedShip.turningRadiusM / NM_TO_M);
       list.push({ id: "draft-path", kind: "line", data: lineFeatureCollection(previewPath), color: isPathValid ? "#facc15" : "#f87171", width: 3 });
       if (!selectedShip.rudderJammed) {
         // Deux anneaux-repères autour de la position actuelle : le trajet
@@ -569,7 +622,14 @@ export function TacticalView(props: {
       if (trail && trail.length > 0) trailSegments.push(...buildTrailSegments([...trail, { lat: c.lat, lng: c.lng }]));
     }
     if (trailSegments.length > 0) {
-      list.push({ id: "unit-trails", kind: "line", data: multiLineFeatureCollectionColored(trailSegments), colorByFeature: true, width: 3 });
+      list.push({
+        id: "unit-trails",
+        kind: "line",
+        data: multiLineFeatureCollectionColored(trailSegments),
+        colorByFeature: true,
+        opacityByFeature: true,
+        widthByFeature: true,
+      });
     }
 
     if (isMovementPhase && showEnemyProjection) {
@@ -1021,6 +1081,10 @@ export function TacticalView(props: {
           </div>
         </aside>
       </div>
+
+      {sunkQueue.length > 0 && (
+        <SunkShipModal ship={sunkQueue[0]} onClose={() => setSunkQueue((prev) => prev.slice(1))} />
+      )}
     </div>
   );
 }

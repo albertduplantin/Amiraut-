@@ -101,6 +101,11 @@ model UnitClass {
   profileImageUrl       String? // silhouette de profil (vue latérale)
   planImageUrl          String? // silhouette vue de dessus, si disponible
   historicalNote        String? // contexte historique du type de navire
+  // Installation immobile (ex: station d'écoute côtière) plutôt qu'un
+  // navire : ne peut réalistiquement pas se déplacer, l'UI le signale aux
+  // joueurs (badge/tooltip) plutôt que de les laisser deviner pourquoi elle
+  // ne bouge jamais — voir Signal/HF_DF et prisma/scenarios/north-cape.ts.
+  passive               Boolean      @default(false)
   enduranceMinutes      Int? // réservé phase 2 (autonomie/carburant), inutilisé en V1
   weaponSystems         Json? // fiche d'armement historique affichée aux joueurs (texte libre)
   combatProfile         Json? // armement structuré utilisé par le moteur de combat, voir CombatProfile dans combat.ts

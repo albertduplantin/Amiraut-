@@ -131,36 +131,43 @@ function lerpColorHex(a: string, b: string, t: number): string {
  */
 function buildSmokeOverlay(heightPx: number, intensity: number): string {
   const t = Math.max(0, Math.min(1, intensity));
-  const scale = heightPx / 42;
-  const w = Math.round(30 * scale);
-  const h = Math.round(38 * scale);
+  // Panache nettement plus grand que la coque elle-même (une vraie colonne
+  // de fumée domine visuellement un navire touché) et un plancher d'opacité
+  // assez haut pour rester lisible même à faible dégât, sur fond d'océan clair.
+  const scale = (heightPx / 42) * (1.15 + t * 0.35);
+  const w = Math.round(34 * scale);
+  const h = Math.round(48 * scale);
   const id = `smoke${smokeIdCounter++}`;
-  const baseColor = lerpColorHex("#94a3b8", "#151b26", t);
-  const lightColor = lerpColorHex("#e2e8f0", "#57657a", t);
-  const opacity = 0.4 + t * 0.5;
-  const riseSeconds = 7 - t * 2; // un panache plus dense se disperse un peu plus lentement.
+  const baseColor = lerpColorHex("#64748b", "#0c0f14", t);
+  const lightColor = lerpColorHex("#cbd5e1", "#3f4757", t);
+  const opacity = 0.55 + t * 0.4;
+  const riseSeconds = 6 - t * 1.5; // un panache plus dense se disperse un peu plus lentement.
+  const driftSeconds = riseSeconds * 1.6; // léger balancement latéral (vent), plus lent que la montée.
 
   return `
-    <svg width="${w}" height="${h}" viewBox="0 0 30 38" style="position:absolute;left:50%;top:0;transform:translate(-50%,-90%);pointer-events:none;overflow:visible;">
+    <svg width="${w}" height="${h}" viewBox="0 0 34 48" style="position:absolute;left:50%;top:0;transform:translate(-50%,-92%);pointer-events:none;overflow:visible;">
       <defs>
         <filter id="${id}b" x="-80%" y="-80%" width="260%" height="260%">
-          <feGaussianBlur stdDeviation="1.7" />
+          <feGaussianBlur stdDeviation="2" />
         </filter>
         <radialGradient id="${id}g1">
           <stop offset="0%" stop-color="${baseColor}" stop-opacity="${opacity}" />
           <stop offset="100%" stop-color="${baseColor}" stop-opacity="0" />
         </radialGradient>
         <radialGradient id="${id}g2">
-          <stop offset="0%" stop-color="${lightColor}" stop-opacity="${opacity * 0.7}" />
+          <stop offset="0%" stop-color="${lightColor}" stop-opacity="${opacity * 0.75}" />
           <stop offset="100%" stop-color="${lightColor}" stop-opacity="0" />
         </radialGradient>
       </defs>
-      <g class="smoke-plume" filter="url(#${id}b)" style="animation: smoke-rise ${riseSeconds}s ease-in-out infinite; transform-origin: 15px 30px;">
-        <ellipse cx="15" cy="31" rx="7" ry="6" fill="url(#${id}g1)" />
-        <ellipse cx="10.5" cy="22" rx="6" ry="5.2" fill="url(#${id}g1)" />
-        <ellipse cx="19.5" cy="18" rx="5.4" ry="4.8" fill="url(#${id}g1)" />
-        <ellipse cx="12.5" cy="10" rx="4.6" ry="4" fill="url(#${id}g2)" />
-        <ellipse cx="20" cy="6.5" rx="3.6" ry="3.2" fill="url(#${id}g2)" />
+      <g class="smoke-drift" style="animation: smoke-drift ${driftSeconds}s ease-in-out infinite;">
+        <g class="smoke-plume" filter="url(#${id}b)" style="animation: smoke-rise ${riseSeconds}s ease-in-out infinite; transform-origin: 17px 40px;">
+          <ellipse cx="17" cy="41" rx="8.5" ry="7.2" fill="url(#${id}g1)" />
+          <ellipse cx="11.5" cy="31" rx="7.4" ry="6.4" fill="url(#${id}g1)" />
+          <ellipse cx="23" cy="26" rx="6.8" ry="5.8" fill="url(#${id}g1)" />
+          <ellipse cx="14" cy="18" rx="6" ry="5.2" fill="url(#${id}g2)" />
+          <ellipse cx="24.5" cy="13" rx="5" ry="4.4" fill="url(#${id}g2)" />
+          <ellipse cx="16.5" cy="6" rx="4" ry="3.6" fill="url(#${id}g2)" />
+        </g>
       </g>
     </svg>
   `;

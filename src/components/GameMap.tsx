@@ -21,6 +21,10 @@ export type MapSourceConfig = {
   color?: string;
   /** Si vrai, utilise la propriété `color` de chaque feature au lieu de `color`. */
   colorByFeature?: boolean;
+  /** Si vrai, utilise la propriété `opacity` de chaque feature (ligne uniquement) — ex: sillage qui s'estompe. */
+  opacityByFeature?: boolean;
+  /** Si vrai, utilise la propriété `width` de chaque feature (ligne uniquement). */
+  widthByFeature?: boolean;
   radius?: number;
   width?: number;
   dashed?: boolean;
@@ -565,6 +569,8 @@ function applyLayer(map: MapLibreMap, config: MapSourceConfig) {
   const colorExpr = config.colorByFeature ? (["get", "color"] as unknown as string) : (config.color ?? "#22d3ee");
 
   if (config.kind === "line") {
+    const opacityExpr = config.opacityByFeature ? (["get", "opacity"] as unknown as number) : 1;
+    const widthExpr = config.widthByFeature ? (["get", "width"] as unknown as number) : (config.width ?? 2);
     map.addLayer({
       id: `${config.id}-line`,
       type: "line",
@@ -572,7 +578,8 @@ function applyLayer(map: MapLibreMap, config: MapSourceConfig) {
       layout: { "line-cap": "round", "line-join": "round" },
       paint: {
         "line-color": colorExpr,
-        "line-width": config.width ?? 2,
+        "line-width": widthExpr,
+        "line-opacity": opacityExpr,
         ...(config.dashed ? { "line-dasharray": [2, 2] } : {}),
       },
     });

@@ -297,6 +297,7 @@ export const northCape: ScenarioDefinition = {
       // classe, qui n'a ni arme ni capteur physique de proximité.
       category: "SURFACE_SHIP",
       maxSpeedKnots: 1,
+      passive: true,
       sensors: [
         // Réseau de stations HF/DF côtières (Islande, Écosse, îles Féroé…)
         // triangulant par onde réfléchie sur l'ionosphère — portée réelle

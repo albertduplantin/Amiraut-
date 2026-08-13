@@ -11,7 +11,7 @@ import {
   multiLineFeatureCollectionColored,
   pointsFeatureCollection,
 } from "@/lib/mapData";
-import { clampPathToBudget, pathLengthNm, speedBudgetNm, distanceNm, type LatLng } from "@/lib/geo";
+import { clampPathToBudget, pathLengthNm, speedBudgetNm, distanceNm, filletPath, type LatLng } from "@/lib/geo";
 import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 import {
   submitOrderAction,
@@ -43,6 +43,7 @@ type UnitDto = {
   status: string;
   healthCurrent: number | null;
   healthMax: number | null;
+  damageRatio: number;
   currentLat: number;
   currentLng: number;
   currentHeadingDeg: number | null;
@@ -55,6 +56,8 @@ type UnitDto = {
   turningRadiusM: number;
   accelerationKnotsPerMin: number;
   enduranceMinutes: number | null;
+  /** Installation immobile (ex: station d'écoute côtière) — un seul ordre permanent suffit pour toute la partie. */
+  passive: boolean;
   // Bloc 3 — ordres permanents.
   standingOrderActive: boolean;
   standingOrderKind: "TRANSIT" | "AIR_PATROL" | null;
@@ -68,6 +71,22 @@ type UnitDto = {
 };
 
 /**
+ * Épave d'une unité coulée : uniquement pour l'affichage (marqueur sur la
+ * carte), jamais mêlée à `UnitDto`/`units` — une épave ne reçoit jamais
+ * d'ordre et n'apparaît dans aucune liste de sélection.
+ */
+type WreckDto = {
+  id: string;
+  name: string;
+  className: string;
+  category: string;
+  lengthMeters: number | null;
+  currentLat: number;
+  currentLng: number;
+  currentHeadingDeg: number | null;
+};
+
+/**
  * Vitesse à laquelle un sous-marin patrouille en écoutant activement à
  * l'hydrophone : historiquement, la portée utile de détection acoustique
  * (GHG) restait significative jusqu'à ~4-6nds, puis chutait vite au-delà à
@@ -75,6 +94,7 @@ type UnitDto = {
  * gardait encore 5-10nm sur un destroyer, 3.5-7.5nm sur un cargo).
  */
 const LISTENING_SPEED_KNOTS = 4;
+const NM_TO_M = 1852;
 
 const DEPTH_BAND_ORDER = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"] as const;
 type DepthBandKey = (typeof DEPTH_BAND_ORDER)[number];
@@ -112,8 +132,9 @@ export function OrdersClient(props: {
   lastReportTurnNumber: number | null;
   lastContacts: LastContact[];
   units: UnitDto[];
+  wrecks: WreckDto[];
 }) {
-  const { turnId, turnNumber, turnDurationMinutes, weather, units, teamFleets, lastContacts, lastReportTurnNumber } = props;
+  const { turnId, turnNumber, turnDurationMinutes, weather, units, wrecks, teamFleets, lastContacts, lastReportTurnNumber } = props;
 
   const fleets = useMemo(() => {
     const byFleet = new Map<string, UnitDto[]>();
@@ -446,7 +467,7 @@ export function OrdersClient(props: {
     const savedPaths = units
       .filter((u) => unitDrafts[u.id]?.saved)
       .map((u) => ({
-        points: [{ lat: u.currentLat, lng: u.currentLng }, ...unitDrafts[u.id].waypoints],
+        points: filletPath([{ lat: u.currentLat, lng: u.currentLng }, ...unitDrafts[u.id].waypoints], u.turningRadiusM / NM_TO_M),
         color: colorForId(u.id),
       }))
       .filter((p) => p.points.length >= 2);
@@ -523,7 +544,8 @@ export function OrdersClient(props: {
 
     if (mode === "unit" && selectedUnit && selectedUnitDraft && unitOrderTab === "path") {
       const start = { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
-      list.push({ id: "draft-path", kind: "line", data: lineFeatureCollection([start, ...selectedUnitDraft.waypoints]), color: "#facc15", width: 3 });
+      const smoothed = filletPath([start, ...selectedUnitDraft.waypoints], selectedUnit.turningRadiusM / NM_TO_M);
+      list.push({ id: "draft-path", kind: "line", data: lineFeatureCollection(smoothed), color: "#facc15", width: 3 });
       if (unitLastPoint) {
         list.push({
           id: "budget-ring",
@@ -545,7 +567,10 @@ export function OrdersClient(props: {
         radius: 9,
       });
 
-      const fleetPath = [selectedFleet.centroid, ...selectedFleetDraft.waypoints];
+      // Rayon de virage le plus large de la formation : la flotte tourne
+      // aussi serré que son navire le moins manœuvrant, jamais plus.
+      const fleetTurningRadiusNm = Math.max(...selectedFleet.units.map((u) => u.turningRadiusM)) / NM_TO_M;
+      const fleetPath = filletPath([selectedFleet.centroid, ...selectedFleetDraft.waypoints], fleetTurningRadiusNm);
       const perShipPaths = selectedFleet.units.map((u) => {
         const offset = { lat: u.currentLat - selectedFleet.centroid.lat, lng: u.currentLng - selectedFleet.centroid.lng };
         return fleetPath.map((p) => ({ lat: p.lat + offset.lat, lng: p.lng + offset.lng }));
@@ -581,23 +606,37 @@ export function OrdersClient(props: {
     airPatrolPoint,
   ]);
 
-  const shipMarkers = useMemo<ShipMarkerConfig[]>(
-    () =>
-      units.map((u) => {
-        const silhouette = classifySilhouette(u.category, u.className);
-        return {
-          id: u.id,
-          lat: u.currentLat,
-          lng: u.currentLng,
-          headingDeg: u.currentHeadingDeg ?? 0,
-          color: "#38bdf8",
-          silhouette,
-          lengthMeters: u.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
-          status: u.status as "ACTIVE" | "DAMAGED" | "SUNK",
-        };
-      }),
-    [units]
-  );
+  const shipMarkers = useMemo<ShipMarkerConfig[]>(() => {
+    const living = units.map((u) => {
+      const silhouette = classifySilhouette(u.category, u.className);
+      return {
+        id: u.id,
+        lat: u.currentLat,
+        lng: u.currentLng,
+        headingDeg: u.currentHeadingDeg ?? 0,
+        color: "#38bdf8",
+        silhouette,
+        lengthMeters: u.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+        status: u.status as "ACTIVE" | "DAMAGED" | "SUNK",
+        damageRatio: u.damageRatio,
+      };
+    });
+    const sunk = wrecks.map((w) => {
+      const silhouette = classifySilhouette(w.category, w.className);
+      return {
+        id: w.id,
+        lat: w.currentLat,
+        lng: w.currentLng,
+        headingDeg: w.currentHeadingDeg ?? 0,
+        color: "#38bdf8",
+        silhouette,
+        lengthMeters: w.lengthMeters ?? DEFAULT_LENGTH_METERS[silhouette],
+        status: "SUNK" as const,
+        damageRatio: 1,
+      };
+    });
+    return [...living, ...sunk];
+  }, [units, wrecks]);
 
   return (
     <div className="chart-room-bg flex h-screen w-full flex-col text-slate-100">
@@ -694,6 +733,14 @@ export function OrdersClient(props: {
                           {unit.standingOrderActive && (
                             <span className="text-sky-400" title="Ordre permanent en cours">
                               ⚓
+                            </span>
+                          )}
+                          {unit.passive && (
+                            <span
+                              className="text-violet-400"
+                              title="Unité passive : une installation immobile, pas un navire. Donnez-lui un ordre permanent une fois (vitesse minimale), puis oubliez-la — elle veille pour vous en tâche de fond."
+                            >
+                              📡
                             </span>
                           )}
                         </span>
@@ -1115,6 +1162,13 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
   return (
     <div className="space-y-2 border-t border-slate-800 pt-4">
       <h3 className="text-sm font-semibold text-slate-400">Caractéristiques</h3>
+      {unit.passive && (
+        <div className="rounded-md border border-violet-800 bg-violet-950/30 px-3 py-2 text-xs text-violet-200">
+          📡 <strong>Unité passive</strong> — une installation immobile (ex : station d&apos;écoute côtière), pas un
+          navire de guerre. Donnez-lui un ordre permanent une seule fois (vitesse minimale, case « Ordre permanent »),
+          puis oubliez-la : elle continue de veiller pour vous sans qu&apos;il faille jamais lui redonner d&apos;ordre.
+        </div>
+      )}
       {healthRatio !== null && (
         <div>
           <div className="flex items-center justify-between text-xs">

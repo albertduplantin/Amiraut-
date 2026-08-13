@@ -69,6 +69,7 @@ const UnitClassSchema = z.object({
   oxygenEnduranceHours: z.number().positive().optional(),
   torpedoStock: z.number().int().nonnegative().optional(),
   enduranceMinutes: z.number().positive().optional(),
+  passive: z.boolean().optional(),
 });
 
 const UnitSchema = z.object({

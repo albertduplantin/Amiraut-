@@ -102,6 +102,65 @@ export function turnPenaltyNm(points: LatLng[], turningRadiusNm: number): number
   return penalty;
 }
 
+/**
+ * Remplace chaque angle intérieur d'un chemin par une courbe arrondie au
+ * rayon de virage `radiusNm` plutôt qu'un coin à angle vif — un navire de
+ * cette époque ne tourne pas sur place. Purement cosmétique : la distance
+ * réelle du trajet (budget, pénalité de virage) reste calculée sur les
+ * points d'origine via pathLengthNm/turnPenaltyNm, jamais sur ce résultat —
+ * à n'utiliser que pour construire la géométrie affichée sur la carte.
+ *
+ * Approxime l'arc de cercle par une courbe de Bézier quadratique (point de
+ * contrôle au coin d'origine) plutôt qu'un vrai arc : la précision
+ * géométrique exacte ne change rien au rendu à l'échelle d'une carte, et
+ * évite d'avoir à localiser le centre du cercle en coordonnées géographiques.
+ */
+export function filletPath(points: LatLng[], radiusNm: number, segments = 8): LatLng[] {
+  if (points.length < 3 || radiusNm <= 0) return points;
+
+  const result: LatLng[] = [points[0]];
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = points[i - 1];
+    const corner = points[i];
+    const next = points[i + 1];
+
+    const distIn = distanceNm(prev, corner);
+    const distOut = distanceNm(corner, next);
+    const bearingIn = bearingDeg(prev, corner);
+    const bearingOut = bearingDeg(corner, next);
+    const turnDeg = angleDiff(bearingIn, bearingOut);
+
+    // Coin quasi droit, ou segments trop courts pour y loger un arc : on le
+    // garde tel quel plutôt que de produire une courbe dégénérée.
+    if (turnDeg < 2 || distIn < 0.02 || distOut < 0.02) {
+      result.push(corner);
+      continue;
+    }
+
+    const tangent = Math.min(radiusNm * Math.tan((turnDeg * Math.PI) / 360), distIn * 0.49, distOut * 0.49);
+    if (tangent < 0.01) {
+      result.push(corner);
+      continue;
+    }
+
+    const arcStart = destinationPoint(corner, (bearingIn + 180) % 360, tangent);
+    const arcEnd = destinationPoint(corner, bearingOut, tangent);
+
+    result.push(arcStart);
+    for (let s = 1; s < segments; s++) {
+      const t = s / segments;
+      const mt = 1 - t;
+      result.push({
+        lat: mt * mt * arcStart.lat + 2 * mt * t * corner.lat + t * t * arcEnd.lat,
+        lng: mt * mt * arcStart.lng + 2 * mt * t * corner.lng + t * t * arcEnd.lng,
+      });
+    }
+    result.push(arcEnd);
+  }
+  result.push(points[points.length - 1]);
+  return result;
+}
+
 type TimedTrack = {
   /** Position au temps `minutes` (bornée aux deux extrémités du chemin). */
   positionAt(minutesIntoTurn: number): LatLng;
