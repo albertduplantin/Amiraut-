@@ -37,6 +37,26 @@ const BATTERY_REFERENCE_SPEED_KNOTS = 4;
 const KURZSIGNAL_INTERCEPT_RANGE_RATIO = 0.35;
 
 /**
+ * Deux régimes bien distincts de goniométrie HF historiquement documentés
+ * (voir la recherche du projet, uboat.net/allies/technical/hfdf.htm et
+ * corvusintell.com/blog/sigint-rf/hf-direction-finding-network) :
+ *  - onde de sol (un HF/DF embarqué sur un escorteur) : 15-25nm, relèvement
+ *    quasi immédiat et précis — modélisée directement par le rangeNm du
+ *    capteur, sans marge d'erreur.
+ *  - onde réfléchie sur l'ionosphère (réseau de stations côtières
+ *    triangulant à distance, ex: Islande/Écosse/Terre-Neuve) : des
+ *    centaines à des milliers de milles, mais une position seulement
+ *    approximative — une « boîte » d'incertitude de 10 à 30nm de côté une
+ *    fois les relèvements recoupés, pas un point exact.
+ * Au-delà de HF_DF_SKYWAVE_RANGE_THRESHOLD_NM, un capteur HF_DF est donc
+ * traité comme un réseau à longue portée : la position rapportée est
+ * déplacée aléatoirement dans un rayon HF_DF_SKYWAVE_JITTER_NM plutôt que
+ * donnée exacte.
+ */
+const HF_DF_SKYWAVE_RANGE_THRESHOLD_NM = 60;
+const HF_DF_SKYWAVE_JITTER_NM = 15;
+
+/**
  * Durée d'un tour en mode bataille tactique. Le livret original résout le
  * combat par tranches de 5 minutes ; on reste dans cet ordre de grandeur
  * pour que manœuvres et tirs se jouent à l'échelle du combat plutôt qu'à
@@ -752,6 +772,13 @@ export async function resolveTurnDetections(turnId: string) {
         const d = distanceNm({ lat: observer.currentLat, lng: observer.currentLng }, senderPos);
         if (d > dfSensor.rangeNm * rangeMultiplier) continue;
 
+        // Réseau à longue portée (onde réfléchie) : position rapportée
+        // approximative, pas la position réelle — voir HF_DF_SKYWAVE_*.
+        const reportedPos =
+          dfSensor.rangeNm > HF_DF_SKYWAVE_RANGE_THRESHOLD_NM
+            ? destinationPoint(senderPos, Math.random() * 360, Math.random() * HF_DF_SKYWAVE_JITTER_NM)
+            : senderPos;
+
         interceptedSignalIds.add(signal.id);
         detectionRows.push({
           turnId,
@@ -762,8 +789,8 @@ export async function resolveTurnDetections(turnId: string) {
           cpaMinutesIntoTurn: 0,
           observerLatAtCpa: observer.currentLat,
           observerLngAtCpa: observer.currentLng,
-          targetLatAtCpa: senderPos.lat,
-          targetLngAtCpa: senderPos.lng,
+          targetLatAtCpa: reportedPos.lat,
+          targetLngAtCpa: reportedPos.lng,
           systemProposed: true,
           arbiterStatus: "PROPOSED",
         });

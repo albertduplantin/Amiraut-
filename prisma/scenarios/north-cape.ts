@@ -260,11 +260,12 @@ export const northCape: ScenarioDefinition = {
       sensors: [
         { type: "RADAR", rangeNm: 10 },
         { type: "VISUAL", rangeNm: 12 },
-        // Goniométrie HF (Huff-Duff) : généralisée sur l'escorte britannique
-        // fin 1943 (contrairement au détroit du Danemark en 1941) — voir
-        // Signal et resolveTurnDetections pour le déclenchement, uniquement
-        // sur une émission HF adverse, jamais par simple proximité.
-        { type: "HF_DF", rangeNm: 35 },
+        // Goniométrie HF embarquée (Huff-Duff), onde de sol : généralisée
+        // sur l'escorte britannique fin 1943 (contrairement au détroit du
+        // Danemark en 1941). Portée réaliste 15-25nm (uboat.net) — relevé
+        // quasi immédiat et précis, contrairement au réseau côtier à longue
+        // portée (voir la classe « Service d'écoute côtier » plus bas).
+        { type: "HF_DF", rangeNm: 22 },
       ],
       detectability: 0.75,
       iconKey: "destroyer",
@@ -284,6 +285,33 @@ export const northCape: ScenarioDefinition = {
         mainGuns: "4 x 120mm (4,7in)",
         torpedoes: "8 x 533mm (2 plateformes quadruples)",
       },
+    },
+    {
+      key: "coastal-df-network",
+      name: "Service d'écoute côtier (Amirauté)",
+      nation: "Royaume-Uni",
+      // Pas un navire de guerre : une installation à terre représentée
+      // comme une unité immobile pour réutiliser le même moteur de
+      // détection (voir historicalNote). Catégorie SURFACE_SHIP par
+      // simplicité — aucune UI ne dépend de cette distinction pour cette
+      // classe, qui n'a ni arme ni capteur physique de proximité.
+      category: "SURFACE_SHIP",
+      maxSpeedKnots: 1,
+      sensors: [
+        // Réseau de stations HF/DF côtières (Islande, Écosse, îles Féroé…)
+        // triangulant par onde réfléchie sur l'ionosphère — portée réelle
+        // de plusieurs centaines à plusieurs milliers de milles, ici
+        // suffisante pour couvrir toute la zone du scénario depuis la base.
+        // Au-delà de HF_DF_SKYWAVE_RANGE_THRESHOLD_NM, resolveTurnDetections
+        // rapporte une position volontairement imprécise (voir cette
+        // constante) : une « boîte » d'incertitude, pas un point exact.
+        { type: "HF_DF", rangeNm: 1200 },
+      ],
+      detectability: 0.05,
+      iconKey: "cargo",
+      resistancePoints: 1,
+      historicalNote:
+        "Représente le réseau de stations d'écoute côtières de l'Amirauté (Islande, Écosse, îles Féroé…) qui triangulaient par onde réfléchie sur l'ionosphère toute émission HF ennemie dans l'Atlantique Nord — le versant « longue portée » de la goniométrie, distinct du Huff-Duff embarqué à courte portée des destroyers. Immobile : à placer une fois en ordre permanent (vitesse minimale) au premier tour, puis à ne plus toucher.",
     },
   ],
 
@@ -399,6 +427,20 @@ export const northCape: ScenarioDefinition = {
             },
           ],
         },
+        {
+          name: "Renseignement (Amirauté)",
+          units: [
+            {
+              name: "Service d'écoute côtier",
+              classKey: "coastal-df-network",
+              lat: 58.9,
+              lng: -3.0,
+              headingDeg: 0,
+              historicalNote:
+                "Représente le réseau de stations HF/DF de l'Amirauté depuis leur base de Scapa Flow — c'est ce réseau, pas le Huff-Duff des destroyers, qui a mis Fraser sur la piste du Scharnhorst dès le 21 décembre. Portée longue mais position approximative : voir la fiche de la classe.",
+            },
+          ],
+        },
       ],
     },
   ],
@@ -406,11 +448,11 @@ export const northCape: ScenarioDefinition = {
   objectives: [
     {
       teamName: "Kriegsmarine — Ostfront",
-      text: "Localiser et attaquer le convoi JW 55B sans être détruit. Un seul navire, sans escorte : évitez un engagement décisif contre une force supérieure, et rendez compte à votre commandement — mais chaque émission HF risque une goniométrie adverse.",
+      text: "Localiser et attaquer le convoi JW 55B sans être détruit. Un seul navire, sans escorte : évitez un engagement décisif contre une force supérieure, et rendez compte à votre commandement — mais chaque émission HF risque une goniométrie adverse, à courte portée et précise si un destroyer est proche, à longue portée mais approximative sinon (le réseau côtier de l'Amirauté).",
     },
     {
       teamName: "Royal Navy — Home Fleet",
-      text: "Protéger le convoi et détruire le Scharnhorst en refermant vos deux forces sur lui sans qu'il les distingue l'une de l'autre avant qu'il ne soit trop tard pour rompre le contact.",
+      text: "Protéger le convoi et détruire le Scharnhorst en refermant vos deux forces sur lui sans qu'il les distingue l'une de l'autre avant qu'il ne soit trop tard pour rompre le contact. Placez votre unité « Service d'écoute côtier » en ordre permanent au premier tour puis oubliez-la : elle veille pour vous en tâche de fond. Deux forces séparées par des centaines de milles à coordonner : si vous jouez ce camp à plusieurs, considérez que toute coordination entre vous doit passer par la messagerie du bord (/team/comms), comme si vous étiez réellement sur deux navires distincts — c'est d'ailleurs la seule vraie règle du jeu Amirauté original pour ce cas.",
     },
   ],
 
