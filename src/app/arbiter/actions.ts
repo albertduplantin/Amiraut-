@@ -28,14 +28,14 @@ export async function confirmDetectionAction(formData: FormData) {
   const session = await getSession();
   assertArbiter(session);
   await setDetectionStatus(String(formData.get("detectionId")), "CONFIRMED");
-  revalidatePath("/arbiter/review");
+  revalidatePath("/arbiter");
 }
 
 export async function rejectDetectionAction(formData: FormData) {
   const session = await getSession();
   assertArbiter(session);
   await setDetectionStatus(String(formData.get("detectionId")), "REJECTED");
-  revalidatePath("/arbiter/review");
+  revalidatePath("/arbiter");
 }
 
 export async function addManualDetectionAction(formData: FormData) {
@@ -51,7 +51,7 @@ export async function addManualDetectionAction(formData: FormData) {
     note: formData.get("note") ? String(formData.get("note")) : undefined,
   });
 
-  revalidatePath("/arbiter/review");
+  revalidatePath("/arbiter");
 }
 
 export type UpdatePositionResult = { ok: true } | { ok: false; error: string };
@@ -72,7 +72,7 @@ export async function updateUnitPositionAction(params: {
 
   await prisma.unit.update({ where: { id: params.unitId }, data: { currentLat: params.lat, currentLng: params.lng } });
 
-  revalidatePath("/arbiter/positions");
+  revalidatePath("/arbiter");
   revalidatePath("/team/orders");
   return { ok: true };
 }
@@ -105,7 +105,7 @@ export async function updateFleetPositionAction(params: {
     )
   );
 
-  revalidatePath("/arbiter/positions");
+  revalidatePath("/arbiter");
   revalidatePath("/team/orders");
   return { ok: true };
 }
@@ -115,7 +115,6 @@ export async function publishTurnAction(formData: FormData) {
   assertArbiter(session);
   await publishTurn(String(formData.get("turnId")));
   revalidatePath("/arbiter");
-  revalidatePath("/arbiter/review");
   revalidatePath("/team/orders");
   revalidatePath("/team/reports");
   revalidatePath("/team/waiting");

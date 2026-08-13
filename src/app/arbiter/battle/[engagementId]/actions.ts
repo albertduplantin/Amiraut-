@@ -23,6 +23,7 @@ export async function toggleArbiterPauseAction(params: { engagementId: string; p
     throw error;
   }
   revalidatePath(`/arbiter/battle/${params.engagementId}`);
+  revalidatePath("/arbiter");
   revalidatePath("/team/orders");
   return { ok: true };
 }
@@ -44,6 +45,7 @@ export async function sendArbiterEventAction(params: { engagementId: string; bod
     throw error;
   }
   revalidatePath(`/arbiter/battle/${params.engagementId}`);
+  revalidatePath("/arbiter");
   revalidatePath("/team/orders");
   return { ok: true };
 }
@@ -69,6 +71,7 @@ export async function arbiterAdjustUnitAction(params: {
     throw error;
   }
   revalidatePath(`/arbiter/battle/${params.engagementId}`);
+  revalidatePath("/arbiter");
   revalidatePath("/team/orders");
   return { ok: true };
 }
@@ -83,7 +86,7 @@ export async function arbiterEndEngagementAction(params: { engagementId: string 
     throw error;
   }
   revalidatePath(`/arbiter/battle/${params.engagementId}`);
-  revalidatePath("/team/orders");
   revalidatePath("/arbiter");
+  revalidatePath("/team/orders");
   return { ok: true };
 }

@@ -1,9 +1,7 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { setWeatherAction } from "./actions";
-import { SubmitButton } from "./SubmitButton";
+import { ArbiterDashboard } from "./ArbiterDashboard";
 
 export default async function ArbiterDashboardPage() {
   const session = await getSession();
@@ -11,284 +9,158 @@ export default async function ArbiterDashboardPage() {
     redirect("/");
   }
 
-  const [scenario, turn, activeUnitCount] = await Promise.all([
+  const [scenario, turn] = await Promise.all([
     prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId } }),
     prisma.turn.findFirst({
       where: { scenarioId: session.scenarioId },
       orderBy: { number: "desc" },
       include: { weather: true },
     }),
-    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } } }),
   ]);
 
   if (!turn) {
     return <div className="p-6 text-slate-100">Aucun tour trouvé pour ce scénario.</div>;
   }
 
-  const [orderCount, lastPublishedTurn] = await Promise.all([
+  const [orderCount, activeUnitCount, teams, units, detections, engagements] = await Promise.all([
     prisma.unitOrder.count({ where: { turnId: turn.id } }),
-    prisma.turn.findFirst({
-      where: { scenarioId: session.scenarioId, status: "PUBLISHED" },
-      orderBy: { number: "desc" },
+    prisma.unit.count({ where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } } }),
+    prisma.team.findMany({ where: { scenarioId: session.scenarioId }, select: { id: true, name: true, colorHex: true } }),
+    prisma.unit.findMany({
+      where: { scenarioId: session.scenarioId, status: { in: ["ACTIVE", "DAMAGED"] } },
+      include: {
+        unitClass: { select: { name: true, category: true, lengthMeters: true } },
+        fleet: { select: { id: true, name: true, teamId: true, team: { select: { name: true, colorHex: true } } } },
+      },
+      orderBy: [{ fleet: { team: { name: "asc" } } }, { fleet: { name: "asc" } }, { name: "asc" }],
+    }),
+    turn.status === "PENDING_ARBITER_REVIEW" || turn.status === "RESOLVING"
+      ? prisma.detectionEvent.findMany({
+          where: { turnId: turn.id },
+          include: {
+            observerUnit: { select: { id: true, name: true, fleet: { select: { team: { select: { name: true } } } } } },
+            targetUnit: { select: { id: true, name: true, fleet: { select: { team: { select: { name: true } } } } } },
+          },
+          // Un second critère de tri est nécessaire : beaucoup de paires
+          // partagent exactement la même distance de CPA (formations
+          // symétriques), et sans lui l'ordre des ex-æquo n'est pas stable
+          // d'une requête à l'autre.
+          orderBy: [{ cpaDistanceNm: "asc" }, { id: "asc" }],
+        })
+      : Promise.resolve([]),
+    prisma.tacticalEngagement.findMany({
+      where: { scenarioId: session.scenarioId, status: { not: "RESOLVED" } },
+      include: {
+        participants: {
+          include: { unit: { select: { name: true, status: true, healthCurrent: true, healthMax: true } }, team: { select: { name: true, colorHex: true } } },
+        },
+      },
+      orderBy: { startedAt: "desc" },
     }),
   ]);
 
-  const combatEvents = lastPublishedTurn
-    ? await prisma.combatEvent.findMany({
-        where: { turnId: lastPublishedTurn.id },
-        include: {
-          attackerUnit: { select: { name: true, fleet: { select: { team: { select: { name: true } } } } } },
-          targetUnit: { select: { name: true, fleet: { select: { team: { select: { name: true } } } } } },
-        },
-        orderBy: { createdAt: "asc" },
-      })
-    : [];
-
-  const activeEngagements = await prisma.tacticalEngagement.findMany({
-    where: { scenarioId: session.scenarioId, status: { not: "RESOLVED" } },
-    include: { participants: { include: { unit: { select: { name: true } }, team: { select: { name: true } } } } },
-    orderBy: { startedAt: "desc" },
-  });
+  const engagementIds = engagements.map((e) => e.id);
+  const submissions =
+    engagementIds.length > 0
+      ? await prisma.tacticalSubmission.findMany({ where: { engagementId: { in: engagementIds } } })
+      : [];
+  const submittedByEngagement = new Map<string, string[]>();
+  for (const s of submissions) {
+    // Ne garde que les soumissions de la manche/phase courante de chaque engagement.
+    const eng = engagements.find((e) => e.id === s.engagementId);
+    if (!eng) continue;
+    if (s.roundNumber !== eng.roundNumber) continue;
+    if (s.phase !== (eng.status === "AWAITING_MOVEMENT" ? "MOVEMENT" : "FIRE")) continue;
+    const list = submittedByEngagement.get(s.engagementId) ?? [];
+    list.push(s.teamId);
+    submittedByEngagement.set(s.engagementId, list);
+  }
 
   return (
-    <div className="chart-room-bg min-h-screen p-6 text-slate-100">
-      <h1 className="font-display text-xl tracking-wide text-brass-300">{scenario.name}</h1>
-      <p className="mt-1 text-sm text-slate-400">
-        Tour {turn.number} — statut : {formatStatus(turn.status)} · durée{" "}
-        {turn.durationMinutes < 60 ? `${turn.durationMinutes} min` : `${turn.durationMinutes / 60} h`}
-        {turn.tacticalMode && (
-          <span className="ml-2 rounded bg-red-900/60 px-2 py-0.5 text-xs text-red-200">⚔ échelle tactique</span>
-        )}
-      </p>
-
-      {activeEngagements.length > 0 && (
-        <section className="panel-brass mt-4 max-w-2xl rounded-md border border-red-800 bg-red-950/20 p-4">
-          <h2 className="font-display mb-3 tracking-wide text-red-300">
-            ⚔ Combats tactiques en cours ({activeEngagements.length})
-          </h2>
-          <ul className="space-y-2">
-            {activeEngagements.map((e) => {
-              const byTeam = new Map<string, string[]>();
-              for (const p of e.participants) {
-                const list = byTeam.get(p.team.name) ?? [];
-                list.push(p.unit.name);
-                byTeam.set(p.team.name, list);
-              }
-              return (
-                <li key={e.id} className="rounded-md bg-slate-950/60 px-3 py-2 text-sm">
-                  <div className="mb-1 flex items-center justify-between">
-                    <span>
-                      Manche {e.roundNumber} — {e.status === "AWAITING_MOVEMENT" ? "mouvement" : "tir"}
-                      {e.arbiterPaused && <span className="ml-2 text-amber-400">⏸ suspendu</span>}
-                    </span>
-                    <Link
-                      href={`/arbiter/battle/${e.id}`}
-                      className="rounded-md border border-red-700 px-2 py-1 text-xs hover:bg-red-950/50"
-                    >
-                      Observer
-                    </Link>
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    {Array.from(byTeam.entries())
-                      .map(([team, names]) => `${team} : ${names.join(", ")}`)
-                      .join(" · ")}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-
-      <Link
-        href="/arbiter/positions"
-        className="mt-3 inline-block rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-900"
-      >
-        Repositionner des unités
-      </Link>
-
-      {turn.status === "PENDING_ORDERS" && orderCount === 0 && (
-        <section className="panel-brass mt-6 max-w-lg rounded-md bg-slate-900 p-4">
-          <h2 className="font-display mb-3 tracking-wide text-brass-300">
-            {turn.weatherId ? `Modifier les paramètres du tour ${turn.number}` : `Définir la météo du tour ${turn.number}`}
-          </h2>
-          {turn.weatherId && (
-            <p className="mb-3 text-xs text-slate-500">
-              Modifiable tant qu&apos;aucun ordre n&apos;a été soumis pour ce tour (ici pré-rempli avec les valeurs
-              actuelles).
-            </p>
-          )}
-          <form action={setWeatherAction} className="space-y-3 text-sm">
-            <input type="hidden" name="turnId" value={turn.id} />
-
-            <label className="block">
-              Durée de ce tour (heures)
-              <input
-                name="durationHours"
-                type="number"
-                min={1}
-                step="0.5"
-                defaultValue={turn.durationMinutes / 60}
-                required
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
-              />
-              <span className="mt-1 block text-xs text-slate-500">
-                Modifiable à chaque tour (ex: accélérer pour tester la détection en resserrant les flottes).
-              </span>
-            </label>
-
-            <label className="block">
-              Visibilité (nm)
-              <input
-                name="visibilityNm"
-                type="number"
-                step="0.5"
-                defaultValue={turn.weather?.visibilityNm ?? 8}
-                required
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
-              />
-            </label>
-
-            <label className="block">
-              État de mer (0-9)
-              <input
-                name="seaState"
-                type="number"
-                min={0}
-                max={9}
-                defaultValue={turn.weather?.seaState ?? 4}
-                required
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
-              />
-            </label>
-
-            <label className="block">
-              Luminosité
-              <select
-                name="daylight"
-                defaultValue={turn.weather?.daylight ?? "NIGHT"}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
-              >
-                <option value="DAY">Jour</option>
-                <option value="TWILIGHT">Crépuscule</option>
-                <option value="NIGHT">Nuit</option>
-                <option value="POLAR_NIGHT">Nuit polaire</option>
-                <option value="POLAR_DAY">Jour polaire</option>
-              </select>
-            </label>
-
-            <label className="block">
-              Précipitations
-              <select
-                name="precipitation"
-                defaultValue={turn.weather?.precipitation ?? "NONE"}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
-              >
-                <option value="NONE">Aucune</option>
-                <option value="RAIN">Pluie</option>
-                <option value="SNOW">Neige</option>
-                <option value="FOG">Brouillard</option>
-              </select>
-            </label>
-
-            <label className="block">
-              Vent (nds, optionnel)
-              <input
-                name="windKnots"
-                type="number"
-                step="1"
-                defaultValue={turn.weather?.windKnots ?? undefined}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
-              />
-            </label>
-
-            <label className="block">
-              Notes (optionnel)
-              <textarea
-                name="notes"
-                rows={2}
-                defaultValue={turn.weather?.notes ?? undefined}
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
-              />
-            </label>
-
-            <SubmitButton
-              pendingLabel="Enregistrement…"
-              idleLabel={turn.weatherId ? "Enregistrer" : "Ouvrir le tour aux ordres"}
-            />
-          </form>
-        </section>
-      )}
-
-      {turn.status === "PENDING_ORDERS" && orderCount > 0 && (
-        <p className="mt-6 text-slate-300">
-          Ordres en cours : {orderCount}/{activeUnitCount} unités actives ont soumis un ordre.
-        </p>
-      )}
-
-      {(turn.status === "PENDING_ARBITER_REVIEW" || turn.status === "RESOLVING") && (
-        <div className="mt-6">
-          <p className="mb-3 text-slate-300">
-            Tous les ordres sont soumis. Détections calculées, en attente de revue.
-          </p>
-          <Link href="/arbiter/review" className="rounded-md bg-amber-600 px-4 py-2 font-medium hover:bg-amber-500">
-            Revoir les détections et publier le tour
-          </Link>
-        </div>
-      )}
-
-      {combatEvents.length > 0 && lastPublishedTurn && (
-        <section className="panel-brass mt-6 max-w-2xl rounded-md bg-slate-900 p-4">
-          <h2 className="font-display mb-3 tracking-wide text-brass-300">
-            Journal de combat — tour {lastPublishedTurn.number}
-          </h2>
-          <ul className="space-y-1 text-sm">
-            {combatEvents.map((c) => (
-              <li key={c.id} className="rounded-md bg-slate-950/60 px-3 py-2">
-                <div>
-                  <span className="font-medium">{c.attackerUnit.name}</span>{" "}
-                  <span className="text-xs text-slate-500">({c.attackerUnit.fleet.team.name})</span> →{" "}
-                  <span className="font-medium">{c.targetUnit.name}</span>{" "}
-                  <span className="text-xs text-slate-500">({c.targetUnit.fleet.team.name})</span>
-                </div>
-                <div className="text-xs text-slate-400">
-                  {formatWeaponType(c.weaponType)} à {c.rangeNm.toFixed(1)}nm · {c.hitChancePercent.toFixed(0)}% de chances ·{" "}
-                  {c.hits > 0 ? `${c.hits} coup${c.hits > 1 ? "s" : ""} au but, ${c.damagePoints.toFixed(1)} pts` : "tir manqué"}
-                  {c.targetSunk && <span className="text-red-400"> · coulé</span>}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-    </div>
+    <ArbiterDashboard
+      scenarioName={scenario.name}
+      turnId={turn.id}
+      turnNumber={turn.number}
+      turnStatus={turn.status}
+      turnDurationMinutes={turn.durationMinutes}
+      tacticalMode={turn.tacticalMode}
+      weather={
+        turn.weather
+          ? {
+              visibilityNm: turn.weather.visibilityNm,
+              seaState: turn.weather.seaState,
+              daylight: turn.weather.daylight,
+              precipitation: turn.weather.precipitation,
+              windKnots: turn.weather.windKnots,
+              notes: turn.weather.notes,
+            }
+          : null
+      }
+      orderCount={orderCount}
+      activeUnitCount={activeUnitCount}
+      mapCenter={{ lat: scenario.mapCenterLat, lng: scenario.mapCenterLng }}
+      mapZoom={scenario.mapDefaultZoom}
+      teams={teams}
+      units={units.map((u) => ({
+        id: u.id,
+        name: u.name,
+        className: u.unitClass.name,
+        category: u.unitClass.category,
+        lengthMeters: u.unitClass.lengthMeters,
+        status: u.status,
+        teamId: u.fleet.teamId,
+        teamName: u.fleet.team.name,
+        teamColor: u.fleet.team.colorHex,
+        fleetId: u.fleet.id,
+        fleetName: u.fleet.name,
+        currentLat: u.currentLat,
+        currentLng: u.currentLng,
+        currentHeadingDeg: u.currentHeadingDeg,
+        healthCurrent: u.healthCurrent,
+        healthMax: u.healthMax,
+        depthBand: u.depthBand,
+      }))}
+      detections={detections.map((d) => ({
+        id: d.id,
+        observerUnitId: d.observerUnitId,
+        observerName: d.observerUnit.name,
+        observerTeam: d.observerUnit.fleet.team.name,
+        targetUnitId: d.targetUnitId,
+        targetName: d.targetUnit.name,
+        targetTeam: d.targetUnit.fleet.team.name,
+        method: d.method,
+        cpaDistanceNm: d.cpaDistanceNm,
+        cpaMinutesIntoTurn: d.cpaMinutesIntoTurn,
+        observerLatAtCpa: d.observerLatAtCpa,
+        observerLngAtCpa: d.observerLngAtCpa,
+        targetLatAtCpa: d.targetLatAtCpa,
+        targetLngAtCpa: d.targetLngAtCpa,
+        arbiterStatus: d.arbiterStatus,
+        systemProposed: d.systemProposed,
+      }))}
+      engagements={engagements.map((e) => ({
+        id: e.id,
+        roundNumber: e.roundNumber,
+        roundMinutes: e.roundMinutes,
+        status: e.status,
+        arbiterPaused: e.arbiterPaused,
+        endReason: e.endReason,
+        teams: Array.from(new Set(e.participants.map((p) => p.teamId))).map((teamId) => {
+          const p = e.participants.find((x) => x.teamId === teamId)!;
+          return { id: teamId, name: p.team.name };
+        }),
+        submittedTeamIds: submittedByEngagement.get(e.id) ?? [],
+        participants: e.participants.map((p) => ({
+          unitId: p.unitId,
+          teamId: p.teamId,
+          teamName: p.team.name,
+          teamColor: p.team.colorHex,
+          name: p.unit.name,
+          status: p.unit.status,
+          healthCurrent: p.unit.healthCurrent,
+          healthMax: p.unit.healthMax,
+        })),
+      }))}
+    />
   );
-}
-
-function formatWeaponType(weaponType: string) {
-  switch (weaponType) {
-    case "GUN":
-      return "artillerie";
-    case "TORPEDO":
-      return "torpille";
-    case "DEPTH_CHARGE":
-      return "grenades ASM";
-    default:
-      return weaponType;
-  }
-}
-
-function formatStatus(status: string) {
-  switch (status) {
-    case "PENDING_ORDERS":
-      return "en attente d'ordres";
-    case "RESOLVING":
-      return "résolution en cours";
-    case "PENDING_ARBITER_REVIEW":
-      return "en attente de revue arbitre";
-    case "PUBLISHED":
-      return "publié";
-    default:
-      return status;
-  }
 }
