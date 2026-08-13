@@ -205,9 +205,14 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
         <div className="mt-8 space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Scénario</h2>
-            <Link href="/scenarios/new" className="text-xs text-brass-400 hover:text-brass-300">
-              + Créer un scénario
-            </Link>
+            <div className="flex gap-3">
+              <Link href="/library" className="text-xs text-brass-400 hover:text-brass-300">
+                Bibliothèque de classes
+              </Link>
+              <Link href="/scenarios/new" className="text-xs text-brass-400 hover:text-brass-300">
+                + Créer un scénario
+              </Link>
+            </div>
           </div>
           {scenarios.length === 0 && <p className="text-sm text-slate-500">Aucun scénario disponible pour l&apos;instant.</p>}
           <div className="space-y-2">

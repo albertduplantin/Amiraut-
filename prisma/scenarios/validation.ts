@@ -40,7 +40,13 @@ const TorpedoTypeSchema = z.object({
   wakeVisible: z.boolean(),
 });
 
-const UnitClassSchema = z.object({
+const BombLoadoutSchema = z.object({
+  count: z.number().int().positive(),
+  weightKg: z.number().positive(),
+  method: z.enum(["DIVE", "LEVEL"]),
+});
+
+export const UnitClassSchema = z.object({
   key: z.string().min(1),
   name: z.string().min(1),
   nation: z.string().min(1),
@@ -50,6 +56,8 @@ const UnitClassSchema = z.object({
   beamMeters: z.number().positive().optional(),
   turningRadiusM: z.number().positive().optional(),
   accelerationKnotsPerMin: z.number().positive().optional(),
+  // Combat air-air (avions) — voir combat.ts, airCombatHitChanceBreakdown.
+  agility: z.number().min(0).max(1).optional(),
   sensors: z.array(SensorSchema).min(1, "au moins un capteur"),
   detectability: z.number().positive().optional(),
   iconKey: z.string().min(1),
@@ -61,6 +69,7 @@ const UnitClassSchema = z.object({
       guns: z.array(GunBatterySchema).optional(),
       torpedoTubes: TorpedoTubesSchema.optional(),
       torpedoTypes: z.array(TorpedoTypeSchema).optional(),
+      bombs: BombLoadoutSchema.optional(),
     })
     .optional(),
   weaponSystems: z.record(z.string(), z.unknown()).optional(),
@@ -70,6 +79,11 @@ const UnitClassSchema = z.object({
   torpedoStock: z.number().int().nonnegative().optional(),
   enduranceMinutes: z.number().positive().optional(),
   passive: z.boolean().optional(),
+});
+
+/** Variante bibliothèque (arbitre, /library) : mêmes champs + un repère de classement libre. */
+export const LibraryUnitClassSchema = UnitClassSchema.extend({
+  theater: z.string().optional(),
 });
 
 const UnitSchema = z.object({
@@ -98,6 +112,13 @@ const TeamSchema = z.object({
   fleets: z.array(FleetSchema).min(1, "une équipe doit avoir au moins une flotte"),
 });
 
+/** Référence minimale vers une classe de la bibliothèque partagée (/library) — voir types.ts. */
+const UnitClassRefSchema = z.object({
+  key: z.string().min(1),
+  libraryKey: z.string().min(1),
+});
+const UnitClassEntrySchema = z.union([UnitClassSchema, UnitClassRefSchema]);
+
 const WeatherSchema = z.object({
   visibilityNm: z.number().positive(),
   seaState: z.number().min(0).max(9),
@@ -120,7 +141,7 @@ export const ScenarioDefinitionSchema = z
     defaultTurnMinutes: z.number().int().min(5).max(1440),
     tacticalRoundMinutes: z.number().int().min(1).max(60),
     weather: WeatherSchema,
-    unitClasses: z.array(UnitClassSchema).min(1, "au moins une classe d'unité"),
+    unitClasses: z.array(UnitClassEntrySchema).min(1, "au moins une classe d'unité"),
     teams: z.array(TeamSchema).min(2, "au moins deux équipes"),
     objectives: z.array(z.object({ teamName: z.string().min(1), text: z.string().min(1) })),
     source: z.string().min(1),

@@ -387,6 +387,13 @@ export function ArbiterDashboard(props: {
             highlight={props.engagements.length > 0}
             onClick={() => setRightPanel(rightPanel === "combats" ? null : "combats")}
           />
+          <Link
+            href="/library"
+            className="ml-1 flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-slate-300 hover:bg-slate-900"
+            title="Bibliothèque de classes de navires/avions, réutilisable d'un scénario à l'autre"
+          >
+            Bibliothèque
+          </Link>
         </nav>
       </header>
 

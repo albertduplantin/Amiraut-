@@ -1,5 +1,5 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
-import type { ScenarioDefinition } from "./types";
+import type { ScenarioDefinition, ScenarioUnitClass } from "./types";
 import { validateScenarioDefinition } from "./validation";
 import { denmarkStrait } from "./denmark-strait";
 import { northCape } from "./north-cape";
@@ -119,9 +119,47 @@ export async function instantiateScenario(
     },
   });
 
-  // Classes d'unités
+  // Classes d'unités — résout d'abord les références à la bibliothèque
+  // partagée (voir types.ts, { key, libraryKey }) en classes complètes.
   const classIdByKey = new Map<string, string>();
-  for (const uc of definition.unitClasses) {
+  const resolvedUnitClasses: ScenarioUnitClass[] = await Promise.all(
+    definition.unitClasses.map(async (uc): Promise<ScenarioUnitClass> => {
+      if (!("libraryKey" in uc)) return uc;
+      const lib = await prisma.libraryUnitClass.findUnique({ where: { key: uc.libraryKey } });
+      if (!lib) throw new Error(`Classe de bibliothèque introuvable : « ${uc.libraryKey} » (référencée par la clé locale « ${uc.key} »)`);
+      return {
+        key: uc.key,
+        name: lib.name,
+        nation: lib.nation,
+        category: lib.category,
+        maxSpeedKnots: lib.maxSpeedKnots,
+        lengthMeters: lib.lengthMeters ?? undefined,
+        beamMeters: lib.beamMeters ?? undefined,
+        turningRadiusM: lib.turningRadiusM ?? undefined,
+        accelerationKnotsPerMin: lib.accelerationKnotsPerMin ?? undefined,
+        agility: lib.agility ?? undefined,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        sensors: lib.sensors as any,
+        detectability: lib.detectability,
+        iconKey: lib.iconKey,
+        profileImageUrl: lib.profileImageUrl ?? undefined,
+        historicalNote: lib.historicalNote ?? undefined,
+        resistancePoints: lib.resistancePoints,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        combatProfile: (lib.combatProfile as any) ?? undefined,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        weaponSystems: (lib.weaponSystems as any) ?? undefined,
+        depthChargeStock: lib.depthChargeStock ?? undefined,
+        submergedRangeNmAt4kt: lib.submergedRangeNmAt4kt ?? undefined,
+        oxygenEnduranceHours: lib.oxygenEnduranceHours ?? undefined,
+        torpedoStock: lib.torpedoStock ?? undefined,
+        enduranceMinutes: lib.enduranceMinutes ?? undefined,
+        passive: lib.passive,
+      };
+    })
+  );
+
+  for (const uc of resolvedUnitClasses) {
     const created = await prisma.unitClass.create({
       data: {
         name: uc.name,
@@ -132,6 +170,7 @@ export async function instantiateScenario(
         beamMeters: uc.beamMeters,
         turningRadiusM: uc.turningRadiusM,
         accelerationKnotsPerMin: uc.accelerationKnotsPerMin,
+        agility: uc.agility,
         sensors: uc.sensors,
         detectability: uc.detectability ?? 1,
         iconKey: uc.iconKey,
@@ -150,7 +189,7 @@ export async function instantiateScenario(
     });
     classIdByKey.set(uc.key, created.id);
   }
-  const resistanceByKey = new Map(definition.unitClasses.map((uc) => [uc.key, uc.resistancePoints]));
+  const resistanceByKey = new Map(resolvedUnitClasses.map((uc) => [uc.key, uc.resistancePoints]));
 
   // Équipes, flottes, unités
   const teamIdByName = new Map<string, string>();
@@ -177,7 +216,7 @@ export async function instantiateScenario(
         const classId = classIdByKey.get(u.classKey);
         if (!classId) throw new Error(`Classe inconnue « ${u.classKey} » pour l'unité ${u.name}`);
         const health = resistanceByKey.get(u.classKey) ?? 10;
-        const unitClass = definition.unitClasses.find((c) => c.key === u.classKey)!;
+        const unitClass = resolvedUnitClasses.find((c) => c.key === u.classKey)!;
         const overrideFleetName = options.fleetOverridesByUnit?.[`${t.name}::${f.name}::${u.name}`];
         const targetFleetId = overrideFleetName
           ? (fleetIdByTeamAndName.get(`${t.name}::${overrideFleetName}`) ??

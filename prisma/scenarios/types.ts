@@ -27,6 +27,9 @@ export type ScenarioTorpedoType = {
   wakeVisible: boolean;
 };
 
+/** Charge de bombes (avions) — voir combat.ts, BombLoadout. */
+export type ScenarioBombLoadout = { count: number; weightKg: number; method: "DIVE" | "LEVEL" };
+
 export type ScenarioUnitClass = {
   key: string;
   name: string;
@@ -39,6 +42,8 @@ export type ScenarioUnitClass = {
   turningRadiusM?: number;
   /** Vitesse de changement de vitesse (nœuds/minute) — accélération et décélération, symétriques par simplification. */
   accelerationKnotsPerMin?: number;
+  /** Maniabilité en combat air-air (avions), 0-1 — voir combat.ts, airCombatHitChanceBreakdown. */
+  agility?: number;
   sensors: ScenarioSensor[];
   detectability?: number;
   iconKey: string;
@@ -50,6 +55,7 @@ export type ScenarioUnitClass = {
     guns?: ScenarioGunBattery[];
     torpedoTubes?: ScenarioTorpedoTubes;
     torpedoTypes?: ScenarioTorpedoType[];
+    bombs?: ScenarioBombLoadout;
   };
   weaponSystems?: Record<string, unknown>;
   depthChargeStock?: number;
@@ -116,7 +122,15 @@ export type ScenarioDefinition = {
   /** Durée d'une manche une fois le combat tactique engagé. */
   tacticalRoundMinutes: number;
   weather: ScenarioWeather;
-  unitClasses: ScenarioUnitClass[];
+  /**
+   * Chaque entrée est soit une classe définie en ligne (comme aujourd'hui),
+   * soit une simple référence { key, libraryKey } vers une classe de la
+   * bibliothèque partagée (/library, arbitre) — résolue à l'instanciation
+   * (voir instantiateScenario). `key` reste la clé LOCALE au scénario
+   * (référencée par ScenarioUnit.classKey plus bas), indépendante du
+   * libraryKey qui peut différer.
+   */
+  unitClasses: (ScenarioUnitClass | { key: string; libraryKey: string })[];
   teams: ScenarioTeam[];
   /** Objectifs affichés à chaque camp, pour donner un but clair à la partie. */
   objectives: { teamName: string; text: string }[];
