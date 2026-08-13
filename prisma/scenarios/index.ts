@@ -25,10 +25,11 @@ export type ScenarioSummary = {
   dateLabel: string;
   defaultTurnMinutes: number;
   teamNames: string[];
-  // Détail flotte par équipe (bloc 2, plusieurs joueurs par camp) : permet
-  // à /create de proposer, flotte par flotte, à quel joueur elle est
-  // confiée — sans instancier le scénario au préalable.
-  teams: { name: string; fleetNames: string[] }[];
+  // Détail flotte/unité par équipe : permet à /create de proposer, sans
+  // instancier le scénario au préalable, à quel joueur chaque flotte est
+  // confiée (bloc 2) et dans quelle flotte chaque unité démarre (bloc 2,
+  // répartition des forces modifiable).
+  teams: { name: string; fleets: { name: string; unitNames: string[] }[] }[];
   custom: boolean;
 };
 
@@ -40,7 +41,10 @@ function toSummary(def: ScenarioDefinition, custom: boolean): ScenarioSummary {
     dateLabel: def.dateLabel,
     defaultTurnMinutes: def.defaultTurnMinutes,
     teamNames: def.teams.map((t) => t.name),
-    teams: def.teams.map((t) => ({ name: t.name, fleetNames: t.fleets.map((f) => f.name) })),
+    teams: def.teams.map((t) => ({
+      name: t.name,
+      fleets: t.fleets.map((f) => ({ name: f.name, unitNames: f.units.map((u) => u.name) })),
+    })),
     custom,
   };
 }
@@ -90,6 +94,11 @@ export async function instantiateScenario(
     // équipe, chacun scopé à un sous-ensemble de flottes. Équipe absente de
     // cette table = comportement historique (un seul joueur, toute l'équipe).
     playersByTeamName?: Record<string, PlayerSlotConfig[]>;
+    // Bloc 2 (répartition des forces modifiable à la création) : déplace une
+    // unité vers une autre flotte de la MÊME équipe que celle définie dans
+    // le scénario — clé "équipe::flotteOrigine::unité" → nom de la flotte
+    // cible. Unité absente de cette table = flotte d'origine du scénario.
+    fleetOverridesByUnit?: Record<string, string>;
   } = {}
 ) {
   // Échelle de temps initiale ajustable à la création (Lobby) : ne change
@@ -154,18 +163,32 @@ export async function instantiateScenario(
     });
     teamIdByName.set(t.name, team.id);
 
+    // Toutes les flottes d'abord (fleetIdByTeamAndName complète), avant de
+    // créer la moindre unité : une réaffectation peut pointer vers une
+    // flotte de la même équipe créée après celle d'origine dans l'ordre du
+    // scénario.
     for (const f of t.fleets) {
       const fleet = await prisma.fleet.create({ data: { teamId: team.id, name: f.name } });
       fleetIdByTeamAndName.set(`${t.name}::${f.name}`, fleet.id);
+    }
+
+    for (const f of t.fleets) {
       for (const u of f.units) {
         const classId = classIdByKey.get(u.classKey);
         if (!classId) throw new Error(`Classe inconnue « ${u.classKey} » pour l'unité ${u.name}`);
         const health = resistanceByKey.get(u.classKey) ?? 10;
         const unitClass = definition.unitClasses.find((c) => c.key === u.classKey)!;
+        const overrideFleetName = options.fleetOverridesByUnit?.[`${t.name}::${f.name}::${u.name}`];
+        const targetFleetId = overrideFleetName
+          ? (fleetIdByTeamAndName.get(`${t.name}::${overrideFleetName}`) ??
+            (() => {
+              throw new Error(`Flotte cible inconnue « ${overrideFleetName} » pour l'unité ${u.name}`);
+            })())
+          : fleetIdByTeamAndName.get(`${t.name}::${f.name}`)!;
         await prisma.unit.create({
           data: {
             scenarioId: scenario.id,
-            fleetId: fleet.id,
+            fleetId: targetFleetId,
             unitClassId: classId,
             name: u.name,
             pennant: u.pennant,

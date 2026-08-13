@@ -26,6 +26,7 @@ export async function createGameAction(params: {
   withArbiter: boolean;
   turnMinutes: number;
   playersByTeamName?: Record<string, PlayerSlotConfig[]>;
+  fleetOverridesByUnit?: Record<string, string>;
 }): Promise<CreateGameResult> {
   const def = await findScenarioAsync(prisma, params.scenarioKey);
   if (!def) return { ok: false, error: "Scénario introuvable." };
@@ -39,6 +40,7 @@ export async function createGameAction(params: {
       withArbiter: params.withArbiter,
       turnMinutesOverride: params.turnMinutes,
       playersByTeamName: params.playersByTeamName,
+      fleetOverridesByUnit: params.fleetOverridesByUnit,
     });
 
     return { ok: true, scenarioId: scenario.id, participants };

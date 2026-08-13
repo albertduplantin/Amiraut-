@@ -11,7 +11,7 @@ type ScenarioSummary = {
   dateLabel: string;
   defaultTurnMinutes: number;
   teamNames: string[];
-  teams: { name: string; fleetNames: string[] }[];
+  teams: { name: string; fleets: { name: string; unitNames: string[] }[] }[];
   custom: boolean;
 };
 
@@ -40,12 +40,31 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
   const [result, setResult] = useState<Extract<CreateGameResult, { ok: true }> | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [teamStates, setTeamStates] = useState<Record<string, TeamMultiplayerState>>({});
+  // Répartition des forces (bloc 2) : clé "équipe::flotteOrigine::unité" →
+  // nom de la flotte cible (même équipe uniquement). Absente = flotte
+  // d'origine du scénario, inchangée.
+  const [fleetOverrides, setFleetOverrides] = useState<Record<string, string>>({});
 
   function selectScenario(key: string) {
     setScenarioKey(key);
     const s = scenarios.find((sc) => sc.key === key);
     if (s) setTurnMinutes(s.defaultTurnMinutes);
     setTeamStates({});
+    setFleetOverrides({});
+  }
+
+  function unitFleetAssignment(teamName: string, originalFleetName: string, unitName: string): string {
+    return fleetOverrides[`${teamName}::${originalFleetName}::${unitName}`] ?? originalFleetName;
+  }
+
+  function reassignUnit(teamName: string, originalFleetName: string, unitName: string, targetFleetName: string) {
+    const key = `${teamName}::${originalFleetName}::${unitName}`;
+    setFleetOverrides((prev) => {
+      const next = { ...prev };
+      if (targetFleetName === originalFleetName) delete next[key];
+      else next[key] = targetFleetName;
+      return next;
+    });
   }
 
   function teamState(teamName: string): TeamMultiplayerState {
@@ -102,10 +121,11 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
     for (const team of selected.teams) {
       const state = teamStates[team.name];
       if (!state?.enabled || state.players.length <= 1) continue;
+      const fleetNames = team.fleets.map((f) => f.name);
       playersByTeamName[team.name] = state.players.map((player, index) => ({
         displayName: player.displayName.trim() || `Joueur ${index + 1}`,
         colorHex: player.colorHex,
-        fleetNames: team.fleetNames.filter((f) => (state.fleetAssignment[f] ?? 0) === index),
+        fleetNames: fleetNames.filter((f) => (state.fleetAssignment[f] ?? 0) === index),
       }));
     }
 
@@ -115,6 +135,7 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
         withArbiter,
         turnMinutes,
         playersByTeamName: Object.keys(playersByTeamName).length > 0 ? playersByTeamName : undefined,
+        fleetOverridesByUnit: Object.keys(fleetOverrides).length > 0 ? fleetOverrides : undefined,
       });
       if (!res.ok) {
         setError(res.error);
@@ -265,7 +286,9 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
                   </div>
 
                   {!state.enabled ? (
-                    <p className="mt-1 text-xs text-slate-600">1 joueur — accès à toute l&apos;équipe ({team.fleetNames.join(", ")}).</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      1 joueur — accès à toute l&apos;équipe ({team.fleets.map((f) => f.name).join(", ")}).
+                    </p>
                   ) : (
                     <div className="mt-3 space-y-3">
                       <ul className="space-y-1.5">
@@ -299,7 +322,7 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
                       <div className="border-t border-slate-800 pt-2">
                         <p className="mb-1 text-xs text-slate-500">Flotte confiée à :</p>
                         <ul className="space-y-1">
-                          {team.fleetNames.map((fleetName) => (
+                          {team.fleets.map(({ name: fleetName }) => (
                             <li key={fleetName} className="flex items-center justify-between gap-2 text-xs">
                               <span>{fleetName}</span>
                               <select
@@ -322,6 +345,43 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {selected && selected.teams.some((t) => t.fleets.length > 1) && (
+          <div className="mt-6 space-y-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Répartition des forces</h2>
+            <p className="text-xs text-slate-500">
+              Par défaut, chaque unité démarre dans la flotte prévue par le scénario. Déplacez-la vers une autre flotte de la
+              même équipe si vous voulez rééquilibrer les formations avant le début de la partie.
+            </p>
+            {selected.teams
+              .filter((t) => t.fleets.length > 1)
+              .map((team) => (
+                <div key={team.name} className="rounded-md border border-slate-800 bg-slate-900 p-3">
+                  <h3 className="mb-2 text-sm font-medium">{team.name}</h3>
+                  <ul className="space-y-1">
+                    {team.fleets.flatMap((fleet) =>
+                      fleet.unitNames.map((unitName) => (
+                        <li key={`${fleet.name}::${unitName}`} className="flex items-center justify-between gap-2 text-xs">
+                          <span>{unitName}</span>
+                          <select
+                            value={unitFleetAssignment(team.name, fleet.name, unitName)}
+                            onChange={(e) => reassignUnit(team.name, fleet.name, unitName, e.target.value)}
+                            className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs"
+                          >
+                            {team.fleets.map((f) => (
+                              <option key={f.name} value={f.name}>
+                                {f.name}
+                              </option>
+                            ))}
+                          </select>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+              ))}
           </div>
         )}
 
