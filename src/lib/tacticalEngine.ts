@@ -905,6 +905,160 @@ export async function submitTacticalFireShot(params: {
   };
 }
 
+export type AutoAirEncounterResult = {
+  weaponType: WeaponType;
+  hit: boolean;
+  hits: number;
+  damagePoints: number;
+  hitChancePercent: number;
+  hitRoll: number;
+  narrative: string;
+  targetSunk: boolean;
+};
+
+/**
+ * Résolution automatique (bloc air-air/air-mer, choix hybride demandé par
+ * l'utilisateur) : un seul jet, pas de phase de tir manche par manche —
+ * l'avion largue tout ce qu'il a d'un coup contre la cible désignée par
+ * cette détection. Volontairement plus simple que l'engagement tactique
+ * manuel (submitTacticalFireShot) : pas de dégâts localisés (tourelle,
+ * gouvernail…), juste touché/raté et des dégâts de coque — cohérent avec
+ * l'esprit "rapide" de cette option face à l'engagement tactique complet.
+ * Ne concerne que l'avion attaquant : un navire qui détecte un avion garde
+ * la voie de l'engagement tactique classique pour riposter à la DCA.
+ */
+export async function resolveAirEncounterAutomatically(params: { detectionEventId: string; teamId: string }): Promise<AutoAirEncounterResult> {
+  const detection = await prisma.detectionEvent.findUniqueOrThrow({
+    where: { id: params.detectionEventId },
+    include: {
+      observerUnit: { include: { unitClass: true, fleet: true } },
+      targetUnit: { include: { unitClass: true, fleet: true } },
+    },
+  });
+  if (detection.observerUnit.fleet.teamId !== params.teamId) {
+    throw new OrderValidationError("Cette détection n'appartient pas à votre équipe.");
+  }
+  if (detection.arbiterStatus !== "CONFIRMED" && detection.arbiterStatus !== "ADDED_MANUALLY") {
+    throw new OrderValidationError("Cette détection n'a pas encore été confirmée par l'arbitre.");
+  }
+
+  const attacker = detection.observerUnit;
+  const target = detection.targetUnit;
+  if (attacker.unitClass.category !== "AIRCRAFT") {
+    throw new OrderValidationError("La résolution automatique n'est proposée que pour un avion qui attaque.");
+  }
+  if (attacker.status === "SUNK") throw new OrderValidationError("Cet avion est hors de combat.");
+  if (target.status === "SUNK") throw new OrderValidationError("Cette cible est déjà hors de combat.");
+
+  const profile = attacker.unitClass.combatProfile as CombatProfile | null;
+  const attackerHealthCurrent = attacker.healthCurrent ?? attacker.healthMax ?? 1;
+  const attackerHealthMax = attacker.healthMax ?? 1;
+
+  let weaponType: WeaponType;
+  let outcome: { hitChancePercent: number; hitRoll: number; hit: boolean; hits: number; damagePoints: number };
+
+  if (target.unitClass.category === "AIRCRAFT") {
+    if (!profile?.guns?.length) throw new OrderValidationError("Cet avion n'a pas d'armement air-air.");
+    weaponType = "GUN";
+    const targetProfile = target.unitClass.combatProfile as CombatProfile | null;
+    outcome = resolveAirCombatEngagement({
+      attackerAgility: attacker.unitClass.agility,
+      defenderAgility: target.unitClass.agility,
+      defenderHasDefensiveGuns: (targetProfile?.guns?.length ?? 0) > 0,
+    });
+  } else if (target.unitClass.category === "SURFACE_SHIP") {
+    if (profile?.bombs) {
+      weaponType = "BOMB";
+      const bombResult = resolveBombingEngagement({
+        attackerProfile: profile,
+        attackerHealthCurrent,
+        attackerHealthMax,
+        targetLengthM: target.unitClass.lengthMeters ?? 100,
+        targetBeamM: target.unitClass.beamMeters ?? 12,
+        targetSpeedKnots: 0,
+      });
+      if (!bombResult) throw new OrderValidationError("Aucune bombe disponible.");
+      outcome = bombResult;
+    } else if (profile?.torpedoTubes) {
+      if (attacker.torpedoesRemaining != null && attacker.torpedoesRemaining <= 0) {
+        throw new OrderValidationError("Plus aucune torpille à bord.");
+      }
+      weaponType = "TORPEDO";
+      const torpedoResult = resolveTorpedoEngagement({
+        attackerProfile: profile,
+        attackerHealthCurrent,
+        attackerHealthMax,
+        targetLengthM: target.unitClass.lengthMeters ?? 100,
+        targetBeamM: target.unitClass.beamMeters ?? 12,
+        targetSpeedKnots: 0,
+        angleOfAttackDeg: 45,
+        rangeM: 0,
+      });
+      if (!torpedoResult) throw new OrderValidationError("Aucun tube lance-torpilles disponible.");
+      outcome = torpedoResult;
+    } else {
+      throw new OrderValidationError("Cet avion n'a ni bombe ni torpille pour attaquer un navire.");
+    }
+  } else {
+    throw new OrderValidationError("Cible non attaquable automatiquement (sous-marin immergé notamment).");
+  }
+
+  const targetHealthMax = target.healthMax ?? 1;
+  const targetHealthBefore = target.healthCurrent ?? targetHealthMax;
+  const finalDamagePoints = outcome.hit ? outcome.damagePoints : 0;
+  const newHealth = Math.max(0, targetHealthBefore - finalDamagePoints);
+  const targetSunk = newHealth <= 0;
+
+  await prisma.unit.update({
+    where: { id: target.id },
+    data: { healthCurrent: newHealth, status: targetSunk ? "SUNK" : newHealth < targetHealthMax * 0.6 ? "DAMAGED" : target.status },
+  });
+  if (weaponType === "TORPEDO" && attacker.torpedoesRemaining != null) {
+    await prisma.unit.update({ where: { id: attacker.id }, data: { torpedoesRemaining: Math.max(0, attacker.torpedoesRemaining - 1) } });
+  }
+
+  const narrative = describeShot({
+    attackerName: attacker.name,
+    targetName: target.name,
+    weaponType,
+    hit: outcome.hit,
+    hits: outcome.hits,
+    damagePoints: finalDamagePoints,
+    damageRatio: targetHealthMax > 0 ? finalDamagePoints / targetHealthMax : 0,
+    targetSunk,
+    rangeNm: detection.cpaDistanceNm,
+    targetIsAircraft: target.unitClass.category === "AIRCRAFT",
+  });
+
+  await prisma.combatEvent.create({
+    data: {
+      turnId: detection.turnId,
+      detectionEventId: detection.id,
+      attackerUnitId: attacker.id,
+      targetUnitId: target.id,
+      weaponType,
+      rangeNm: detection.cpaDistanceNm,
+      hitChancePercent: outcome.hitChancePercent,
+      hits: outcome.hits,
+      damagePoints: finalDamagePoints,
+      targetHealthLeft: newHealth,
+      targetSunk,
+      firedTactically: false,
+    },
+  });
+
+  return {
+    weaponType,
+    hit: outcome.hit,
+    hits: outcome.hits,
+    damagePoints: finalDamagePoints,
+    hitChancePercent: outcome.hitChancePercent,
+    hitRoll: outcome.hitRoll,
+    narrative,
+    targetSunk,
+  };
+}
+
 /** Un camp annonce qu'il a fini de tirer cette manche ; la manche se résout dès que les deux camps l'ont fait. */
 export async function finishFirePhase(params: { engagementId: string; teamId: string }) {
   const engagement = await assertEngagementOpen(params.engagementId, "AWAITING_FIRE");
