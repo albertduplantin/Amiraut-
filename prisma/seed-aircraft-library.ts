@@ -14,6 +14,8 @@
  *
  * Usage : npx tsx --env-file=.env prisma/seed-aircraft-library.ts
  */
+export {}; // force ce fichier en module isolé (sinon `const Module` etc. entrent en collision avec les autres scripts prisma/*.ts au typecheck global.
+/* eslint-disable @typescript-eslint/no-require-imports -- require() nécessaire pour intercepter "server-only" avant que src/lib/prisma ne l'importe (voir Module._load ci-dessous). */
 const Module = require("module");
 const origLoad = Module._load;
 Module._load = function (request: string, ...args: unknown[]) {
@@ -22,12 +24,12 @@ Module._load = function (request: string, ...args: unknown[]) {
 };
 
 const { prisma } = require("../src/lib/prisma");
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 const THEATER = "Atlantique/Arctique 1939-45";
 
-type Entry = Parameters<typeof prisma.libraryUnitClass.upsert>[0]["create"];
-
-const aircraft: Entry[] = [
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const aircraft: any[] = [
   // ── Chasseurs ──────────────────────────────────────────────
   {
     key: "spitfire-mk-vb",
