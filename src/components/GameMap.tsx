@@ -77,6 +77,8 @@ type GameMapProps = {
   fitToPoints?: LatLng[];
   /** Recentre la carte en douceur sur ce point à chaque changement (ex: sélection d'unité). */
   flyToPoint?: LatLng | null;
+  /** Zoom minimal visé par `flyToPoint` (ne dézoome jamais, ne fait que garantir au moins ce niveau). Défaut 6. */
+  flyToZoom?: number;
   /**
    * Silhouettes vues de dessus, affichées à la place des points simples une
    * fois zoomé suffisamment (voir `shipMarkersMinZoom`). Orientées selon
@@ -164,6 +166,7 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     className,
     fitToPoints,
     flyToPoint,
+    flyToZoom = 6,
     shipMarkers,
     shipMarkersMinZoom = 7,
     onShipMarkerClick,
@@ -418,9 +421,9 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
     if (last && last.lat === flyToPoint.lat && last.lng === flyToPoint.lng) return;
     lastFlownToRef.current = flyToPoint;
     return onceStyleReady(map, () => {
-      map.flyTo({ center: [flyToPoint.lng, flyToPoint.lat], zoom: Math.max(map.getZoom(), 6), speed: 1.4 });
+      map.flyTo({ center: [flyToPoint.lng, flyToPoint.lat], zoom: Math.max(map.getZoom(), flyToZoom), speed: 1.4 });
     });
-  }, [flyToPoint]);
+  }, [flyToPoint, flyToZoom]);
 
   const rulerTotalNm = cumulativeNm(rulerPoints, rulerPoints.length - 1);
 

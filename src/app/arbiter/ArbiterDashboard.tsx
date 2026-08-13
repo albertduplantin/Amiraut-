@@ -142,6 +142,7 @@ export function ArbiterDashboard(props: {
   const [savedFlash, setSavedFlash] = useState(false);
   const [hoveredDetectionId, setHoveredDetectionId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [flyToTarget, setFlyToTarget] = useState<LatLng | null>(null);
   const gameMapRef = useRef<GameMapHandle>(null);
 
   // Vue en direct : se rafraîchit toute seule dès qu'un combat est en
@@ -193,6 +194,21 @@ export function ArbiterDashboard(props: {
     setFleetDraftOffset(null);
     setPosError(null);
     setSavedFlash(false);
+  }
+
+  /** Double-clic dans la liste : centre la carte sur l'unité sans changer la sélection en cours. */
+  function focusUnit(id: string) {
+    const unit = units.find((u) => u.id === id);
+    if (unit) setFlyToTarget({ lat: unit.currentLat, lng: unit.currentLng });
+  }
+
+  /** Double-clic sur une flotte : centre sur le barycentre de ses unités. */
+  function focusFleet(id: string) {
+    const fleet = fleets.find((f) => f.fleetId === id);
+    if (!fleet || fleet.units.length === 0) return;
+    const lat = fleet.units.reduce((sum, u) => sum + u.currentLat, 0) / fleet.units.length;
+    const lng = fleet.units.reduce((sum, u) => sum + u.currentLng, 0) / fleet.units.length;
+    setFlyToTarget({ lat, lng });
   }
 
   function handleMapClick(pos: LatLng) {
@@ -391,6 +407,8 @@ export function ArbiterDashboard(props: {
                     <div key={fleet.fleetId} className="mb-2">
                       <button
                         onClick={() => selectFleet(fleet.fleetId)}
+                        onDoubleClick={() => focusFleet(fleet.fleetId)}
+                        title="Double-clic : centrer la carte sur cette flotte"
                         className={`w-full rounded-md px-2 py-1.5 text-left text-sm font-medium transition ${
                           selection?.kind === "fleet" && selection.fleetId === fleet.fleetId ? "bg-brass-900/50 ring-1 ring-brass-500" : "hover:bg-slate-900"
                         }`}
@@ -402,6 +420,8 @@ export function ArbiterDashboard(props: {
                           <li key={unit.id}>
                             <button
                               onClick={() => selectUnit(unit.id)}
+                              onDoubleClick={() => focusUnit(unit.id)}
+                              title="Double-clic : centrer la carte sur ce navire"
                               className={`w-full rounded-md px-2 py-1 text-left text-xs transition ${
                                 selection?.kind === "unit" && selection.unitId === unit.id ? "bg-brass-900/50 ring-1 ring-brass-500" : "hover:bg-slate-900"
                               }`}
@@ -434,6 +454,12 @@ export function ArbiterDashboard(props: {
             onClick={handleMapClick}
             fitToPoints={allUnitPositions}
             shipMarkers={shipMarkers}
+            // L'arbitre a besoin de voir toutes les forces en permanence, y
+            // compris très dézoomé (vue d'ensemble stratégique) — contrairement
+            // à la vue joueur, pas de seuil de désencombrement ici.
+            shipMarkersMinZoom={0}
+            flyToPoint={flyToTarget}
+            flyToZoom={9}
             showScaleAndRuler
             onShipMarkerClick={selectUnit}
             className="h-full w-full"
