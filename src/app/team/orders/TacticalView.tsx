@@ -39,6 +39,9 @@ const GUN_SOUND_URLS = [
   "/sounds/guns/gun-05.mp3",
 ];
 
+/** Bruit de lancement de torpille — voir playTorpedoSound. */
+const TORPEDO_SOUND_URL = "/sounds/torpedo.wav";
+
 /**
  * Sillage qui s'estompe avec l'âge : une seule teinte claire (écume plutôt
  * que trait sombre), l'opacité et l'épaisseur diminuant à chaque manche de
@@ -213,6 +216,13 @@ export function TacticalView(props: {
     audio.volume = 0.6;
     // Les navigateurs peuvent refuser la lecture (politique d'autoplay) : un
     // tir sans son n'est pas bloquant, on ignore silencieusement l'échec.
+    audio.play().catch(() => {});
+  }
+
+  /** Joue le bruit de lancement de torpille. */
+  function playTorpedoSound() {
+    const audio = new Audio(TORPEDO_SOUND_URL);
+    audio.volume = 0.6;
     audio.play().catch(() => {});
   }
 
@@ -496,6 +506,7 @@ export function TacticalView(props: {
         return;
       }
       if (weaponType === "GUN") playGunSound();
+      else playTorpedoSound();
       setFreshResults((prev) => ({
         ...prev,
         [`${selectedShip.id}|${selectedWeaponSlot}`]: {

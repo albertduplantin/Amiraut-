@@ -2,6 +2,9 @@
 
 import { useEffect } from "react";
 
+/** Bruit d'explosion joué à l'apparition de la fenêtre. */
+const EXPLOSION_SOUND_URL = "/sounds/explosion.wav";
+
 export type SunkShipInfo = {
   id: string;
   name: string;
@@ -22,6 +25,16 @@ export function SunkShipModal({ ship, onClose }: { ship: SunkShipInfo; onClose: 
     const timer = setTimeout(onClose, 6000);
     return () => clearTimeout(timer);
   }, [onClose]);
+
+  // Un son par navire affiché (pas par montage du composant, qui reste
+  // monté d'un navire à l'autre quand la file s'enchaîne) — voir la clé
+  // [ship.id] : autoplay refusé par le navigateur = son manquant, non
+  // bloquant, comme pour les bruits de canon/torpille.
+  useEffect(() => {
+    const audio = new Audio(EXPLOSION_SOUND_URL);
+    audio.volume = 0.7;
+    audio.play().catch(() => {});
+  }, [ship.id]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
