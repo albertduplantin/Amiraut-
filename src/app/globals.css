@@ -181,25 +181,29 @@ body {
 
 @keyframes sunk-modal-smoke-fade {
   0% {
-    opacity: 0.7;
-    transform: translateY(0) scale(1);
+    opacity: 0;
+    transform: translateY(10px) scale(0.85) rotate(-2deg);
+  }
+  18% {
+    opacity: 0.9;
   }
   100% {
     opacity: 0;
-    transform: translateY(-24px) scale(1.6);
+    transform: translateY(-36px) scale(1.2) rotate(2deg);
   }
 }
 
+/* Panache réel (illustration fournie par l'utilisateur) : la base fine du
+   dessin pointe vers le navire, le gros de la fumée se déploie au-dessus,
+   rogné par le conteneur — voir SunkShipModal.tsx. */
 .sunk-modal-smoke {
   position: absolute;
   left: 50%;
-  bottom: 55%;
-  width: 46px;
-  height: 46px;
-  margin-left: -23px;
-  border-radius: 9999px;
-  background: radial-gradient(circle, rgba(71, 85, 105, 0.75) 0%, rgba(71, 85, 105, 0) 70%);
-  filter: blur(3px);
+  bottom: 48%;
+  width: 72px;
+  margin-left: -36px;
+  filter: blur(0.5px);
+  transform-origin: 50% 100%;
   animation: sunk-modal-smoke-fade 4.5s ease-out forwards;
 }
 

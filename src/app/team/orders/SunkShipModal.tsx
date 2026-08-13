@@ -15,10 +15,19 @@ export type SunkShipInfo = {
 };
 
 /**
+ * Panache de fumée (illustration vectorielle fournie par l'utilisateur,
+ * générée via Recraft AI) — remplace le halo flouté en CSS pur d'origine
+ * pour ce contexte précis : une seule silhouette de fumée dramatique,
+ * pas besoin de graduation par intensité comme sur les marqueurs de
+ * carte (voir shipSilhouettes.ts, qui garde son propre système animé).
+ */
+const SMOKE_PLUME_URL = "/effects/smoke-plume.svg";
+
+/**
  * Fenêtre surgissante au moment où un navire coule — silhouette, bulles et
- * fumée animées en CSS (aucun asset externe, ni photo ni vidéo : voir la
- * discussion avec l'utilisateur sur le sujet, qui a préféré cette option).
- * Se ferme seule après quelques secondes, ou au clic.
+ * panache de fumée animés (aucune vidéo ni photo : voir la discussion avec
+ * l'utilisateur sur le sujet, qui a préféré cette option). Se ferme seule
+ * après quelques secondes, ou au clic.
  */
 export function SunkShipModal({ ship, onClose }: { ship: SunkShipInfo; onClose: () => void }) {
   useEffect(() => {
@@ -63,7 +72,8 @@ export function SunkShipModal({ ship, onClose }: { ship: SunkShipInfo; onClose: 
         <p className="text-xs text-slate-500">{ship.className}</p>
 
         <div className="relative mx-auto mt-5 h-36 w-40 overflow-hidden">
-          <div className="sunk-modal-smoke" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={SMOKE_PLUME_URL} alt="" className="sunk-modal-smoke" />
           <div className="sunk-modal-ship">
             {ship.profileImageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
