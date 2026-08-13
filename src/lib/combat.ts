@@ -79,11 +79,27 @@ export type TorpedoBattery = { count: number; rangeM: number; speedKnots: number
  */
 export type TorpedoTypeSpec = { id: string; label: string; speedKnots: number; rangeM: number; wakeVisible: boolean };
 
+/**
+ * Charge de bombes (avions uniquement) — voir bombHitChanceBreakdown. Le
+ * piqué (Stuka, Dauntless) vise directement la cible en la gardant en vue
+ * jusqu'au largage : nettement plus précis que le bombardement horizontal
+ * (He 111, Ju 88 haute altitude), qui doit figer sa solution de tir bien
+ * avant l'impact — une cible manoeuvrière esquive alors presque toujours
+ * (constat récurrent de la guerre du Pacifique comme de Méditerranée).
+ */
+export type BombLoadout = {
+  count: number;
+  /** Poids unitaire en kg — sert à calibrer les dégâts (voir bombDamagePerHit). */
+  weightKg: number;
+  method: "DIVE" | "LEVEL";
+};
+
 export type CombatProfile = {
   guns?: GunBattery[];
   torpedoTubes?: TorpedoBattery;
   /** Types de torpilles au choix (sous-marins) ; absent = type unique de `torpedoTubes`. */
   torpedoTypes?: TorpedoTypeSpec[];
+  bombs?: BombLoadout;
 };
 
 /** Batterie de torpilles effective pour un tir : type choisi si fourni et disponible, sinon le tube par défaut. */
@@ -395,6 +411,201 @@ export function resolveTorpedoEngagement(params: {
   return { battery, hitChancePercent, hitChanceBreakdown, hitRoll, hit: true, hits, damagePoints };
 }
 
+// ── Bombardement aérien (avion → navire) ────────────────────
+//
+// Une torpille aérienne réutilise resolveTorpedoEngagement tel quel : une
+// fois à l'eau, la physique est identique à une torpille de surface (même
+// vitesse, même angle d'attaque qui compte). La bombe, en revanche, a un
+// profil propre : précision dominée par la méthode d'attaque (piqué vs
+// horizontal) plutôt que par la portée, qui n'a pas de sens ici — l'avion
+// est toujours "à portée" une fois engagé dans son passage d'attaque.
+//
+// Précisions de base calibrées sur des constats larges de la guerre (pas
+// une bataille précise) : le bombardement en piqué contre un navire de
+// guerre isolé et manoeuvrant tournait couramment autour de 25-30% de
+// coups au but (Stuka, Dauntless) quand le bombardement horizontal à haute
+// altitude contre une cible manoeuvrière descendait souvent sous 5% — la
+// solution de tir, figée bien avant l'impact, ne survit presque jamais à
+// un changement de cap au bon moment.
+
+const DIVE_BOMB_BASE_ACCURACY = 0.28;
+const LEVEL_BOMB_BASE_ACCURACY = 0.04;
+
+/**
+ * Dégâts d'une bombe : à poids égal, une bombe explose au contact ou juste
+ * sous le pont (pas sous la flottaison comme une torpille) — référence
+ * calée sur celle d'un coup de canon de calibre équivalent en énergie
+ * plutôt que sur la torpille, nettement plus dévastatrice à poids égal
+ * grâce à l'effet de mine sous-marin.
+ */
+const REFERENCE_BOMB_WEIGHT_KG = 250; // bombe SC250 allemande / 500lb US, calibre courant de la période
+function bombDamagePerHit(weightKg: number, rng: () => number): number {
+  const base = REFERENCE_DAMAGE_PER_380MM_HIT * 0.55 * Math.pow(weightKg / REFERENCE_BOMB_WEIGHT_KG, 0.9);
+  const variability = 0.6 + rng() * 0.8; // 0.6x à 1.4x — une bombe qui touche est plus inégale en effet qu'un obus calibré
+  return base * variability;
+}
+
+export function bombHitChanceBreakdown(params: {
+  method: "DIVE" | "LEVEL";
+  targetLengthM: number;
+  targetBeamM: number;
+  targetSpeedKnots: number;
+  accuracyMultiplier?: number;
+}): HitChanceBreakdown {
+  const targetArea = Math.max(50, params.targetLengthM * params.targetBeamM);
+  const sizeFactor = clamp(targetArea / 1800, 0.15, 2.2);
+  // Cible évasive : redoutable en horizontal (elle a le temps de virer
+  // avant l'impact), gênante mais surmontable en piqué (le pilote corrige
+  // jusqu'au dernier instant).
+  const speedFactor = params.method === "DIVE" ? 1 / (1 + params.targetSpeedKnots / 30) : 1 / (1 + params.targetSpeedKnots / 10);
+  const baseAccuracy = params.method === "DIVE" ? DIVE_BOMB_BASE_ACCURACY : LEVEL_BOMB_BASE_ACCURACY;
+  const accuracyMultiplier = params.accuracyMultiplier ?? 1;
+  const finalPercent = clamp(baseAccuracy * sizeFactor * speedFactor * accuracyMultiplier * 100, 0, 70);
+  // rangeRatio/rangeFactor n'ont pas de sens pour une bombe (pas de portée
+  // graduée comme un canon/une torpille) : fixés à 1, describeHitChanceDebug
+  // (tacticalNarrative.ts) saute la ligne correspondante dans ce cas.
+  return { baseAccuracy, rangeRatio: 1, rangeFactor: 1, sizeFactor, speedFactor, accuracyMultiplier, finalPercent };
+}
+
+export function bombHitChancePercent(params: Parameters<typeof bombHitChanceBreakdown>[0]): number {
+  return bombHitChanceBreakdown(params).finalPercent;
+}
+
+export type BombingEngagementResult = {
+  loadout: BombLoadout;
+  hitChancePercent: number;
+  hitChanceBreakdown: HitChanceBreakdown;
+  hitRoll: number;
+  hit: boolean;
+  hits: number;
+  damagePoints: number;
+};
+
+/**
+ * Résout un passage de bombardement avion → navire. Retourne `null` si
+ * l'attaquant n'a pas de charge de bombes.
+ */
+export function resolveBombingEngagement(params: {
+  attackerProfile: CombatProfile | null | undefined;
+  attackerHealthCurrent: number;
+  attackerHealthMax: number;
+  targetLengthM: number;
+  targetBeamM: number;
+  targetSpeedKnots: number;
+  /** Télépointage/visée endommagée côté tireur (voir rollLocalizedDamage) : multiplie la précision brute. 1 = intact. */
+  accuracyMultiplier?: number;
+  rng?: () => number;
+}): BombingEngagementResult | null {
+  const rng = params.rng ?? Math.random;
+  const loadout = params.attackerProfile?.bombs;
+  if (!loadout) return null;
+
+  const hitChanceBreakdown = bombHitChanceBreakdown({
+    method: loadout.method,
+    targetLengthM: params.targetLengthM,
+    targetBeamM: params.targetBeamM,
+    targetSpeedKnots: params.targetSpeedKnots,
+    accuracyMultiplier: params.accuracyMultiplier,
+  });
+  const hitChancePercent = hitChanceBreakdown.finalPercent;
+
+  const hitRoll = rng() * 100;
+  const hit = hitRoll < hitChancePercent;
+  if (!hit) {
+    return { loadout, hitChancePercent, hitChanceBreakdown, hitRoll, hit: false, hits: 0, damagePoints: 0 };
+  }
+
+  // Un avion endommagé largue quand même toute sa charge d'un coup (pas de
+  // dégradation progressive comme une bordée de canons répétée manche
+  // après manche) : la santé de l'attaquant ne module donc pas le nombre de
+  // bombes larguées, seulement rollHitCount la répartition des coups au but.
+  const hits = rollHitCount(Math.max(1, loadout.count), rng);
+  let damagePoints = 0;
+  for (let i = 0; i < hits; i++) damagePoints += bombDamagePerHit(loadout.weightKg, rng);
+
+  return { loadout, hitChancePercent, hitChanceBreakdown, hitRoll, hit: true, hits, damagePoints };
+}
+
+// ── Combat air-air (chasse/interception) ────────────────────
+//
+// Un dogfight se joue à une échelle physique sans rapport avec l'artillerie
+// navale (portées en centaines de mètres, cibles minuscules et très
+// rapides) : formule dédiée plutôt qu'une réutilisation des facteurs
+// canon/torpille, qui ne veulent rien dire à cette échelle. Le facteur
+// dominant est l'écart de maniabilité (UnitClass.agility) entre attaquant
+// et défenseur — un chasseur moderne monoplace face à un hydravion ou un
+// bombardier lourd domine largement le duel ; deux chasseurs comparables se
+// neutralisent davantage.
+export function airCombatHitChanceBreakdown(params: {
+  attackerAgility: number;
+  defenderAgility: number;
+  /** Défense active du défenseur (tourelles/mitrailleuses flexibles d'un bombardier/hydravion) : réduit la chance de l'attaquant sans l'annuler — voir historicalNote du Sunderland, surnommé "Flying Porcupine". */
+  defenderHasDefensiveGuns: boolean;
+  accuracyMultiplier?: number;
+}): HitChanceBreakdown {
+  const agilityEdge = clamp(params.attackerAgility - params.defenderAgility, -1, 1);
+  // 0.5 (agilités égales) jusqu'à ~0.85 (net avantage maniabilité).
+  const baseAccuracy = clamp(0.5 + agilityEdge * 0.5, 0.1, 0.85);
+  const defenseFactor = params.defenderHasDefensiveGuns ? 0.75 : 1;
+  const accuracyMultiplier = params.accuracyMultiplier ?? 1;
+  const finalPercent = clamp(baseAccuracy * defenseFactor * accuracyMultiplier * 100, 5, 85);
+  return { baseAccuracy, rangeRatio: 1, rangeFactor: 1, sizeFactor: defenseFactor, speedFactor: 1, accuracyMultiplier, finalPercent };
+}
+
+export function airCombatHitChancePercent(params: Parameters<typeof airCombatHitChanceBreakdown>[0]): number {
+  return airCombatHitChanceBreakdown(params).finalPercent;
+}
+
+/**
+ * Dégâts d'une passe de mitraillage air-air : les avions de cette période
+ * encaissent peu (voir UnitClass.resistancePoints, souvent à un chiffre) —
+ * une passe réussie est fréquemment décisive à elle seule, pas une usure
+ * progressive comme l'artillerie navale.
+ */
+function airCombatDamagePerHit(rng: () => number): number {
+  const variability = 0.8 + rng() * 0.9; // 0.8x à 1.7x — large, une rafale bien placée peut suffire à elle seule
+  return 2.2 * variability;
+}
+
+export type AirCombatEngagementResult = {
+  hitChancePercent: number;
+  hitChanceBreakdown: HitChanceBreakdown;
+  hitRoll: number;
+  hit: boolean;
+  hits: number;
+  damagePoints: number;
+};
+
+/** Résout une passe d'interception air-air (attaquant → cible), un seul avion à la fois. */
+export function resolveAirCombatEngagement(params: {
+  attackerAgility: number | null | undefined;
+  defenderAgility: number | null | undefined;
+  defenderHasDefensiveGuns: boolean;
+  accuracyMultiplier?: number;
+  rng?: () => number;
+}): AirCombatEngagementResult {
+  const rng = params.rng ?? Math.random;
+  const hitChanceBreakdown = airCombatHitChanceBreakdown({
+    attackerAgility: params.attackerAgility ?? 0.5,
+    defenderAgility: params.defenderAgility ?? 0.5,
+    defenderHasDefensiveGuns: params.defenderHasDefensiveGuns,
+    accuracyMultiplier: params.accuracyMultiplier,
+  });
+  const hitChancePercent = hitChanceBreakdown.finalPercent;
+
+  const hitRoll = rng() * 100;
+  const hit = hitRoll < hitChancePercent;
+  if (!hit) {
+    return { hitChancePercent, hitChanceBreakdown, hitRoll, hit: false, hits: 0, damagePoints: 0 };
+  }
+
+  const hits = rollHitCount(1, rng);
+  let damagePoints = 0;
+  for (let i = 0; i < hits; i++) damagePoints += airCombatDamagePerHit(rng);
+
+  return { hitChancePercent, hitChanceBreakdown, hitRoll, hit: true, hits, damagePoints };
+}
+
 // ── Grenades ASM (attaque en profondeur) ───────────────────
 //
 // Un sous-marin immergé (SHALLOW/MEDIUM/DEEP) échappe au canon et à la
@@ -547,10 +758,24 @@ export function rollLocalizedDamage(params: { weaponType: WeaponType; damageRati
       ["FIRE_CONTROL", 14],
       ["NONE", 24],
     ];
+  } else if (params.weaponType === "BOMB") {
+    // Coup vertical sur le pont, pas à plat sur la ceinture : le blindage
+    // horizontal de cette période était généralement plus mince que le
+    // vertical, d'où un risque de magasin plus élevé qu'un obus équivalent
+    // (cas Roma, 1943, bombe guidée dans un magasin). Moins susceptible de
+    // désigner une tourelle précise qu'un impact tendu.
+    table = [
+      ["MAGAZINE", 10],
+      ["TURRET", 10],
+      ["ENGINE", 22],
+      ["RUDDER", 14],
+      ["FIRE_CONTROL", 14],
+      ["NONE", 30],
+    ];
   }
 
   if (!table) {
-    // Grenades ASM : voie d'eau seulement, pas de table dédiée.
+    // Grenades ASM, combat air-air : voie d'eau seulement ou sans objet — pas de table dédiée.
     return {
       effect: { type: "NONE" },
       debug: { weaponType: params.weaponType, damageRatio: params.damageRatio, threshold, belowThreshold: false, table: null, roll: null, rollTotal: null },

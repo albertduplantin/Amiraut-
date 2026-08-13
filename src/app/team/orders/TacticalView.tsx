@@ -15,6 +15,8 @@ import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes
 import {
   gunHitChancePercent,
   torpedoHitChancePercent,
+  bombHitChancePercent,
+  airCombatHitChancePercent,
   isInGunArc,
   isTorpedoArcClear,
   type CombatProfile,
@@ -95,6 +97,8 @@ type OwnUnit = {
   fireControlDamaged: boolean;
   /** Silhouette de profil réelle, si renseignée pour cette classe (voir UnitClass.profileImageUrl). */
   profileImageUrl: string | null;
+  /** Maniabilité en combat air-air (avions uniquement) — voir UnitClass.agility. */
+  agility: number | null;
 };
 
 type Contact = {
@@ -113,6 +117,7 @@ type Contact = {
   estimatedHeadingDeg: number | null;
   estimatedSpeedKnots: number | null;
   profileImageUrl: string | null;
+  agility: number | null;
 };
 
 /** Un tir par pièce : `weaponSlot` distingue "gun:0"/"gun:1"/... et "torpedo" — un navire peut faire tirer chacune séparément la même manche. */
@@ -153,6 +158,7 @@ type MovementDraft = { path: LatLng[] };
 
 const ASSUMED_TARGET_SPEED_RATIO = 0.7;
 const TORPEDO_SLOT = "torpedo";
+const BOMB_SLOT = "bomb";
 const gunSlot = (index: number) => `gun:${index}`;
 
 function weaponSlotsForShip(ship: OwnUnit): string[] {
@@ -160,6 +166,10 @@ function weaponSlotsForShip(ship: OwnUnit): string[] {
   const slots = guns.map((_, i) => gunSlot(i));
   const hasTorpedoes = ship.combatProfile?.torpedoTubes && (ship.torpedoesRemaining == null || ship.torpedoesRemaining > 0);
   if (hasTorpedoes) slots.push(TORPEDO_SLOT);
+  // Une seule passe de bombardement par engagement (pas de décompte de
+  // munitions comme les torpilles) — reflète un avion qui largue toute sa
+  // charge d'un coup plutôt que de garder des bombes en réserve.
+  if (ship.combatProfile?.bombs) slots.push(BOMB_SLOT);
   return slots;
 }
 
@@ -490,7 +500,7 @@ export function TacticalView(props: {
 
   function validateShot() {
     if (!selectedShip || !selectedTarget || !selectedWeaponSlot) return;
-    const weaponType = selectedWeaponSlot === TORPEDO_SLOT ? "TORPEDO" : "GUN";
+    const weaponType = selectedWeaponSlot === TORPEDO_SLOT ? "TORPEDO" : selectedWeaponSlot === BOMB_SLOT ? "BOMB" : "GUN";
     setError(null);
     startTransition(async () => {
       const result = await submitFireShotAction({
@@ -505,8 +515,10 @@ export function TacticalView(props: {
         setError(result.error);
         return;
       }
+      // Pas encore de bruit de bombe (aucun fichier fourni) : silencieux
+      // pour ce type d'arme plutôt que de rejouer le son torpille par erreur.
       if (weaponType === "GUN") playGunSound();
-      else playTorpedoSound();
+      else if (weaponType === "TORPEDO") playTorpedoSound();
       setFreshResults((prev) => ({
         ...prev,
         [`${selectedShip.id}|${selectedWeaponSlot}`]: {
@@ -1235,12 +1247,15 @@ function FireDashboard({
   const torpedoInRange = torpedoBattery && rangeM !== null ? rangeM <= torpedoBattery.rangeM : null;
   const outOfTorpedoes = ship.torpedoesRemaining != null && ship.torpedoesRemaining <= 0;
   const torpedoFired = !!firedBySlot[`${ship.id}|${TORPEDO_SLOT}`];
+  const bombLoadout = ship.combatProfile?.bombs ?? null;
+  const bombFired = !!firedBySlot[`${ship.id}|${BOMB_SLOT}`];
 
   const estimate = useMemo(() => {
     if (!target || rangeM === null || !selectedWeaponSlot) return null;
     const targetLengthM = target.lengthMeters ?? 100;
     const targetBeamM = target.beamMeters ?? 12;
     const assumedSpeed = target.maxSpeedKnots * ASSUMED_TARGET_SPEED_RATIO;
+    const targetIsAircraft = target.category === "AIRCRAFT";
 
     if (selectedWeaponSlot === TORPEDO_SLOT && torpedoBattery) {
       if (torpedoInRange === false || torpedoInArc === false) return null;
@@ -1255,8 +1270,26 @@ function FireDashboard({
         angleOfAttackDeg: 45,
       });
     }
+    if (selectedWeaponSlot === BOMB_SLOT && bombLoadout) {
+      return bombHitChancePercent({
+        method: bombLoadout.method,
+        targetLengthM,
+        targetBeamM,
+        targetSpeedKnots: assumedSpeed,
+      });
+    }
     const gunIndex = selectedWeaponSlot.startsWith("gun:") ? Number(selectedWeaponSlot.slice(4)) : null;
     const battery = gunIndex !== null ? allGuns[gunIndex] : undefined;
+    if (battery && targetIsAircraft) {
+      // Combat air-air : pas de notion de portée/arc à cette échelle (voir
+      // combat.ts) — chance calculée sur la maniabilité relative des deux
+      // appareils.
+      return airCombatHitChancePercent({
+        attackerAgility: ship.agility ?? 0.5,
+        defenderAgility: target.agility ?? 0.5,
+        defenderHasDefensiveGuns: false, // repli optimiste côté estimation client : le vrai calcul (serveur) connaît l'armement réel de la cible.
+      });
+    }
     if (battery) {
       const inRange = battery.rangeM >= rangeM;
       const inArc = isInGunArc(battery.arc, relativeBearing ?? 0);
@@ -1271,7 +1304,7 @@ function FireDashboard({
       });
     }
     return null;
-  }, [target, rangeM, selectedWeaponSlot, allGuns, torpedoBattery, torpedoTypes, selectedTorpedoTypeId, torpedoInRange, torpedoInArc, relativeBearing]);
+  }, [target, rangeM, selectedWeaponSlot, allGuns, torpedoBattery, torpedoTypes, selectedTorpedoTypeId, torpedoInRange, torpedoInArc, relativeBearing, bombLoadout, ship.agility]);
 
   return (
     <div className="space-y-3">
@@ -1295,7 +1328,8 @@ function FireDashboard({
           {allGuns.map((g, i) => {
             const slot = gunSlot(i);
             const fired = firedBySlot[`${ship.id}|${slot}`];
-            const usable = target ? g.rangeM >= rangeM! && isInGunArc(g.arc, relativeBearing ?? 0) : true;
+            // Combat air-air : pas de portée/arc gradués à cette échelle (voir combat.ts) — toujours utilisable dès que la cible est détectée.
+            const usable = !target || target.category === "AIRCRAFT" || (g.rangeM >= rangeM! && isInGunArc(g.arc, relativeBearing ?? 0));
             if (ship.disabledWeaponSlots.includes(slot)) {
               return (
                 <li key={i} className="rounded-md border border-slate-800 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-600">
@@ -1402,7 +1436,53 @@ function FireDashboard({
               </button>
             </li>
           )}
-          {allGuns.length === 0 && !torpedoBattery && <li className="text-xs text-slate-600">Aucune arme.</li>}
+          {bombLoadout && ship.disabledWeaponSlots.includes(BOMB_SLOT) && (
+            <li className="rounded-md border border-slate-800 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-600">
+              <div className="flex items-center justify-between">
+                <span>Bombes ×{bombLoadout.count} ({bombLoadout.method === "DIVE" ? "piqué" : "horizontal"})</span>
+                <span className="text-red-500">✗ hors service</span>
+              </div>
+            </li>
+          )}
+          {bombLoadout && !ship.disabledWeaponSlots.includes(BOMB_SLOT) && bombFired && (
+            <li className={`rounded-md border px-2 py-1.5 text-xs ${firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.hit ? "border-red-800 bg-red-950/30" : "border-slate-700 bg-slate-900"}`}>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Bombes ×{bombLoadout.count} ({bombLoadout.method === "DIVE" ? "piqué" : "horizontal"})</span>
+                <span className="text-emerald-400">✓ larguées</span>
+              </div>
+              {firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.hitRoll !== null && firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.hitChancePercent !== null && (
+                <div className="mt-1 text-slate-500">
+                  Jet : {firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.hitRoll?.toFixed(1)} (seuil{" "}
+                  {firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.hitChancePercent?.toFixed(0)}%)
+                </div>
+              )}
+              {firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.narrative && (
+                <div className="mt-1 text-slate-300">{firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.narrative}</div>
+              )}
+              <DebugDetails text={firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.debugInfo ?? null} />
+            </li>
+          )}
+          {bombLoadout && !ship.disabledWeaponSlots.includes(BOMB_SLOT) && !bombFired && (
+            <li>
+              <button
+                onClick={() => setSelectedWeaponSlot(BOMB_SLOT)}
+                disabled={!!target && target.category !== "SURFACE_SHIP"}
+                className={`w-full rounded-md px-2 py-1.5 text-left text-xs transition ${
+                  selectedWeaponSlot === BOMB_SLOT
+                    ? "bg-brass-900/50 ring-1 ring-brass-500"
+                    : target && target.category !== "SURFACE_SHIP"
+                      ? "cursor-not-allowed opacity-40"
+                      : "border border-slate-700 hover:bg-slate-800"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span>Bombes ×{bombLoadout.count} ({bombLoadout.method === "DIVE" ? "piqué" : "horizontal"})</span>
+                </div>
+                {target && target.category !== "SURFACE_SHIP" && <div className="text-[11px] text-amber-400">ne vise qu&apos;un navire de surface</div>}
+              </button>
+            </li>
+          )}
+          {allGuns.length === 0 && !torpedoBattery && !bombLoadout && <li className="text-xs text-slate-600">Aucune arme.</li>}
         </ul>
       </div>
 

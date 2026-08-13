@@ -6,6 +6,8 @@ import {
   resolveGunEngagement,
   resolveTorpedoEngagement,
   resolveDepthChargeAttack,
+  resolveBombingEngagement,
+  resolveAirCombatEngagement,
   rollLocalizedDamage,
   selectTorpedoBattery,
   isTorpedoArcClear,
@@ -578,6 +580,7 @@ export function gunWeaponSlot(gunIndex: number): string {
 }
 export const TORPEDO_WEAPON_SLOT = "torpedo";
 export const DEPTH_CHARGE_WEAPON_SLOT = "depth_charge";
+export const BOMB_WEAPON_SLOT = "bomb";
 
 function parseGunSlotIndex(weaponSlot: string): number | null {
   if (!weaponSlot.startsWith("gun:")) return null;
@@ -676,6 +679,36 @@ export async function submitTacticalFireShot(params: {
       where: { id: attacker.id },
       data: { depthChargesRemaining: Math.max(0, (attacker.depthChargesRemaining ?? 0) - dc.chargesUsed) },
     });
+  } else if (params.weaponType === "GUN" && target.unitClass.category === "AIRCRAFT") {
+    // Combat air-air : même WeaponType GUN que l'artillerie navale (une
+    // mitrailleuse/un canon d'avion reste une "pièce" au sens du modèle),
+    // mais la cible est un autre avion — formule dédiée (voir
+    // airCombatHitChanceBreakdown dans combat.ts), pas de notion d'arc ou
+    // de portée graduée à cette échelle. Sert aussi bien à un chasseur qui
+    // attaque qu'à un bombardier/hydravion qui riposte à la mitrailleuse
+    // flexible depuis sa tourelle.
+    const gunIndex = parseGunSlotIndex(params.weaponSlot);
+    const battery = gunIndex !== null ? (profile?.guns?.[gunIndex] ?? null) : null;
+    if (!battery) throw new OrderValidationError("Cette pièce est introuvable sur cet avion.");
+    calibreMm = battery.calibreMm;
+    const targetProfile = target.unitClass.combatProfile as CombatProfile | null;
+    outcome = resolveAirCombatEngagement({
+      attackerAgility: attacker.unitClass.agility,
+      defenderAgility: target.unitClass.agility,
+      defenderHasDefensiveGuns: (targetProfile?.guns?.length ?? 0) > 0,
+      accuracyMultiplier,
+    });
+  } else if (params.weaponType === "BOMB") {
+    if (target.unitClass.category !== "SURFACE_SHIP") throw new OrderValidationError("Une bombe ne vise qu'un navire de surface.");
+    outcome = resolveBombingEngagement({
+      attackerProfile: profile,
+      attackerHealthCurrent,
+      attackerHealthMax,
+      targetLengthM: target.unitClass.lengthMeters ?? 100,
+      targetBeamM: target.unitClass.beamMeters ?? 12,
+      targetSpeedKnots: 0,
+      accuracyMultiplier,
+    });
   } else if (params.weaponType === "GUN") {
     if (targetSubmerged) throw new OrderValidationError("Un sous-marin immergé n'est pas canonnable.");
     const gunIndex = parseGunSlotIndex(params.weaponSlot);
@@ -702,6 +735,7 @@ export async function submitTacticalFireShot(params: {
       accuracyMultiplier,
     });
   } else if (params.weaponType === "TORPEDO") {
+    if (target.unitClass.category === "AIRCRAFT") throw new OrderValidationError("Une torpille ne vise pas un avion — torpille aérienne ou pas, la cible reste un navire.");
     if (targetSubmerged) throw new OrderValidationError("Une torpille classique ne touche pas un sous-marin immergé.");
     if (attacker.unitClass.category === "SUBMARINE" && (attacker.depthBand === "MEDIUM" || attacker.depthBand === "DEEP")) {
       throw new OrderValidationError("Torpilles impossibles en immersion moyenne ou grande.");
@@ -758,7 +792,11 @@ export async function submitTacticalFireShot(params: {
   // tourelle ou un gouvernail n'a pas de sens pour un sous-marin ici).
   let localizedEffect: LocalizedEffectStored | null = null;
   let localizedDebugLine: string | null = null;
-  if (outcome.hit && (params.weaponType === "GUN" || params.weaponType === "TORPEDO") && target.unitClass.category === "SURFACE_SHIP") {
+  if (
+    outcome.hit &&
+    (params.weaponType === "GUN" || params.weaponType === "TORPEDO" || params.weaponType === "BOMB") &&
+    target.unitClass.category === "SURFACE_SHIP"
+  ) {
     const { effect, debug } = rollLocalizedDamage({ weaponType: params.weaponType, damageRatio });
     localizedDebugLine = describeLocalizedRollDebug(debug);
     if (effect.type === "TURRET") {
@@ -815,6 +853,7 @@ export async function submitTacticalFireShot(params: {
           damageRatio,
           targetSunk: provisionalSunk,
           rangeNm: rangeM / NM_TO_M,
+          targetIsAircraft: target.unitClass.category === "AIRCRAFT",
         }) + (localizedEffect ? " " + describeLocalizedEffect(localizedEffect, target.name) : "");
 
   try {

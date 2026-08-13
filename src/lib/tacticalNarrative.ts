@@ -99,6 +99,8 @@ export type NarrativeInput = {
   damageRatio: number;
   targetSunk: boolean;
   rangeNm: number;
+  /** Cible = un avion (combat air-air) plutôt qu'un navire — change le vocabulaire (abattu, pas coulé). */
+  targetIsAircraft?: boolean;
   rng?: () => number;
 };
 
@@ -107,6 +109,16 @@ export function describeShot(input: NarrativeInput): string {
   const rng = input.rng ?? Math.random;
   const { attackerName, targetName, rangeNm } = input;
 
+  if (input.targetSunk && input.targetIsAircraft) {
+    return pick(
+      [
+        `${targetName} part en vrille, une aile arrachée — l'appareil s'écrase, pas de parachute vu s'ouvrir.`,
+        `Une gerbe de flammes le long du fuselage : ${targetName} pique droit vers la mer.`,
+        `Touché en plein moteur, ${targetName} laisse une traînée de fumée noire et disparaît sous l'horizon.`,
+      ],
+      rng
+    );
+  }
   if (input.targetSunk) {
     return pick(
       [
@@ -120,6 +132,24 @@ export function describeShot(input: NarrativeInput): string {
   }
 
   if (!input.hit) {
+    if (input.weaponType === "GUN" && input.targetIsAircraft) {
+      return pick(
+        [
+          `${attackerName} ouvre le feu, mais ${targetName} rompt le combat d'un virage serré — rafale dans le vide.`,
+          `Traçantes qui filent loin derrière ${targetName} : la solution de tir n'a pas suivi la manœuvre.`,
+        ],
+        rng
+      );
+    }
+    if (input.weaponType === "BOMB") {
+      return pick(
+        [
+          `La bombe explose à quelques mètres de la coque de ${targetName} — gerbe d'eau, aucun dégât direct.`,
+          `${targetName} vire au bon moment : la bombe de ${attackerName} passe largement à côté.`,
+        ],
+        rng
+      );
+    }
     if (input.weaponType === "TORPEDO") {
       return pick(
         [
@@ -154,6 +184,33 @@ export function describeShot(input: NarrativeInput): string {
   const heavy = input.damageRatio >= 0.25;
   const light = input.damageRatio < 0.08;
 
+  if (input.weaponType === "GUN" && input.targetIsAircraft) {
+    return pick(
+      [
+        `${plural ? "Plusieurs rafales touchent" : "Une rafale touche"} ${targetName} — il perd de l'altitude, fumée au moteur.`,
+        `Coup au but sur ${targetName} : une aile est trouée, l'appareil devient difficile à contrôler.`,
+        `${attackerName} touche ${targetName} en plein fuselage — il rompt le combat, endommagé.`,
+      ],
+      rng
+    );
+  }
+  if (input.weaponType === "BOMB") {
+    return heavy
+      ? pick(
+          [
+            `Coup direct sur ${targetName} : la bombe perce le pont et explose en profondeur, incendie majeur à bord.`,
+            `${targetName} est secoué de plein fouet — une gerbe de débris retombe sur le pont, plusieurs ponts endommagés.`,
+          ],
+          rng
+        )
+      : pick(
+          [
+            `La bombe touche ${targetName} en surface — dégâts limités, mais un incendie prend à bord.`,
+            `Impact confirmé sur ${targetName} : la superstructure encaisse, sans dommage vital.`,
+          ],
+          rng
+        );
+  }
   if (input.weaponType === "TORPEDO") {
     return heavy
       ? pick(
@@ -253,14 +310,16 @@ function pct(x: number): string {
   return `${Math.round(x * 100)}%`;
 }
 
-/** Détail lisible du calcul de précision d'un tir (canon ou torpille). */
+/** Détail lisible du calcul de précision d'un tir (canon, torpille, bombe ou combat air-air). */
 export function describeHitChanceDebug(b: HitChanceBreakdown): string {
-  const parts = [
-    `précision de base ${pct(b.baseAccuracy)}`,
-    `× facteur portée ${b.rangeFactor.toFixed(2)} (${pct(b.rangeRatio)} de la portée max)`,
-    `× facteur taille cible ${b.sizeFactor.toFixed(2)}`,
-    `× facteur vitesse cible ${b.speedFactor.toFixed(2)}`,
-  ];
+  const parts = [`précision de base ${pct(b.baseAccuracy)}`];
+  // rangeFactor === rangeRatio === 1 signale une arme sans notion de portée
+  // graduée (bombe, combat air-air) — voir combat.ts, bombHitChanceBreakdown
+  // et airCombatHitChanceBreakdown : la ligne n'apporterait aucune information.
+  if (b.rangeFactor !== 1 || b.rangeRatio !== 1) {
+    parts.push(`× facteur portée ${b.rangeFactor.toFixed(2)} (${pct(b.rangeRatio)} de la portée max)`);
+  }
+  parts.push(`× facteur taille cible ${b.sizeFactor.toFixed(2)}`, `× facteur vitesse cible ${b.speedFactor.toFixed(2)}`);
   if (b.accuracyMultiplier !== 1) parts.push(`× malus télépointage ${b.accuracyMultiplier.toFixed(2)}`);
   return `${parts.join(" ")} = ${b.finalPercent.toFixed(1)}%`;
 }

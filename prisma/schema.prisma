@@ -127,6 +127,13 @@ model UnitClass {
   turningRadiusM         Float?
   accelerationKnotsPerMin Float?
 
+  // Combat air-air (avions uniquement) : maniabilité relative au combat
+  // tournoyant, distincte de turningRadiusM (rayon de virage en vol de
+  // transit, en mètres — sans rapport avec l'agilité en dogfight). 0-1,
+  // calibrée sur des cas documentés (chasseur monoplace moderne ~0.8-0.95,
+  // hydravion/bombardier lourd ~0.1-0.3) — voir combat.ts, airCombatHitChancePercent.
+  agility Float?
+
   units Unit[]
 }
 
@@ -134,6 +141,52 @@ enum UnitCategory {
   SURFACE_SHIP
   SUBMARINE
   AIRCRAFT
+}
+
+// ── Bibliothèque de classes partagée (navires + avions) ────────
+//
+// Distincte d'UnitClass : UnitClass est une copie jetable créée à chaque
+// instanciation de partie (voir instantiateScenario) — modifier une classe
+// en cours de partie ne doit jamais affecter les autres parties. Celle-ci
+// est LA source éditable par l'arbitre via /library, dans laquelle un
+// scénario peut piocher par sa clé plutôt que de tout redéfinir en ligne
+// (voir prisma/scenarios/types.ts, ScenarioUnitClass.libraryKey). Mêmes
+// champs qu'UnitClass, à quelques ajouts près (key, theater).
+model LibraryUnitClass {
+  id                    String       @id @default(cuid())
+  // Slug stable, référencé depuis le JSON d'un scénario (libraryKey) —
+  // jamais réutilisé pour une autre classe, même après renommage de `name`.
+  key                   String       @unique
+  name                  String
+  nation                String
+  category              UnitCategory
+  maxSpeedKnots         Float
+  lengthMeters          Float?
+  beamMeters            Float?
+  sensors               Json
+  detectability         Float   @default(1)
+  iconKey               String
+  profileImageUrl       String?
+  planImageUrl          String?
+  historicalNote        String?
+  passive               Boolean @default(false)
+  enduranceMinutes      Int?
+  weaponSystems         Json?
+  combatProfile         Json?
+  depthChargeStock      Int?
+  submergedRangeNmAt4kt Float?
+  oxygenEnduranceHours  Float?
+  torpedoStock          Int?
+  turningRadiusM         Float?
+  accelerationKnotsPerMin Float?
+  agility                Float?
+  resistancePoints        Float // voir UnitClass.healthMax/Current, calculé à l'instanciation à partir de cette valeur
+  // Repère libre pour le classement dans /library (ex. "Atlantique/Arctique
+  // 1939-45") — pas utilisé par le moteur, juste pour s'y retrouver.
+  theater                 String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ── Instances d'unités dans un scénario ───────────────────
@@ -496,6 +549,10 @@ enum WeaponType {
   GUN
   TORPEDO
   DEPTH_CHARGE
+  // Bombe d'avion (bombardement en piqué ou horizontal) — voir CombatProfile.bombs
+  // dans combat.ts. Une torpille aérienne reste WeaponType.TORPEDO : mêmes
+  // règles physiques qu'une torpille de surface une fois à l'eau.
+  BOMB
 }
 
 // ── Rapport publié, filtré par équipe ────────────────────────

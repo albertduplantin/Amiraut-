@@ -254,6 +254,7 @@ async function renderTacticalView(engagementId: string, teamId: string) {
         rudderJammed: u.rudderJammed,
         fireControlDamaged: u.fireControlDamaged,
         profileImageUrl: u.unitClass.profileImageUrl,
+        agility: u.unitClass.agility,
       }))}
       contacts={Array.from(bestContactByTarget.values()).map((c) => {
         const observer = ownUnits.find((u) => u.id === c.observerUnitId);
@@ -286,6 +287,7 @@ async function renderTacticalView(engagementId: string, teamId: string) {
           estimatedHeadingDeg: estimate?.headingDeg ?? null,
           estimatedSpeedKnots: estimate?.speedKnots ?? null,
           profileImageUrl: c.targetUnit.unitClass.profileImageUrl,
+          agility: c.targetUnit.unitClass.agility,
         };
       })}
       ownFireActionsThisRound={ownFireActionsThisRound.map((a) => ({
