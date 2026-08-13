@@ -7,7 +7,7 @@
  * la sérialiser en JSON pour la partager entre joueurs.
  */
 
-export type ScenarioSensor = { type: "RADAR" | "VISUAL" | "HYDROPHONE" | "SONAR"; rangeNm: number };
+export type ScenarioSensor = { type: "RADAR" | "VISUAL" | "HYDROPHONE" | "SONAR" | "HF_DF"; rangeNm: number };
 
 export type ScenarioGunArc = "FORWARD" | "AFT" | "ALL_ROUND" | "BROADSIDE";
 export type ScenarioGunBattery = {

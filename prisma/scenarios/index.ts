@@ -2,6 +2,7 @@ import type { PrismaClient } from "../../src/generated/prisma/client";
 import type { ScenarioDefinition } from "./types";
 import { validateScenarioDefinition } from "./validation";
 import { denmarkStrait } from "./denmark-strait";
+import { northCape } from "./north-cape";
 
 /**
  * Bibliothèque de scénarios intégrés. Ajouter un scénario = ajouter une
@@ -10,7 +11,7 @@ import { denmarkStrait } from "./denmark-strait";
  * base dans `CustomScenario` — voir findScenarioAsync/listAllScenarioSummaries
  * ci-dessous pour les deux confondus.
  */
-export const SCENARIO_LIBRARY: ScenarioDefinition[] = [denmarkStrait];
+export const SCENARIO_LIBRARY: ScenarioDefinition[] = [denmarkStrait, northCape];
 
 export function findScenario(key: string): ScenarioDefinition | undefined {
   return SCENARIO_LIBRARY.find((s) => s.key === key);

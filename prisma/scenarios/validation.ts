@@ -11,7 +11,7 @@ import type { ScenarioDefinition } from "./types";
 const KEY_PATTERN = /^[a-z0-9][a-z0-9-]{2,63}$/;
 
 const SensorSchema = z.object({
-  type: z.enum(["RADAR", "VISUAL", "HYDROPHONE", "SONAR"]),
+  type: z.enum(["RADAR", "VISUAL", "HYDROPHONE", "SONAR", "HF_DF"]),
   rangeNm: z.number().positive(),
 });
 
