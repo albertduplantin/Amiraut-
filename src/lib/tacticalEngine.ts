@@ -729,15 +729,21 @@ export async function submitTacticalFireShot(params: {
   const pilotSkillFactor = attacker.unitClass.category === "AIRCRAFT" ? pilotSkillMultiplier(attacker.unitClass.pilotSkill) : 1;
   const airAttackAccuracyMultiplier = accuracyMultiplier * pilotSkillFactor;
 
-  // ── DCA : riposte automatique d'un navire ciblé par un avion ──────────
+  // ── DCA : riposte automatique d'un navire (ou sous-marin en surface)
+  // ciblé par un avion ──────────────────────────────────────────────────
   // (bombardement, torpille aérienne, mitraillage — voir resolveDcaAttack
   // dans combat.ts) — résolue AVANT l'attaque elle-même : un avion abattu
   // avant d'avoir largué/tiré ne fait en principe pas de dégâts, sauf le
   // tirage à ~50% qui le laisse quand même achever sa passe (Amirauté 2013
-  // §4.6.2.4). Ne concerne que les attaques avion → navire, jamais l'inverse.
+  // §4.6.2.4). Ne concerne que les attaques avion → cible de surface,
+  // jamais l'inverse — et jamais un sous-marin immergé (voir targetSubmerged
+  // plus haut), qui n'a pas de pièce à l'air libre pour riposter. Un U-Boot
+  // équipé de flak peut ainsi abattre l'avion qui l'attaque en surface, cas
+  // historique bien documenté (ex. combats du golfe de Gascogne, 1943,
+  // recherche 2026-08-14).
   let dcaNarrative: string | null = null;
   let dcaAbortsAttack = false;
-  if (attacker.unitClass.category === "AIRCRAFT" && target.unitClass.category === "SURFACE_SHIP") {
+  if (attacker.unitClass.category === "AIRCRAFT" && (target.unitClass.category === "SURFACE_SHIP" || (target.unitClass.category === "SUBMARINE" && !targetSubmerged))) {
     const targetProfile = target.unitClass.combatProfile as CombatProfile | null;
     const aaBattery = targetProfile?.antiAircraft;
     if (aaBattery) {
@@ -828,12 +834,19 @@ export async function submitTacticalFireShot(params: {
       // défense encaisse moins qu'un débutant, voir combat.ts).
       accuracyMultiplier: airAttackAccuracyMultiplier / pilotSkillMultiplier(target.unitClass.pilotSkill),
     });
-  } else if (params.weaponType === "GUN" && attacker.unitClass.category === "AIRCRAFT" && target.unitClass.category === "SURFACE_SHIP") {
-    // Mitraillage/roquettes : un avion qui attaque un navire de surface au
-    // canon/à la roquette plutôt qu'à la bombe ou à la torpille — très
-    // précis mais presque sans effet contre un bâtiment de tonnage
-    // significatif (voir resolveStrafingEngagement, combat.ts). Recherche
-    // 2026-08-14, Amirauté 2013 §4.6.3.6.
+  } else if (
+    params.weaponType === "GUN" &&
+    attacker.unitClass.category === "AIRCRAFT" &&
+    (target.unitClass.category === "SURFACE_SHIP" || (target.unitClass.category === "SUBMARINE" && !targetSubmerged))
+  ) {
+    // Mitraillage/roquettes : un avion qui attaque un navire de surface (ou
+    // un sous-marin EN SURFACE — mitraillage de suppression avant/pendant
+    // une passe de grenadage, cas historique bien documenté contre les
+    // U-Boote du golfe de Gascogne en 1943) au canon/à la roquette plutôt
+    // qu'à la bombe ou à la torpille — très précis mais presque sans effet
+    // contre un bâtiment de tonnage significatif (voir
+    // resolveStrafingEngagement, combat.ts). Recherche 2026-08-14, Amirauté
+    // 2013 §4.6.3.6.
     const gunIndex = parseGunSlotIndex(params.weaponSlot);
     const battery = gunIndex !== null ? (profile?.guns?.[gunIndex] ?? null) : null;
     if (!battery) throw new OrderValidationError("Cette pièce est introuvable sur cet avion.");
@@ -848,7 +861,17 @@ export async function submitTacticalFireShot(params: {
       outcome = { ...strafe, hits: strafe.hit ? 1 : 0 };
     }
   } else if (params.weaponType === "BOMB") {
-    if (target.unitClass.category !== "SURFACE_SHIP") throw new OrderValidationError("Une bombe ne vise qu'un navire de surface.");
+    // Une bombe/grenade ASM larguée par avion vise un navire de surface ou
+    // un sous-marin EN SURFACE (jamais immergé — targetSubmerged plus haut,
+    // même règle que les grenades ASM/Hedgehog embarqués) : c'est très
+    // exactement la lutte anti-sous-marine aérienne historique (Sunderland/
+    // Catalina contre U-Boot pris en surface, recherche 2026-08-14).
+    // resolveBombingEngagement (combat.ts) reste inchangée — sa dépendance
+    // à targetBeamM rend déjà un U-Boot (~6-9m de large) mécaniquement plus
+    // dur à toucher qu'un navire de guerre, sans formule dédiée nécessaire.
+    if (target.unitClass.category !== "SURFACE_SHIP" && !(target.unitClass.category === "SUBMARINE" && !targetSubmerged)) {
+      throw new OrderValidationError("Une bombe/grenade ASM aérienne ne vise qu'un navire de surface ou un sous-marin en surface.");
+    }
     outcome = dcaAbortsAttack
       ? { hitChancePercent: 0, hitRoll: 100, hit: false, hits: 0, damagePoints: 0 }
       : resolveBombingEngagement({

@@ -1,11 +1,13 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { bearingDeg, distanceNm, type LatLng } from "@/lib/geo";
+import { bearingDeg, distanceNm, destinationPoint, type LatLng } from "@/lib/geo";
 import { getLastKnownSpeedsByUnit, defaultTurningRadiusM, defaultAccelerationKnotsPerMin } from "@/lib/tacticalEngine";
 import { checkTurnProgress } from "@/lib/turnEngine";
 import { OrdersClient } from "./OrdersClient";
 import { TacticalView } from "./TacticalView";
+
+const NM_TO_M = 1852;
 
 export default async function OrdersPage() {
   const session = await getSession();
@@ -141,7 +143,17 @@ async function renderTacticalView(engagementId: string, teamId: string) {
   // sont encore en transit.
   const ownTorpedoSalvos = await prisma.tacticalTorpedoSalvo.findMany({
     where: { engagementId, firedByTeamId: teamId },
-    select: { firedByUnitId: true, firedRoundNumber: true, status: true },
+    select: {
+      id: true,
+      firedByUnitId: true,
+      firedRoundNumber: true,
+      status: true,
+      currentLat: true,
+      currentLng: true,
+      headingDeg: true,
+      speedKnots: true,
+      distanceTraveledM: true,
+    },
   });
   const firedTorpedoThisRoundByUnit = new Set(
     ownTorpedoSalvos.filter((s) => s.firedRoundNumber === engagement.roundNumber).map((s) => s.firedByUnitId)
@@ -151,6 +163,18 @@ async function renderTacticalView(engagementId: string, teamId: string) {
     if (s.status !== "IN_TRANSIT" || s.firedRoundNumber === engagement.roundNumber) continue;
     inTransitSalvoCountByUnit.set(s.firedByUnitId, (inTransitSalvoCountByUnit.get(s.firedByUnitId) ?? 0) + 1);
   }
+  // Trace visuelle des salves en transit (voir TacticalView, section
+  // "Torpilles") : une salve va toujours en ligne droite à cap constant, son
+  // origine se reconstruit donc par géométrie inverse à partir de la
+  // position courante et de la distance déjà parcourue — pas besoin de
+  // stocker un point de départ séparé en base.
+  const ownInTransitSalvoes = ownTorpedoSalvos
+    .filter((s) => s.status === "IN_TRANSIT")
+    .map((s) => {
+      const current = { lat: s.currentLat, lng: s.currentLng };
+      const origin = destinationPoint(current, (s.headingDeg + 180) % 360, s.distanceTraveledM / NM_TO_M);
+      return { id: s.id, firedByUnitId: s.firedByUnitId, origin, current, headingDeg: s.headingDeg, speedKnots: s.speedKnots };
+    });
   // Navires déjà repositionnés cette manche (soumission par navire, voir
   // TacticalView) : sert à l'indicateur "validé" dans la liste et à
   // pré-remplir le brouillon avec le trajet déjà enregistré si le joueur
@@ -341,6 +365,7 @@ async function renderTacticalView(engagementId: string, teamId: string) {
       enemyTrailByTarget={Object.fromEntries(
         Array.from(enemyTrailByTarget.entries()).map(([targetUnitId, trail]) => [targetUnitId, trail.map((t) => t.point)])
       )}
+      ownInTransitSalvoes={ownInTransitSalvoes}
       battleLog={battleLog.map((a) => ({
         roundNumber: a.roundNumber,
         targetUnitId: a.targetUnitId,

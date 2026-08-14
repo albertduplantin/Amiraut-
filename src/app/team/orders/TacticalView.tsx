@@ -235,6 +235,8 @@ export function TacticalView(props: {
   ownTrailByUnit: Record<string, LatLng[]>;
   /** Même principe pour les contacts ennemis, mais uniquement leurs positions relevées (jamais leur position réelle non détectée). */
   enemyTrailByTarget: Record<string, LatLng[]>;
+  /** Salves de torpilles propres encore en transit (jamais celles de l'adversaire — brouillard de guerre) : trace dessinée sur la carte, voir la section "sources" ci-dessous. */
+  ownInTransitSalvoes: { id: string; firedByUnitId: string; origin: LatLng; current: LatLng; headingDeg: number; speedKnots: number }[];
   battleLog: LogEntry[];
   messages: BattleMessage[];
 }) {
@@ -740,6 +742,41 @@ export function TacticalView(props: {
       });
     }
 
+    // Salves de torpilles propres en transit : trace de l'origine (calculée
+    // par géométrie inverse — une salve va toujours en ligne droite, voir
+    // page.tsx) jusqu'à sa position courante, qui avance manche après
+    // manche à chaque résolution. Jamais les salves adverses — brouillard
+    // de guerre, aucun mécanisme de révélation de sillage ennemi.
+    if (props.ownInTransitSalvoes.length > 0) {
+      list.push({
+        id: "torpedo-salvo-traces",
+        kind: "line",
+        data: multiLineFeatureCollection(props.ownInTransitSalvoes.map((s) => [s.origin, s.current])),
+        color: "#67e8f9",
+        width: 2,
+      });
+      list.push({
+        id: "torpedo-salvo-heads",
+        kind: "points",
+        data: pointsFeatureCollection(props.ownInTransitSalvoes.map((s) => ({ lat: s.current.lat, lng: s.current.lng, properties: {} }))),
+        color: "#67e8f9",
+        radius: 4,
+      });
+      // Extension pointillée montrant la distance que la salve parcourra
+      // encore ce tour-ci — même convention visuelle que la projection de
+      // trajectoire ennemie (enemy-projection) plus bas.
+      list.push({
+        id: "torpedo-salvo-projection",
+        kind: "line",
+        data: multiLineFeatureCollection(
+          props.ownInTransitSalvoes.map((s) => [s.current, destinationPoint(s.current, s.headingDeg, speedBudgetNm(s.speedKnots, props.roundMinutes))])
+        ),
+        color: "#67e8f9",
+        width: 1,
+        dashed: true,
+      });
+    }
+
     if (isMovementPhase && showEnemyProjection) {
       const projections = liveContacts
         .filter((c) => c.estimatedHeadingDeg != null && c.estimatedSpeedKnots != null)
@@ -767,6 +804,7 @@ export function TacticalView(props: {
     props.roundMinutes,
     props.ownTrailByUnit,
     props.enemyTrailByTarget,
+    props.ownInTransitSalvoes,
   ]);
 
   // Épaves : un navire coulé reste affiché à sa dernière position (croix

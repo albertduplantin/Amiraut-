@@ -43,7 +43,11 @@ const TorpedoTypeSchema = z.object({
 const BombLoadoutSchema = z.object({
   count: z.number().int().positive(),
   weightKg: z.number().positive(),
-  method: z.enum(["DIVE", "LEVEL"]),
+  method: z.enum(["DIVE", "LEVEL", "SKIP"]),
+});
+
+const AntiAircraftBatterySchema = z.object({
+  gunCount: z.number().int().positive(),
 });
 
 export const UnitClassSchema = z.object({
@@ -71,6 +75,7 @@ export const UnitClassSchema = z.object({
       torpedoTubes: TorpedoTubesSchema.optional(),
       torpedoTypes: z.array(TorpedoTypeSchema).optional(),
       bombs: BombLoadoutSchema.optional(),
+      antiAircraft: AntiAircraftBatterySchema.optional(),
     })
     .optional(),
   weaponSystems: z.record(z.string(), z.unknown()).optional(),

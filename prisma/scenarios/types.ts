@@ -28,7 +28,9 @@ export type ScenarioTorpedoType = {
 };
 
 /** Charge de bombes (avions) — voir combat.ts, BombLoadout. */
-export type ScenarioBombLoadout = { count: number; weightKg: number; method: "DIVE" | "LEVEL" };
+export type ScenarioBombLoadout = { count: number; weightKg: number; method: "DIVE" | "LEVEL" | "SKIP" };
+/** DCA embarquée (navires/sous-marins en surface) — voir combat.ts, AntiAircraftBattery. */
+export type ScenarioAntiAircraftBattery = { gunCount: number };
 
 export type ScenarioUnitClass = {
   key: string;
@@ -58,6 +60,7 @@ export type ScenarioUnitClass = {
     torpedoTubes?: ScenarioTorpedoTubes;
     torpedoTypes?: ScenarioTorpedoType[];
     bombs?: ScenarioBombLoadout;
+    antiAircraft?: ScenarioAntiAircraftBattery;
   };
   weaponSystems?: Record<string, unknown>;
   depthChargeStock?: number;
