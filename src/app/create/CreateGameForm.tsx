@@ -236,7 +236,17 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
                   <span className="text-xs text-slate-500">{s.dateLabel}</span>
                 </div>
                 <p className="mt-1 text-xs text-slate-400">{s.description}</p>
-                <p className="mt-1 text-xs text-slate-600">Camps : {s.teamNames.join(" contre ")}</p>
+                <div className="mt-1 flex items-center justify-between">
+                  <p className="text-xs text-slate-600">Camps : {s.teamNames.join(" contre ")}</p>
+                  {/* stopPropagation : dans le <button> de sélection du scénario, ne doit pas le choisir pour la partie en cours de création. */}
+                  <Link
+                    href={`/scenarios/new?duplicate=${encodeURIComponent(s.key)}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-xs text-brass-400 hover:text-brass-300"
+                  >
+                    Dupliquer et modifier →
+                  </Link>
+                </div>
               </button>
             ))}
           </div>

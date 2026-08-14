@@ -5,6 +5,7 @@ import Link from "next/link";
 import { GameMap, type MapSourceConfig } from "@/components/GameMap";
 import { pointsFeatureCollection, colorForId } from "@/lib/mapData";
 import { ScenarioDefinitionSchema } from "../../../../prisma/scenarios/validation";
+import type { ScenarioDefinition } from "../../../../prisma/scenarios/types";
 import { createCustomScenarioAction } from "./actions";
 
 /**
@@ -15,6 +16,14 @@ import { createCustomScenarioAction } from "./actions";
  * JSON, avec validation et aperçu carte avant enregistrement. Un outil pour
  * qui veut composer un scénario complet, pas un assistant pas-à-pas : voir
  * le format complet dans prisma/scenarios/types.ts.
+ *
+ * `duplicateFrom` (bouton « Dupliquer et modifier » sur /create, retour
+ * utilisateur 2026-08-14) : pré-remplit tous les champs avec le contenu
+ * COMPLET d'un scénario existant (intégré ou déjà créé par un joueur)
+ * plutôt que l'exemple générique — clé et nom légèrement modifiés pour
+ * éviter toute collision, tout le reste identique, à éditer sur place.
+ * L'original n'est jamais touché : "Enregistrer" crée toujours une entrée
+ * séparée dans CustomScenario.
  */
 
 const EXAMPLE_OOB = {
@@ -106,28 +115,41 @@ function slugify(name: string) {
     .slice(0, 64);
 }
 
-export function ScenarioEditorForm() {
-  const [name, setName] = useState("");
-  const [key, setKey] = useState("");
-  const [keyTouched, setKeyTouched] = useState(false);
-  const [description, setDescription] = useState("");
-  const [briefing, setBriefing] = useState("");
-  const [dateLabel, setDateLabel] = useState("");
-  const [mapCenterLat, setMapCenterLat] = useState(60);
-  const [mapCenterLng, setMapCenterLng] = useState(-10);
-  const [mapDefaultZoom, setMapDefaultZoom] = useState(6);
-  const [defaultTurnMinutes, setDefaultTurnMinutes] = useState(60);
-  const [tacticalRoundMinutes, setTacticalRoundMinutes] = useState(5);
-  const [source, setSource] = useState("");
+/** Clé dérivée d'un scénario dupliqué, distincte de l'original (voir duplicateFrom) — un court suffixe aléatoire suffit, pas besoin d'unicité garantie ici, juste de collision peu probable ; le serveur revalide de toute façon à l'enregistrement. */
+function duplicateKey(originalKey: string) {
+  return `${originalKey}-variante-${Date.now().toString(36).slice(-4)}`;
+}
 
-  const [visibilityNm, setVisibilityNm] = useState(12);
-  const [seaState, setSeaState] = useState(3);
-  const [daylight, setDaylight] = useState("DAY");
-  const [precipitation, setPrecipitation] = useState("NONE");
-  const [windKnots, setWindKnots] = useState(15);
-  const [weatherNotes, setWeatherNotes] = useState("");
+export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: ScenarioDefinition | null }) {
+  const [name, setName] = useState(() => (duplicateFrom ? `${duplicateFrom.name} (variante)` : ""));
+  const [key, setKey] = useState(() => (duplicateFrom ? duplicateKey(duplicateFrom.key) : ""));
+  const [keyTouched, setKeyTouched] = useState(() => duplicateFrom !== null);
+  const [description, setDescription] = useState(() => duplicateFrom?.description ?? "");
+  const [briefing, setBriefing] = useState(() => duplicateFrom?.briefing ?? "");
+  const [dateLabel, setDateLabel] = useState(() => duplicateFrom?.dateLabel ?? "");
+  const [mapCenterLat, setMapCenterLat] = useState(() => duplicateFrom?.mapCenterLat ?? 60);
+  const [mapCenterLng, setMapCenterLng] = useState(() => duplicateFrom?.mapCenterLng ?? -10);
+  const [mapDefaultZoom, setMapDefaultZoom] = useState(() => duplicateFrom?.mapDefaultZoom ?? 6);
+  const [defaultTurnMinutes, setDefaultTurnMinutes] = useState(() => duplicateFrom?.defaultTurnMinutes ?? 60);
+  const [tacticalRoundMinutes, setTacticalRoundMinutes] = useState(() => duplicateFrom?.tacticalRoundMinutes ?? 5);
+  const [source, setSource] = useState(() => duplicateFrom?.source ?? "");
 
-  const [oobJson, setOobJson] = useState(() => JSON.stringify(EXAMPLE_OOB, null, 2));
+  const [visibilityNm, setVisibilityNm] = useState(() => duplicateFrom?.weather.visibilityNm ?? 12);
+  const [seaState, setSeaState] = useState(() => duplicateFrom?.weather.seaState ?? 3);
+  const [daylight, setDaylight] = useState<string>(() => duplicateFrom?.weather.daylight ?? "DAY");
+  const [precipitation, setPrecipitation] = useState<string>(() => duplicateFrom?.weather.precipitation ?? "NONE");
+  const [windKnots, setWindKnots] = useState(() => duplicateFrom?.weather.windKnots ?? 15);
+  const [weatherNotes, setWeatherNotes] = useState(() => duplicateFrom?.weather.notes ?? "");
+
+  const [oobJson, setOobJson] = useState(() =>
+    JSON.stringify(
+      duplicateFrom
+        ? { unitClasses: duplicateFrom.unitClasses, teams: duplicateFrom.teams, objectives: duplicateFrom.objectives }
+        : EXAMPLE_OOB,
+      null,
+      2
+    )
+  );
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedKey, setSavedKey] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -285,7 +307,7 @@ export function ScenarioEditorForm() {
     <div className="chart-room-bg min-h-screen text-slate-100">
       <div className="mx-auto max-w-6xl px-6 py-10">
         <div className="flex items-center justify-between gap-2">
-          <h1 className="font-display text-2xl text-brass-300">Créer un scénario</h1>
+          <h1 className="font-display text-2xl text-brass-300">{duplicateFrom ? `Dupliquer « ${duplicateFrom.name} »` : "Créer un scénario"}</h1>
           <div className="flex gap-2">
             <button onClick={loadExample} className="rounded-md border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-900">
               Charger un exemple
@@ -295,11 +317,19 @@ export function ScenarioEditorForm() {
             </Link>
           </div>
         </div>
-        <p className="mt-2 max-w-3xl text-sm text-slate-400">
-          Un scénario intégré et un scénario créé ici suivent exactement le même format : les champs simples ci-dessous, puis l&apos;ordre
-          de bataille (classes d&apos;unités, équipes, flottes, unités, objectifs) en JSON — cliquez « Charger un exemple » pour voir la
-          structure attendue et partir de là.
-        </p>
+        {duplicateFrom ? (
+          <p className="mt-2 max-w-3xl text-sm text-slate-400">
+            Tous les champs ci-dessous, y compris l&apos;ordre de bataille en JSON, sont pré-remplis avec le contenu de «{" "}
+            {duplicateFrom.name} » — modifiez ce que vous voulez (ajouter une flotte, une base aérienne, des unités…) puis enregistrez :
+            l&apos;original n&apos;est jamais modifié, ceci crée un nouveau scénario séparé.
+          </p>
+        ) : (
+          <p className="mt-2 max-w-3xl text-sm text-slate-400">
+            Un scénario intégré et un scénario créé ici suivent exactement le même format : les champs simples ci-dessous, puis l&apos;ordre
+            de bataille (classes d&apos;unités, équipes, flottes, unités, objectifs) en JSON — cliquez « Charger un exemple » pour voir la
+            structure attendue et partir de là.
+          </p>
+        )}
 
         <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="space-y-4">
