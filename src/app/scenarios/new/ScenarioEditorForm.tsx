@@ -5,100 +5,43 @@ import Link from "next/link";
 import { GameMap, type MapSourceConfig } from "@/components/GameMap";
 import { pointsFeatureCollection, colorForId } from "@/lib/mapData";
 import { ScenarioDefinitionSchema } from "../../../../prisma/scenarios/validation";
-import type { ScenarioDefinition } from "../../../../prisma/scenarios/types";
+import type { ScenarioDefinition, ScenarioTeam, ScenarioUnit, ScenarioUnitClass } from "../../../../prisma/scenarios/types";
 import { createCustomScenarioAction } from "./actions";
+import {
+  type BuilderTeam,
+  type BuilderAirbase,
+  type BuilderSquadron,
+  type BuilderUnit,
+  type ClassRef,
+  type BaseRef,
+  type LibraryClassOption,
+  type ClientIdGenerator,
+  createClientIdGenerator,
+  allUnits,
+  surfaceShipUnits,
+} from "./builder/types";
+import { LibraryBrowserPanel } from "./builder/LibraryBrowserPanel";
+import { TeamsBoard } from "./builder/TeamsBoard";
+import { AirbasesPanel } from "./builder/AirbasesPanel";
+import { SquadronsPanel } from "./builder/SquadronsPanel";
+import { ObjectivesEditor } from "./builder/ObjectivesEditor";
 
 /**
- * Éditeur de scénarios (module séparé de la feuille de route). Les champs
- * simples (nom, dates, météo…) ont chacun leur contrôle ; l'ordre de
- * bataille (classes d'unités, équipes/flottes/unités, objectifs) — une
- * structure profondément imbriquée et de forme variable — se rédige en
- * JSON, avec validation et aperçu carte avant enregistrement. Un outil pour
- * qui veut composer un scénario complet, pas un assistant pas-à-pas : voir
- * le format complet dans prisma/scenarios/types.ts.
+ * Constructeur de scénarios (module séparé de la feuille de route) —
+ * entièrement visuel depuis le 2026-08-14 (retour utilisateur) : task
+ * forces, escadrilles, bases aériennes et unités se composent par
+ * boutons/sélecteurs plutôt qu'en JSON (voir builder/), en référençant
+ * toujours des classes EXISTANTES de la bibliothèque partagée (`/library`)
+ * — pas d'auteur de classe inline ici (la modal de création rapide, Phase
+ * 6, comble "à la volée" sans quitter le flux). Les champs simples (nom,
+ * dates, météo…) restent chacun leur propre contrôle, inchangés.
  *
- * `duplicateFrom` (bouton « Dupliquer et modifier » sur /create, retour
- * utilisateur 2026-08-14) : pré-remplit tous les champs avec le contenu
- * COMPLET d'un scénario existant (intégré ou déjà créé par un joueur)
- * plutôt que l'exemple générique — clé et nom légèrement modifiés pour
- * éviter toute collision, tout le reste identique, à éditer sur place.
- * L'original n'est jamais touché : "Enregistrer" crée toujours une entrée
- * séparée dans CustomScenario.
+ * `duplicateFrom` (bouton « Dupliquer et modifier » sur /create) :
+ * pré-remplit tout, y compris les task forces/bases/escadrilles, avec le
+ * contenu COMPLET d'un scénario existant — clé et nom légèrement modifiés
+ * pour éviter toute collision. L'original n'est jamais modifié,
+ * "Enregistrer" crée toujours une entrée séparée dans CustomScenario.
  */
-
-const EXAMPLE_OOB = {
-  unitClasses: [
-    {
-      key: "destroyer-generique",
-      name: "Destroyer générique",
-      nation: "Royaume-Uni",
-      category: "SURFACE_SHIP",
-      maxSpeedKnots: 36,
-      lengthMeters: 100,
-      turningRadiusM: 200,
-      accelerationKnotsPerMin: 4,
-      sensors: [
-        { type: "RADAR", rangeNm: 10 },
-        { type: "VISUAL", rangeNm: 12 },
-      ],
-      detectability: 0.8,
-      iconKey: "destroyer",
-      resistancePoints: 8,
-      combatProfile: {
-        guns: [{ calibreMm: 120, count: 4, rangeM: 15000, roundsPerMinute: 8, arc: "ALL_ROUND" }],
-      },
-    },
-    {
-      key: "sous-marin-generique",
-      name: "Sous-marin générique",
-      nation: "Allemagne",
-      category: "SUBMARINE",
-      maxSpeedKnots: 17,
-      lengthMeters: 67,
-      turningRadiusM: 150,
-      accelerationKnotsPerMin: 2,
-      sensors: [
-        { type: "HYDROPHONE", rangeNm: 6 },
-        { type: "VISUAL", rangeNm: 8 },
-      ],
-      detectability: 0.6,
-      iconKey: "submarine",
-      resistancePoints: 4,
-      submergedRangeNmAt4kt: 80,
-      oxygenEnduranceHours: 48,
-      torpedoStock: 14,
-      combatProfile: {
-        torpedoTubes: { count: 4, rangeM: 5000, speedKnots: 30 },
-      },
-    },
-  ],
-  teams: [
-    {
-      name: "Camp A",
-      colorHex: "#3b82f6",
-      fleets: [
-        {
-          name: "Flotte A1",
-          units: [{ name: "Navire A1-1", classKey: "destroyer-generique", lat: 60, lng: -10, headingDeg: 90 }],
-        },
-      ],
-    },
-    {
-      name: "Camp B",
-      colorHex: "#dc2626",
-      fleets: [
-        {
-          name: "Flotte B1",
-          units: [{ name: "Navire B1-1", classKey: "sous-marin-generique", lat: 60.2, lng: -9.5, headingDeg: 270 }],
-        },
-      ],
-    },
-  ],
-  objectives: [
-    { teamName: "Camp A", text: "Décrivez ici l'objectif du camp A." },
-    { teamName: "Camp B", text: "Décrivez ici l'objectif du camp B." },
-  ],
-};
 
 // Marques diacritiques combinantes (U+0300 à U+036F) laissées par la
 // décomposition NFD (ex: "é" → "e" + accent) : on les retire pour un slug
@@ -120,7 +63,92 @@ function duplicateKey(originalKey: string) {
   return `${originalKey}-variante-${Date.now().toString(36).slice(-4)}`;
 }
 
-export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: ScenarioDefinition | null }) {
+function classKeyFor(ref: ClassRef): string {
+  return ref.kind === "library" ? ref.libraryKey : ref.key;
+}
+
+/** Reconstitue la référence de classe d'une unité dupliquée — bibliothèque (résolue par libraryKey si la classe existe encore), ou classe en ligne héritée telle quelle (voir ClassRef, types.ts du builder). */
+function classRefFromScenario(classKey: string, source: ScenarioDefinition, libraryClasses: LibraryClassOption[]): ClassRef {
+  const entry = source.unitClasses.find((c) => c.key === classKey);
+  const fallbackDef: ScenarioUnitClass = { key: classKey, name: classKey, nation: "?", category: "SURFACE_SHIP", maxSpeedKnots: 10, sensors: [], iconKey: "cargo", resistancePoints: 1 };
+  if (!entry) return { kind: "inline", key: classKey, name: classKey, category: "SURFACE_SHIP", def: fallbackDef };
+  if ("libraryKey" in entry) {
+    const lib = libraryClasses.find((l) => l.key === entry.libraryKey);
+    if (lib) return { kind: "library", libraryClassId: lib.id, libraryKey: lib.key, name: lib.name, category: lib.category };
+    // Référence bibliothèque introuvable (classe supprimée depuis le scénario dupliqué) : repli minimal plutôt que de planter l'affichage.
+    return { kind: "inline", key: entry.key, name: `${entry.libraryKey} (bibliothèque introuvable)`, category: "SURFACE_SHIP", def: { ...fallbackDef, key: entry.key } };
+  }
+  return { kind: "inline", key: entry.key, name: entry.name, category: entry.category, def: entry };
+}
+
+/** Reconstitue la source de base d'une unité dupliquée — voir BaseRef (types.ts du builder). */
+function baseRefFromUnit(u: ScenarioUnit): BaseRef {
+  if (u.squadronKey) return { kind: "squadron", key: u.squadronKey };
+  if (u.airbaseKey) return { kind: "airbase", key: u.airbaseKey };
+  if (u.carrierUnitName) return { kind: "carrier", unitName: u.carrierUnitName };
+  if (u.baseLat != null || u.baseLng != null || u.baseName) {
+    return { kind: "literal", lat: u.baseLat != null ? String(u.baseLat) : "", lng: u.baseLng != null ? String(u.baseLng) : "", name: u.baseName ?? "" };
+  }
+  return { kind: "none" };
+}
+
+function buildInitialTeams(duplicateFrom: ScenarioDefinition | null, libraryClasses: LibraryClassOption[], nextClientId: ClientIdGenerator): BuilderTeam[] {
+  if (!duplicateFrom) {
+    return [
+      { clientId: nextClientId("team"), name: "Camp A", colorHex: "#3388ff", fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }] },
+      { clientId: nextClientId("team"), name: "Camp B", colorHex: "#dc2626", fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }] },
+    ];
+  }
+  return duplicateFrom.teams.map((t) => ({
+    clientId: nextClientId("team"),
+    name: t.name,
+    colorHex: t.colorHex,
+    fleets: t.fleets.map((f) => ({
+      clientId: nextClientId("fleet"),
+      name: f.name,
+      units: f.units.map(
+        (u): BuilderUnit => ({
+          clientId: nextClientId("unit"),
+          name: u.name,
+          pennant: u.pennant ?? "",
+          headingDeg: u.headingDeg != null ? String(u.headingDeg) : "",
+          historicalNote: u.historicalNote ?? "",
+          lat: String(u.lat),
+          lng: String(u.lng),
+          classRef: classRefFromScenario(u.classKey, duplicateFrom, libraryClasses),
+          baseRef: baseRefFromUnit(u),
+        })
+      ),
+    })),
+  }));
+}
+
+function buildInitialAirbases(duplicateFrom: ScenarioDefinition | null, nextClientId: ClientIdGenerator): BuilderAirbase[] {
+  return (duplicateFrom?.airbases ?? []).map((a) => ({ clientId: nextClientId("airbase"), key: a.key, name: a.name, lat: String(a.lat), lng: String(a.lng) }));
+}
+
+function buildInitialSquadrons(duplicateFrom: ScenarioDefinition | null, nextClientId: ClientIdGenerator): BuilderSquadron[] {
+  return (duplicateFrom?.squadrons ?? []).map((s) => ({
+    clientId: nextClientId("squadron"),
+    key: s.key,
+    name: s.name,
+    baseRef: s.airbaseKey ? { kind: "airbase", key: s.airbaseKey } : s.carrierUnitName ? { kind: "carrier", unitName: s.carrierUnitName } : { kind: "none" },
+  }));
+}
+
+function buildInitialObjectives(duplicateFrom: ScenarioDefinition | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const o of duplicateFrom?.objectives ?? []) out[o.teamName] = o.text;
+  return out;
+}
+
+export function ScenarioEditorForm({
+  duplicateFrom = null,
+  libraryClasses,
+}: {
+  duplicateFrom?: ScenarioDefinition | null;
+  libraryClasses: LibraryClassOption[];
+}) {
   const [name, setName] = useState(() => (duplicateFrom ? `${duplicateFrom.name} (variante)` : ""));
   const [key, setKey] = useState(() => (duplicateFrom ? duplicateKey(duplicateFrom.key) : ""));
   const [keyTouched, setKeyTouched] = useState(() => duplicateFrom !== null);
@@ -141,15 +169,17 @@ export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: S
   const [windKnots, setWindKnots] = useState(() => duplicateFrom?.weather.windKnots ?? 15);
   const [weatherNotes, setWeatherNotes] = useState(() => duplicateFrom?.weather.notes ?? "");
 
-  const [oobJson, setOobJson] = useState(() =>
-    JSON.stringify(
-      duplicateFrom
-        ? { unitClasses: duplicateFrom.unitClasses, teams: duplicateFrom.teams, objectives: duplicateFrom.objectives }
-        : EXAMPLE_OOB,
-      null,
-      2
-    )
-  );
+  // Générateur d'identifiants client créé UNE FOIS PAR MONTAGE (état plutôt
+  // que ref, jamais réassigné — voir createClientIdGenerator, builder/types.ts) :
+  // évite le décalage serveur/client d'un compteur module-level partagé
+  // entre requêtes.
+  const [nextClientId] = useState<ClientIdGenerator>(() => createClientIdGenerator());
+
+  const [teams, setTeams] = useState<BuilderTeam[]>(() => buildInitialTeams(duplicateFrom, libraryClasses, nextClientId));
+  const [airbasesState, setAirbasesState] = useState<BuilderAirbase[]>(() => buildInitialAirbases(duplicateFrom, nextClientId));
+  const [squadronsState, setSquadronsState] = useState<BuilderSquadron[]>(() => buildInitialSquadrons(duplicateFrom, nextClientId));
+  const [objectivesByTeamName, setObjectivesByTeamName] = useState<Record<string, string>>(() => buildInitialObjectives(duplicateFrom));
+
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedKey, setSavedKey] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -159,37 +189,109 @@ export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: S
     if (!keyTouched) setKey(slugify(value));
   }
 
-  function loadExample() {
-    setName("Exemple de scénario");
-    setKey("exemple-de-scenario-" + Date.now().toString(36));
-    setKeyTouched(true);
-    setDescription("Un exemple de scénario généré pour montrer le format attendu.");
-    setBriefing("Contexte historique ou fictif à afficher aux joueurs au lancement de la partie.");
-    setDateLabel("1er janvier 1942");
-    setMapCenterLat(60.1);
-    setMapCenterLng(-9.8);
-    setMapDefaultZoom(8);
-    setDefaultTurnMinutes(60);
-    setTacticalRoundMinutes(5);
-    setSource("Exemple — à remplacer par vos sources.");
-    setVisibilityNm(12);
-    setSeaState(3);
-    setDaylight("DAY");
-    setPrecipitation("NONE");
-    setWindKnots(15);
-    setWeatherNotes("");
-    setOobJson(JSON.stringify(EXAMPLE_OOB, null, 2));
-    setSaveError(null);
-    setSavedKey(null);
+  function handleAddUnitFromLibrary(libClass: LibraryClassOption, teamClientId: string, fleetClientId: string) {
+    const newUnit: BuilderUnit = {
+      clientId: nextClientId("unit"),
+      name: libClass.name,
+      pennant: "",
+      headingDeg: "",
+      historicalNote: "",
+      lat: String(mapCenterLat),
+      lng: String(mapCenterLng),
+      classRef: { kind: "library", libraryClassId: libClass.id, libraryKey: libClass.key, name: libClass.name, category: libClass.category },
+      baseRef: { kind: "none" },
+    };
+    setTeams((prev) =>
+      prev.map((t) =>
+        t.clientId === teamClientId
+          ? { ...t, fleets: t.fleets.map((f) => (f.clientId === fleetClientId ? { ...f, units: [...f.units, newUnit] } : f)) }
+          : t
+      )
+    );
   }
 
-  const { definition, parseError, validationIssues } = useMemo(() => {
-    let oob: unknown;
-    try {
-      oob = JSON.parse(oobJson);
-    } catch (e) {
-      return { definition: null, parseError: e instanceof Error ? e.message : "JSON invalide", validationIssues: [] as string[] };
+  function handleAddAirbase() {
+    setAirbasesState((prev) => [...prev, { clientId: nextClientId("airbase"), key: `base-${prev.length + 1}`, name: "", lat: String(mapCenterLat), lng: String(mapCenterLng) }]);
+  }
+  function handleUpdateAirbase(clientId: string, patch: Partial<BuilderAirbase>) {
+    setAirbasesState((prev) => prev.map((a) => (a.clientId === clientId ? { ...a, ...patch } : a)));
+  }
+  /** Détache (unités et escadrilles qui la référençaient retombent à "Aucune") plutôt que de bloquer — champ optionnel côté schéma. */
+  function handleRemoveAirbase(clientId: string) {
+    const removed = airbasesState.find((a) => a.clientId === clientId);
+    setAirbasesState((prev) => prev.filter((a) => a.clientId !== clientId));
+    if (!removed) return;
+    setTeams((prev) =>
+      prev.map((t) => ({
+        ...t,
+        fleets: t.fleets.map((f) => ({
+          ...f,
+          units: f.units.map((u) => (u.baseRef.kind === "airbase" && u.baseRef.key === removed.key ? { ...u, baseRef: { kind: "none" } } : u)),
+        })),
+      }))
+    );
+    setSquadronsState((prev) => prev.map((s) => (s.baseRef.kind === "airbase" && s.baseRef.key === removed.key ? { ...s, baseRef: { kind: "none" } } : s)));
+  }
+
+  function handleAddSquadron() {
+    setSquadronsState((prev) => [...prev, { clientId: nextClientId("squadron"), key: `escadrille-${prev.length + 1}`, name: "", baseRef: { kind: "none" } }]);
+  }
+  function handleUpdateSquadron(clientId: string, patch: Partial<BuilderSquadron>) {
+    setSquadronsState((prev) => prev.map((s) => (s.clientId === clientId ? { ...s, ...patch } : s)));
+  }
+  function handleRemoveSquadron(clientId: string) {
+    const removed = squadronsState.find((s) => s.clientId === clientId);
+    setSquadronsState((prev) => prev.filter((s) => s.clientId !== clientId));
+    if (!removed) return;
+    setTeams((prev) =>
+      prev.map((t) => ({
+        ...t,
+        fleets: t.fleets.map((f) => ({
+          ...f,
+          units: f.units.map((u) => (u.baseRef.kind === "squadron" && u.baseRef.key === removed.key ? { ...u, baseRef: { kind: "none" } } : u)),
+        })),
+      }))
+    );
+  }
+
+  const memberCountByKey = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const u of allUnits(teams)) {
+      if (u.baseRef.kind === "squadron") map.set(u.baseRef.key, (map.get(u.baseRef.key) ?? 0) + 1);
     }
+    return map;
+  }, [teams]);
+
+  const { definition, validationIssues } = useMemo(() => {
+    const unitClassMap = new Map<string, ScenarioUnitClass | { key: string; libraryKey: string }>();
+    for (const u of allUnits(teams)) {
+      if (u.classRef.kind === "library") unitClassMap.set(u.classRef.libraryKey, { key: u.classRef.libraryKey, libraryKey: u.classRef.libraryKey });
+      else unitClassMap.set(u.classRef.key, u.classRef.def);
+    }
+
+    function mapUnit(u: BuilderUnit): ScenarioUnit {
+      const base: Partial<ScenarioUnit> =
+        u.baseRef.kind === "literal"
+          ? { baseLat: u.baseRef.lat.trim() ? Number(u.baseRef.lat) : undefined, baseLng: u.baseRef.lng.trim() ? Number(u.baseRef.lng) : undefined, baseName: u.baseRef.name || undefined }
+          : u.baseRef.kind === "airbase"
+            ? { airbaseKey: u.baseRef.key }
+            : u.baseRef.kind === "squadron"
+              ? { squadronKey: u.baseRef.key }
+              : u.baseRef.kind === "carrier"
+                ? { carrierUnitName: u.baseRef.unitName }
+                : {};
+      return {
+        name: u.name,
+        classKey: classKeyFor(u.classRef),
+        pennant: u.pennant.trim() || undefined,
+        lat: Number(u.lat) || 0,
+        lng: Number(u.lng) || 0,
+        headingDeg: u.headingDeg.trim() ? Number(u.headingDeg) : undefined,
+        historicalNote: u.historicalNote.trim() || undefined,
+        ...base,
+      };
+    }
+
     const candidate = {
       key,
       name,
@@ -210,17 +312,31 @@ export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: S
         notes: weatherNotes || undefined,
       },
       source,
-      ...(typeof oob === "object" && oob !== null ? oob : {}),
+      unitClasses: Array.from(unitClassMap.values()),
+      teams: teams.map(
+        (t): ScenarioTeam => ({
+          name: t.name,
+          colorHex: t.colorHex,
+          fleets: t.fleets.map((f) => ({ name: f.name, units: f.units.map(mapUnit) })),
+        })
+      ),
+      airbases: airbasesState.length > 0 ? airbasesState.map((a) => ({ key: a.key, name: a.name, lat: Number(a.lat) || 0, lng: Number(a.lng) || 0 })) : undefined,
+      squadrons:
+        squadronsState.length > 0
+          ? squadronsState.map((s) => ({
+              key: s.key,
+              name: s.name,
+              airbaseKey: s.baseRef.kind === "airbase" ? s.baseRef.key : undefined,
+              carrierUnitName: s.baseRef.kind === "carrier" ? s.baseRef.unitName : undefined,
+            }))
+          : undefined,
+      objectives: teams.map((t) => ({ teamName: t.name, text: objectivesByTeamName[t.name] ?? "" })),
     };
     const result = ScenarioDefinitionSchema.safeParse(candidate);
     if (!result.success) {
-      return {
-        definition: null,
-        parseError: null,
-        validationIssues: result.error.issues.map((i) => `${i.path.join(".") || "(racine)"} : ${i.message}`),
-      };
+      return { definition: null, validationIssues: result.error.issues.map((i) => `${i.path.join(".") || "(racine)"} : ${i.message}`) };
     }
-    return { definition: result.data, parseError: null, validationIssues: [] as string[] };
+    return { definition: result.data, validationIssues: [] as string[] };
   }, [
     key,
     name,
@@ -239,7 +355,10 @@ export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: S
     windKnots,
     weatherNotes,
     source,
-    oobJson,
+    teams,
+    airbasesState,
+    squadronsState,
+    objectivesByTeamName,
   ]);
 
   const previewSources = useMemo<MapSourceConfig[]>(() => {
@@ -305,34 +424,28 @@ export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: S
 
   return (
     <div className="chart-room-bg min-h-screen text-slate-100">
-      <div className="mx-auto max-w-6xl px-6 py-10">
+      <div className="mx-auto max-w-7xl px-6 py-10">
         <div className="flex items-center justify-between gap-2">
           <h1 className="font-display text-2xl text-brass-300">{duplicateFrom ? `Dupliquer « ${duplicateFrom.name} »` : "Créer un scénario"}</h1>
-          <div className="flex gap-2">
-            <button onClick={loadExample} className="rounded-md border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-900">
-              Charger un exemple
-            </button>
-            <Link href="/create" className="rounded-md border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-900">
-              ← Retour
-            </Link>
-          </div>
+          <Link href="/create" className="rounded-md border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-900">
+            ← Retour
+          </Link>
         </div>
         {duplicateFrom ? (
           <p className="mt-2 max-w-3xl text-sm text-slate-400">
-            Tous les champs ci-dessous, y compris l&apos;ordre de bataille en JSON, sont pré-remplis avec le contenu de «{" "}
-            {duplicateFrom.name} » — modifiez ce que vous voulez (ajouter une flotte, une base aérienne, des unités…) puis enregistrez :
-            l&apos;original n&apos;est jamais modifié, ceci crée un nouveau scénario séparé.
+            Tout ci-dessous, y compris les task forces et bases, est pré-rempli avec le contenu de « {duplicateFrom.name} » —
+            modifiez ce que vous voulez (ajouter une flotte, une base aérienne, des unités…) puis enregistrez : l&apos;original
+            n&apos;est jamais modifié, ceci crée un nouveau scénario séparé.
           </p>
         ) : (
           <p className="mt-2 max-w-3xl text-sm text-slate-400">
-            Un scénario intégré et un scénario créé ici suivent exactement le même format : les champs simples ci-dessous, puis l&apos;ordre
-            de bataille (classes d&apos;unités, équipes, flottes, unités, objectifs) en JSON — cliquez « Charger un exemple » pour voir la
-            structure attendue et partir de là.
+            Les champs simples ci-dessous, puis l&apos;ordre de bataille — task forces, escadrilles, bases aériennes, unités —
+            se composent visuellement à droite, en piochant dans la bibliothèque partagée.
           </p>
         )}
 
-        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <div className="space-y-4">
+        <div className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <div className="space-y-4 xl:col-span-1">
             <fieldset className="space-y-3 rounded-md border border-slate-800 bg-slate-900 p-4">
               <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Informations générales</legend>
               <label className="block text-sm">
@@ -509,40 +622,18 @@ export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: S
                 />
               </label>
             </fieldset>
-          </div>
-
-          <div className="space-y-4">
-            <fieldset className="rounded-md border border-slate-800 bg-slate-900 p-4">
-              <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Ordre de bataille (JSON) — classes d&apos;unités, équipes, flottes, unités, objectifs
-              </legend>
-              <textarea
-                value={oobJson}
-                onChange={(e) => setOobJson(e.target.value)}
-                rows={18}
-                spellCheck={false}
-                className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs"
-              />
-            </fieldset>
 
             <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Aperçu des positions</h3>
               {definition ? (
                 <div className="h-64 overflow-hidden rounded-md">
-                  <GameMap
-                    center={{ lat: mapCenterLat, lng: mapCenterLng }}
-                    zoom={mapDefaultZoom}
-                    sources={previewSources}
-                    fitToPoints={previewPoints}
-                    className="h-full w-full"
-                  />
+                  <GameMap center={{ lat: mapCenterLat, lng: mapCenterLng }} zoom={mapDefaultZoom} sources={previewSources} fitToPoints={previewPoints} />
                 </div>
               ) : (
                 <p className="text-xs text-slate-600">L&apos;aperçu apparaît une fois le scénario valide.</p>
               )}
             </div>
 
-            {parseError && <p className="rounded-md border border-red-800 bg-red-950/30 px-3 py-2 text-xs text-red-300">JSON invalide : {parseError}</p>}
             {validationIssues.length > 0 && (
               <div className="rounded-md border border-red-800 bg-red-950/30 px-3 py-2 text-xs text-red-300">
                 <p className="mb-1 font-semibold">{validationIssues.length} problème(s) :</p>
@@ -562,6 +653,36 @@ export function ScenarioEditorForm({ duplicateFrom = null }: { duplicateFrom?: S
             >
               {isPending ? "Enregistrement…" : "Enregistrer le scénario"}
             </button>
+          </div>
+
+          <div className="space-y-4 xl:col-span-2">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="lg:col-span-1">
+                <LibraryBrowserPanel classes={libraryClasses} teams={teams} onAddUnit={handleAddUnitFromLibrary} />
+              </div>
+              <div className="lg:col-span-2">
+                <TeamsBoard teams={teams} setTeams={setTeams} airbases={airbasesState} squadrons={squadronsState} nextClientId={nextClientId} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <AirbasesPanel airbases={airbasesState} onAdd={handleAddAirbase} onUpdate={handleUpdateAirbase} onRemove={handleRemoveAirbase} />
+              <SquadronsPanel
+                squadrons={squadronsState}
+                airbases={airbasesState}
+                carrierCandidates={surfaceShipUnits(teams)}
+                memberCountByKey={memberCountByKey}
+                onAdd={handleAddSquadron}
+                onUpdate={handleUpdateSquadron}
+                onRemove={handleRemoveSquadron}
+              />
+            </div>
+
+            <ObjectivesEditor
+              teams={teams}
+              textByTeamName={new Map(Object.entries(objectivesByTeamName))}
+              onChangeText={(teamName, text) => setObjectivesByTeamName((prev) => ({ ...prev, [teamName]: text }))}
+            />
           </div>
         </div>
       </div>
