@@ -4,6 +4,7 @@ import { validateScenarioDefinition } from "./validation";
 import { denmarkStrait } from "./denmark-strait";
 import { northCape } from "./north-cape";
 import { pq18 } from "./pq18";
+import { hg53 } from "./hg53";
 
 /**
  * Bibliothèque de scénarios intégrés. Ajouter un scénario = ajouter une
@@ -12,7 +13,7 @@ import { pq18 } from "./pq18";
  * base dans `CustomScenario` — voir findScenarioAsync/listAllScenarioSummaries
  * ci-dessous pour les deux confondus.
  */
-export const SCENARIO_LIBRARY: ScenarioDefinition[] = [denmarkStrait, northCape, pq18];
+export const SCENARIO_LIBRARY: ScenarioDefinition[] = [denmarkStrait, northCape, pq18, hg53];
 
 export function findScenario(key: string): ScenarioDefinition | undefined {
   return SCENARIO_LIBRARY.find((s) => s.key === key);
