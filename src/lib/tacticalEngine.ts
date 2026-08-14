@@ -275,6 +275,28 @@ export async function openOrJoinEngagementForDetection(detectionEventId: string)
     return existing;
   }
 
+  // Fige la paire concernée à sa position au moment du CPA (déjà connue sur
+  // la détection, voir DetectionEvent.observerLatAtCpa &c.) plutôt que sa
+  // position de fin de tour stratégique — sans ça, une unité rapide (avion
+  // en particulier) qui a simplement survolé sa cible en cours de route
+  // peut se retrouver à des dizaines de nm d'elle une fois le tour résolu,
+  // alors que la détection au CPA était parfaitement valide : le combat
+  // tactique s'ouvrirait sans aucun contact exploitable (portée des
+  // capteurs très inférieure à cet écart). Le combat tactique représente
+  // le moment du contact, pas la fin du transit — seule la paire
+  // directement concernée par CETTE détection est repositionnée, pas les
+  // autres unités proches. Recherche 2026-08-14.
+  await prisma.$transaction([
+    prisma.unit.update({
+      where: { id: detection.observerUnitId },
+      data: { currentLat: detection.observerLatAtCpa, currentLng: detection.observerLngAtCpa },
+    }),
+    prisma.unit.update({
+      where: { id: detection.targetUnitId },
+      data: { currentLat: detection.targetLatAtCpa, currentLng: detection.targetLngAtCpa },
+    }),
+  ]);
+
   const currentTurn = await currentOpenTurn(detection.turnId);
   return openTacticalEngagement({
     scenarioId: detection.turn.scenarioId,
