@@ -43,6 +43,11 @@ const entries = [
     // passes de grenades réussies pour couler, cohérent avec la fragilité
     // réelle d'un U-Boot une fois accroché.
     resistancePoints: 0.85,
+    // Plongée d'urgence ~30s (uboat.net) — la plus rapide des grandes
+    // marines de la période, voir UnitClass.emergencyDiveSeconds et
+    // submitTacticalMovementForUnit dans tacticalEngine.ts (recherche
+    // 2026-08-14).
+    emergencyDiveSeconds: 30,
     combatProfile: {
       torpedoTubes: { count: 5, rangeM: 5000, speedKnots: 40, arc: "FORWARD" },
       torpedoTypes: [

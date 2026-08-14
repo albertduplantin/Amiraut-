@@ -59,9 +59,13 @@ export type ScenarioUnitClass = {
   };
   weaponSystems?: Record<string, unknown>;
   depthChargeStock?: number;
+  /** Salves de Hedgehog (une salve = 24 projectiles) — voir UnitClass.hedgehogStock, resolveHedgehogAttack dans combat.ts. */
+  hedgehogStock?: number;
   submergedRangeNmAt4kt?: number;
   oxygenEnduranceHours?: number;
   torpedoStock?: number;
+  /** Temps de plongée d'urgence (sous-marins), en secondes — voir UnitClass.emergencyDiveSeconds. */
+  emergencyDiveSeconds?: number;
   /** Autonomie de vol (avions uniquement) — voir Unit.fuelMinutesRemaining et le bloc 3 (patrouilles). */
   enduranceMinutes?: number;
   /** Installation immobile (ex: station d'écoute côtière) — voir UnitClass.passive. */

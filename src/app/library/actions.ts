@@ -53,9 +53,11 @@ export async function createLibraryClassAction(input: unknown): Promise<SaveLibr
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       weaponSystems: (data.weaponSystems as any) ?? undefined,
       depthChargeStock: data.depthChargeStock,
+      hedgehogStock: data.hedgehogStock,
       submergedRangeNmAt4kt: data.submergedRangeNmAt4kt,
       oxygenEnduranceHours: data.oxygenEnduranceHours,
       torpedoStock: data.torpedoStock,
+      emergencyDiveSeconds: data.emergencyDiveSeconds,
       enduranceMinutes: data.enduranceMinutes,
       passive: data.passive ?? false,
       theater: data.theater,
@@ -111,9 +113,11 @@ export async function updateLibraryClassAction(id: string, input: unknown): Prom
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       weaponSystems: (data.weaponSystems as any) ?? undefined,
       depthChargeStock: data.depthChargeStock,
+      hedgehogStock: data.hedgehogStock,
       submergedRangeNmAt4kt: data.submergedRangeNmAt4kt,
       oxygenEnduranceHours: data.oxygenEnduranceHours,
       torpedoStock: data.torpedoStock,
+      emergencyDiveSeconds: data.emergencyDiveSeconds,
       enduranceMinutes: data.enduranceMinutes,
       passive: data.passive ?? false,
       theater: data.theater,

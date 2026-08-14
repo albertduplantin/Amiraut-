@@ -25,9 +25,11 @@ export type LibraryClassData = {
   combatProfile: unknown;
   weaponSystems: unknown;
   depthChargeStock: number | null;
+  hedgehogStock: number | null;
   submergedRangeNmAt4kt: number | null;
   oxygenEnduranceHours: number | null;
   torpedoStock: number | null;
+  emergencyDiveSeconds: number | null;
   enduranceMinutes: number | null;
   passive: boolean;
   theater: string | null;
@@ -69,9 +71,11 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
   const [passive, setPassive] = useState(initial?.passive ?? false);
   const [enduranceMinutes, setEnduranceMinutes] = useState(String(initial?.enduranceMinutes ?? ""));
   const [depthChargeStock, setDepthChargeStock] = useState(String(initial?.depthChargeStock ?? ""));
+  const [hedgehogStock, setHedgehogStock] = useState(String(initial?.hedgehogStock ?? ""));
   const [submergedRangeNmAt4kt, setSubmergedRangeNmAt4kt] = useState(String(initial?.submergedRangeNmAt4kt ?? ""));
   const [oxygenEnduranceHours, setOxygenEnduranceHours] = useState(String(initial?.oxygenEnduranceHours ?? ""));
   const [torpedoStock, setTorpedoStock] = useState(String(initial?.torpedoStock ?? ""));
+  const [emergencyDiveSeconds, setEmergencyDiveSeconds] = useState(String(initial?.emergencyDiveSeconds ?? ""));
 
   const [sensorsText, setSensorsText] = useState(toJsonText(initial?.sensors, '[\n  { "type": "RADAR", "rangeNm": 15 },\n  { "type": "VISUAL", "rangeNm": 12 }\n]'));
   const [combatProfileText, setCombatProfileText] = useState(
@@ -140,9 +144,11 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
       combatProfile,
       weaponSystems,
       depthChargeStock: numOrUndefined(depthChargeStock),
+      hedgehogStock: numOrUndefined(hedgehogStock),
       submergedRangeNmAt4kt: numOrUndefined(submergedRangeNmAt4kt),
       oxygenEnduranceHours: numOrUndefined(oxygenEnduranceHours),
       torpedoStock: numOrUndefined(torpedoStock),
+      emergencyDiveSeconds: numOrUndefined(emergencyDiveSeconds),
       enduranceMinutes: numOrUndefined(enduranceMinutes),
       passive,
     };
@@ -266,6 +272,10 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
                 Stock torpilles
                 <input value={torpedoStock} onChange={(e) => setTorpedoStock(e.target.value)} className={fieldClass} />
               </label>
+              <label className={labelClass} title="Recherche 2026-08-14 : ~30s U-Boote, ~45s japonais/américains, ~60s britanniques/italiens">
+                Plongée d&apos;urgence (s)
+                <input value={emergencyDiveSeconds} onChange={(e) => setEmergencyDiveSeconds(e.target.value)} className={fieldClass} />
+              </label>
             </section>
           )}
 
@@ -275,6 +285,10 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
               <label className={labelClass}>
                 Stock grenades ASM
                 <input value={depthChargeStock} onChange={(e) => setDepthChargeStock(e.target.value)} className={fieldClass} />
+              </label>
+              <label className={labelClass} title="Une salve = une gerbe de 24 projectiles, comptée comme une seule recharge — voir combat.ts">
+                Salves Hedgehog
+                <input value={hedgehogStock} onChange={(e) => setHedgehogStock(e.target.value)} className={fieldClass} />
               </label>
             </section>
           )}

@@ -49,6 +49,9 @@ type UnitDto = {
   currentHeadingDeg: number | null;
   depthBand: string;
   depthChargesRemaining: number | null;
+  hedgehogRoundsRemaining: number | null;
+  /** Temps de plongée d'urgence (sous-marins), variable par marine — voir UnitClass.emergencyDiveSeconds. */
+  emergencyDiveSeconds: number | null;
   batteryChargePercent: number | null;
   oxygenHoursRemaining: number | null;
   oxygenEnduranceHours: number | null;
@@ -1273,6 +1276,18 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
             <tr>
               <td className="py-0.5 pr-2 text-slate-500">Grenades ASM</td>
               <td>{unit.depthChargesRemaining}</td>
+            </tr>
+          )}
+          {unit.hedgehogRoundsRemaining != null && (
+            <tr>
+              <td className="py-0.5 pr-2 text-slate-500">Salves Hedgehog</td>
+              <td>{unit.hedgehogRoundsRemaining}</td>
+            </tr>
+          )}
+          {unit.emergencyDiveSeconds != null && (
+            <tr>
+              <td className="py-0.5 pr-2 text-slate-500">Plongée d&apos;urgence</td>
+              <td>{unit.emergencyDiveSeconds.toFixed(0)} s</td>
             </tr>
           )}
           {unit.torpedoesRemaining != null && (

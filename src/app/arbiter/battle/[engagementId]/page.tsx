@@ -37,10 +37,17 @@ export default async function ArbiterBattlePage({ params }: { params: Promise<{ 
     where: { id: { in: Array.from(new Set(engagement!.participants.map((p) => p.teamId))) } },
     select: { id: true, name: true },
   });
+  // Un arbitre plongé dans CE combat ne doit pas manquer qu'un autre est en
+  // cours ailleurs sur le même scénario (retour de test utilisateur,
+  // 2026-08-14) — voir le badge sur le lien "Tableau de bord" ci-dessous.
+  const otherActiveEngagementsCount = await prisma.tacticalEngagement.count({
+    where: { scenarioId: engagement!.scenarioId, status: { not: "RESOLVED" }, id: { not: engagementId } },
+  });
 
   return (
     <ArbiterBattleClient
       engagementId={engagementId}
+      otherActiveEngagementsCount={otherActiveEngagementsCount}
       status={engagement!.status}
       roundNumber={engagement!.roundNumber}
       roundMinutes={engagement!.roundMinutes}

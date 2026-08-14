@@ -78,7 +78,52 @@ export const pq18: ScenarioDefinition = {
       resistancePoints: 5,
       depthChargeStock: 60,
       historicalNote:
-        "1 925t, 6 canons de 120mm, 4 tubes lance-torpilles. HMS Faulknor, Onslow et Milne assurent l'écran rapproché du convoi — Faulknor a coulé l'U-88 la veille au soir. Classe simplifiée pour les trois (Faulknor est en réalité un chef de flottille classe F, de gabarit très proche) — même convention que les destroyers classe S du scénario Cap Nord.",
+        "1 925t, 6 canons de 120mm, 4 tubes lance-torpilles. Onslow et Milne assurent l'écran rapproché du convoi — même convention de classe simplifiée que les destroyers classe S du scénario Cap Nord.",
+      weaponSystems: {
+        displacementTons: 1925,
+        mainGuns: "6 x 120mm (portée 18 200m)",
+        torpedoes: "4 x 533mm",
+        antiAerien: "6 x 120mm, 1 x 102mm, 4 x 40mm, 2 x 20mm",
+      },
+    },
+    {
+      key: "destroyer-m-flotilla-leader",
+      name: "Destroyer classe M — chef de flottille (HMS Faulknor)",
+      nation: "Royaume-Uni",
+      category: "SURFACE_SHIP",
+      maxSpeedKnots: 36,
+      lengthMeters: 100.3,
+      beamMeters: 10.4,
+      turningRadiusM: 300,
+      accelerationKnotsPerMin: 5,
+      combatProfile: {
+        guns: [
+          { calibreMm: 120, count: 4, rangeM: 18200, roundsPerMinute: 8, arc: "FORWARD" },
+          { calibreMm: 120, count: 2, rangeM: 18200, roundsPerMinute: 8, arc: "AFT" },
+        ],
+        torpedoTubes: { count: 4, rangeM: 11000, speedKnots: 30, arc: "BROADSIDE" },
+      },
+      sensors: [
+        { type: "RADAR", rangeNm: 15 },
+        { type: "VISUAL", rangeNm: 10 },
+        { type: "SONAR", rangeNm: 1.1 },
+        // Goniométrie HF embarquée (Huff-Duff) : en septembre 1942,
+        // l'équipement n'est pas encore généralisé à toute l'escorte
+        // (ce ne sera le cas que fin 1943, voir le scénario Cap Nord) — mais
+        // un chef de flottille comme le Faulknor, qui reçoit le matériel en
+        // priorité, en est plausiblement déjà doté. Seul destroyer de ce
+        // scénario équipé : remet en jeu le dilemme HF « parler coûte cher,
+        // se taire aveugle son camp » côté U-Boote (recherche 2026-08-14,
+        // voir HF_DF dans north-cape.ts pour la portée sourcée).
+        { type: "HF_DF", rangeNm: 22 },
+      ],
+      detectability: 0.85,
+      iconKey: "destroyer",
+      resistancePoints: 5,
+      depthChargeStock: 60,
+      hedgehogStock: 4,
+      historicalNote:
+        "1 925t, chef de flottille — a coulé l'U-88 la veille au soir, 12 septembre 1942. Seul destroyer du scénario équipé de goniométrie HF (Huff-Duff) et de Hedgehog : matériel encore en cours de déploiement sur l'escorte à cette date, reçu en priorité par les bâtiments de commandement.",
       weaponSystems: {
         displacementTons: 1925,
         mainGuns: "6 x 120mm (portée 18 200m)",
@@ -102,11 +147,11 @@ export const pq18: ScenarioDefinition = {
           units: [
             {
               name: "HMS Faulknor",
-              classKey: "destroyer-m",
+              classKey: "destroyer-m-flotilla-leader",
               lat: 74.3,
               lng: 38.95,
               headingDeg: 60,
-              historicalNote: "Chef de flottille — a coulé l'U-88 la veille au soir, 12 septembre 1942.",
+              historicalNote: "Chef de flottille, seul navire du scénario équipé de goniométrie HF et de Hedgehog — a coulé l'U-88 la veille au soir, 12 septembre 1942.",
             },
             { name: "HMS Onslow", classKey: "destroyer-m", lat: 74.32, lng: 39.0, headingDeg: 60 },
             { name: "HMS Milne", classKey: "destroyer-m", lat: 74.28, lng: 39.05, headingDeg: 60 },

@@ -151,9 +151,11 @@ export async function instantiateScenario(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         weaponSystems: (lib.weaponSystems as any) ?? undefined,
         depthChargeStock: lib.depthChargeStock ?? undefined,
+        hedgehogStock: lib.hedgehogStock ?? undefined,
         submergedRangeNmAt4kt: lib.submergedRangeNmAt4kt ?? undefined,
         oxygenEnduranceHours: lib.oxygenEnduranceHours ?? undefined,
         torpedoStock: lib.torpedoStock ?? undefined,
+        emergencyDiveSeconds: lib.emergencyDiveSeconds ?? undefined,
         enduranceMinutes: lib.enduranceMinutes ?? undefined,
         passive: lib.passive,
       };
@@ -183,9 +185,11 @@ export async function instantiateScenario(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         weaponSystems: (uc.weaponSystems as any) ?? undefined,
         depthChargeStock: uc.depthChargeStock,
+        hedgehogStock: uc.hedgehogStock,
         submergedRangeNmAt4kt: uc.submergedRangeNmAt4kt,
         oxygenEnduranceHours: uc.oxygenEnduranceHours,
         torpedoStock: uc.torpedoStock,
+        emergencyDiveSeconds: uc.emergencyDiveSeconds,
       },
     });
     classIdByKey.set(uc.key, created.id);
@@ -239,6 +243,7 @@ export async function instantiateScenario(
             healthMax: health,
             healthCurrent: health,
             depthChargesRemaining: unitClass.depthChargeStock ?? undefined,
+            hedgehogRoundsRemaining: unitClass.hedgehogStock ?? undefined,
             torpedoesRemaining: unitClass.torpedoStock ?? undefined,
             batteryChargePercent: unitClass.category === "SUBMARINE" ? 100 : undefined,
             oxygenHoursRemaining: unitClass.category === "SUBMARINE" ? unitClass.oxygenEnduranceHours : undefined,

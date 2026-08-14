@@ -110,6 +110,14 @@ model UnitClass {
   weaponSystems         Json? // fiche d'armement historique affichée aux joueurs (texte libre)
   combatProfile         Json? // armement structuré utilisé par le moteur de combat, voir CombatProfile dans combat.ts
   depthChargeStock      Int? // stock initial de grenades ASM (escorteurs uniquement), voir Unit.depthChargesRemaining
+  // Mortier ASM Hedgehog (escorteurs équipés seulement, à partir de 1942) :
+  // tire vers l'avant sans jamais rompre le contact ASDIC actif, contrairement
+  // aux grenades ASM classiques qui obligent à passer au-dessus de la cible et
+  // à interrompre l'écoute le temps de la passe — voir Unit.sonarBlindNextRound
+  // et resolveHedgehogAttack dans combat.ts (recherche 2026-08-14, règles
+  // avancées de François Marlière). Stock compté en salves (une salve = une
+  // gerbe de 24 projectiles), pas en projectiles unitaires.
+  hedgehogStock         Int?
   // Autonomie sous-marine (sous-marins uniquement) : batterie ~80nm à 4nds
   // pour un Type VIIC (uboat.net), oxygène/CO2 jusqu'à ~72h en cas extrême
   // (cartouches + bouteilles de secours) — voir Unit.batteryChargePercent et
@@ -117,6 +125,12 @@ model UnitClass {
   submergedRangeNmAt4kt Float?
   oxygenEnduranceHours  Float?
   torpedoStock          Int? // torpilles totales embarquées (sous-marins), voir Unit.torpedoesRemaining
+  // Temps de plongée d'urgence (sous-marins uniquement), variable par marine
+  // (recherche 2026-08-14) : ~30s U-Boote allemands, ~45s japonais/américains,
+  // ~60s britanniques/italiens. Réduit d'autant le budget de route disponible
+  // la manche où le sous-marin plonge depuis la surface — voir
+  // submitTacticalMovementForUnit dans tacticalEngine.ts.
+  emergencyDiveSeconds  Float?
 
   // Manœuvre (mode tactique) : diamètre tactique / vitesse maximale de
   // rotation issus de recherches historiques (voir prisma/seed.ts et
@@ -174,9 +188,11 @@ model LibraryUnitClass {
   weaponSystems         Json?
   combatProfile         Json?
   depthChargeStock      Int?
+  hedgehogStock         Int? // voir le commentaire équivalent sur UnitClass
   submergedRangeNmAt4kt Float?
   oxygenEnduranceHours  Float?
   torpedoStock          Int?
+  emergencyDiveSeconds  Float? // voir le commentaire équivalent sur UnitClass
   turningRadiusM         Float?
   accelerationKnotsPerMin Float?
   agility                Float?
@@ -219,6 +235,13 @@ model Unit {
   // à la fois — voir UnitOrder.depthBand et resolveTurnDetections/resolveCombat.
   depthBand             DepthBand  @default(SURFACE)
   depthChargesRemaining Int? // grenades ASM restantes (escorteurs uniquement, null sinon)
+  hedgehogRoundsRemaining Int? // salves de Hedgehog restantes (escorteurs équipés uniquement, null sinon)
+  // Contact ASDIC actif rompu par la dernière attaque aux grenades ASM (voir
+  // combat.ts/tacticalEngine.ts) : la manche suivante, ce navire n'entend
+  // plus au SONAR (seulement HYDROPHONE/RADAR/VISUEL) le temps de reprendre
+  // l'écoute — consommé puis remis à false dans recomputeContacts. Un tir de
+  // Hedgehog ne pose jamais ce drapeau : c'est tout l'intérêt de l'arme.
+  sonarBlindNextRound   Boolean   @default(false)
   // Autonomie sous-marine courante (sous-marins uniquement, null sinon) : la
   // batterie se vide en immersion (vite à haute vitesse, cf. combat.ts),
   // l'oxygène se consomme au temps passé immergé quelle que soit la vitesse.
@@ -553,6 +576,9 @@ enum WeaponType {
   // dans combat.ts. Une torpille aérienne reste WeaponType.TORPEDO : mêmes
   // règles physiques qu'une torpille de surface une fois à l'eau.
   BOMB
+  // Mortier ASM Hedgehog : tire vers l'avant sans rompre le contact ASDIC —
+  // voir Unit.sonarBlindNextRound et resolveHedgehogAttack dans combat.ts.
+  HEDGEHOG
 }
 
 // ── Rapport publié, filtré par équipe ────────────────────────

@@ -77,6 +77,13 @@ export function assessFiringReveal(params: {
         reason: "Les grenades s'entendent à grande distance sous l'eau et signalent une chasse en cours.",
         severity: "medium",
       };
+    case "HEDGEHOG":
+      return {
+        revealRadiusNm: 2,
+        label: "Détonation discrète (~2 nm)",
+        reason: "Fusée percutante : une salve manquée n'explose simplement pas, contrairement aux grenades réglées en profondeur.",
+        severity: "low",
+      };
     default:
       return { revealRadiusNm: 0, label: "Aucune trace", reason: "", severity: "none" };
   }
@@ -163,8 +170,17 @@ export function describeShot(input: NarrativeInput): string {
     if (input.weaponType === "DEPTH_CHARGE") {
       return pick(
         [
-          `Les grenades secouent la mer derrière ${targetName}, sans plus. Le contact reste bon.`,
-          `Rien ne remonte à la surface : ${targetName} était plus profond qu'estimé.`,
+          `Les grenades secouent la mer derrière ${targetName}, sans plus — et le temps de virer pour reprendre l'écoute, ${attackerName} perd le contact ASDIC.`,
+          `Rien ne remonte à la surface : ${targetName} était plus profond qu'estimé. ${attackerName} doit repasser pour retrouver le contact.`,
+        ],
+        rng
+      );
+    }
+    if (input.weaponType === "HEDGEHOG") {
+      return pick(
+        [
+          `La gerbe de projectiles plonge sans exploser : aucun n'a touché ${targetName} — et ${attackerName} garde le contact ASDIC sans avoir à virer.`,
+          `Rien ne détone en avant de l'étrave. ${targetName} s'en tire, mais ${attackerName} le tient toujours à l'oreille pour enchaîner aussitôt.`,
         ],
         rng
       );
@@ -231,8 +247,14 @@ export function describeShot(input: NarrativeInput): string {
 
   if (input.weaponType === "DEPTH_CHARGE") {
     return heavy
-      ? `Les grenades éclatent au bon réglage : une nappe de mazout et des débris remontent au-dessus de ${targetName}.`
-      : `Une salve encadre ${targetName} — des bulles remontent, la coque a souffert.`;
+      ? `Les grenades éclatent au bon réglage : une nappe de mazout et des débris remontent au-dessus de ${targetName}. ${attackerName} vire aussitôt pour reprendre l'écoute.`
+      : `Une salve encadre ${targetName} — des bulles remontent, la coque a souffert. Contact ASDIC rompu le temps de virer.`;
+  }
+
+  if (input.weaponType === "HEDGEHOG") {
+    return heavy
+      ? `Détonation nette sur la coque de ${targetName} : le projectile a explosé au contact, dégâts immédiats — ${attackerName} n'a jamais rompu l'écoute.`
+      : `Un projectile touche ${targetName} en surface — dégâts limités, mais ${attackerName} garde le sous-marin à l'oreille pour enchaîner.`;
   }
 
   if (heavy) {

@@ -800,6 +800,9 @@ export function rollLocalizedDamage(params: { weaponType: WeaponType; damageRati
   return { effect: { type: picked.type } as LocalizedDamageEffect, debug };
 }
 
+/** Portée d'engagement ASDIC (grenades ASM et Hedgehog) — livret + doctrine réelle, voir weather.ts. */
+export const ASDIC_ATTACK_RANGE_M = 2000;
+
 export type DepthChargeAttackResult = {
   hitChancePercent: number;
   hitRoll: number;
@@ -836,5 +839,84 @@ export function resolveDepthChargeAttack(params: {
     hit,
     damagePoints: hit ? depthChargeDamage(rng) : 0,
     chargesUsed: DEPTH_CHARGES_PER_ATTACK,
+  };
+}
+
+// ── Mortier ASM Hedgehog ────────────────────────────────────
+//
+// Entré en service à partir de 1942 sur les escorteurs alliés : 24
+// projectiles tirés vers l'avant en gerbe, à fusée percutante (explose au
+// contact, pas à un réglage de profondeur approximatif) — contrairement aux
+// grenades ASM classiques, l'escorteur n'a jamais besoin de passer
+// au-dessus de sa cible ni d'interrompre son écoute ASDIC active pour
+// attaquer (voir Unit.sonarBlindNextRound dans tacticalEngine.ts, la vraie
+// différence de fond entre les deux armes). Une salve manquée n'explose
+// simplement pas — moins spectaculaire qu'une grenade, mais aussi moins
+// dépendante d'un réglage de profondeur exact, d'où une pénalité de palier
+// plus douce que pour les grenades. Recherche 2026-08-14, cf. les règles
+// avancées de François Marlière (2013) qui insistent sur cette continuité
+// de contact comme l'apport tactique majeur de l'arme.
+
+const HEDGEHOG_DEPTH_BAND_HIT_FACTOR: Record<DepthBand, number> = {
+  SHALLOW: 1,
+  MEDIUM: 0.8,
+  DEEP: 0.6,
+};
+
+/** Une salve = une gerbe de 24 projectiles, comptée comme une seule "recharge" côté stock (voir Unit.hedgehogRoundsRemaining). */
+export const HEDGEHOG_ROUNDS_PER_ATTACK = 1;
+
+/** Même ordre de grandeur qu'une passe de grenades réussie : un coup direct reste letal, la différence est de ne jamais perdre le contact pour y arriver. */
+const REFERENCE_DAMAGE_PER_HEDGEHOG_ATTACK = 0.4;
+
+export function hedgehogHitChancePercent(params: { rangeM: number; maxRangeM: number; targetDepthBand: DepthBand }): number {
+  const rangeRatio = clamp(params.rangeM / params.maxRangeM, 0, 1);
+  const rangeFactor = Math.pow(1 - rangeRatio, 1.2);
+  const baseAccuracy = 0.5;
+  return clamp(baseAccuracy * rangeFactor * HEDGEHOG_DEPTH_BAND_HIT_FACTOR[params.targetDepthBand] * 100, 0, 80);
+}
+
+function hedgehogDamage(rng: () => number): number {
+  const variability = 0.7 + rng() * 0.6; // 0.7x à 1.3x
+  return REFERENCE_DAMAGE_PER_HEDGEHOG_ATTACK * variability;
+}
+
+export type HedgehogAttackResult = {
+  hitChancePercent: number;
+  hitRoll: number;
+  hit: boolean;
+  damagePoints: number;
+  roundsUsed: number;
+};
+
+/**
+ * Résout une salve de Hedgehog. Retourne `null` si l'escorteur n'a plus de
+ * salve disponible. Ne pose jamais de drapeau de rupture de contact (voir
+ * resolveDepthChargeAttack) — c'est géré dans tacticalEngine.ts, pas ici.
+ */
+export function resolveHedgehogAttack(params: {
+  roundsAvailable: number;
+  rangeM: number;
+  maxRangeM: number;
+  targetDepthBand: DepthBand;
+  rng?: () => number;
+}): HedgehogAttackResult | null {
+  if (params.roundsAvailable < HEDGEHOG_ROUNDS_PER_ATTACK) return null;
+  const rng = params.rng ?? Math.random;
+
+  const hitChancePercent = hedgehogHitChancePercent({
+    rangeM: params.rangeM,
+    maxRangeM: params.maxRangeM,
+    targetDepthBand: params.targetDepthBand,
+  });
+  const hitRoll = rng() * 100;
+  const hit = hitRoll < hitChancePercent;
+
+  return {
+    hitChancePercent,
+    hitRoll,
+    hit,
+    damagePoints: hit ? hedgehogDamage(rng) : 0,
+    roundsUsed: HEDGEHOG_ROUNDS_PER_ATTACK,
   };
 }

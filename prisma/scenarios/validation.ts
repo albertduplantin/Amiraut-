@@ -74,9 +74,11 @@ export const UnitClassSchema = z.object({
     .optional(),
   weaponSystems: z.record(z.string(), z.unknown()).optional(),
   depthChargeStock: z.number().int().nonnegative().optional(),
+  hedgehogStock: z.number().int().nonnegative().optional(),
   submergedRangeNmAt4kt: z.number().positive().optional(),
   oxygenEnduranceHours: z.number().positive().optional(),
   torpedoStock: z.number().int().nonnegative().optional(),
+  emergencyDiveSeconds: z.number().positive().optional(),
   enduranceMinutes: z.number().positive().optional(),
   passive: z.boolean().optional(),
 });

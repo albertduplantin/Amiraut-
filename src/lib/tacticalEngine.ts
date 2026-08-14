@@ -6,12 +6,14 @@ import {
   resolveGunEngagement,
   resolveTorpedoEngagement,
   resolveDepthChargeAttack,
+  resolveHedgehogAttack,
   resolveBombingEngagement,
   resolveAirCombatEngagement,
   rollLocalizedDamage,
   selectTorpedoBattery,
   isTorpedoArcClear,
   isInGunArc,
+  ASDIC_ATTACK_RANGE_M,
   type CombatProfile,
   type DepthBand as CombatDepthBand,
   type HitChanceBreakdown,
@@ -44,13 +46,15 @@ function pickWeaponSlotToDisable(profile: CombatProfile | null | undefined, alre
 }
 
 const NM_TO_M = 1852;
-const ASDIC_ATTACK_RANGE_M = 2000;
 
 /** Deux manches consécutives sans le moindre contact = rupture de contact. */
 const ROUNDS_WITHOUT_CONTACT_TO_END = 2;
 
 /** Repli quand aucune pièce principale n'est encore à portée de rien. */
 const DEFAULT_ROUND_MINUTES = 5;
+
+/** Repli si la classe n'a pas encore emergencyDiveSeconds renseigné (~moyenne toutes marines, voir UnitClass.emergencyDiveSeconds). */
+const DEFAULT_EMERGENCY_DIVE_SECONDS = 45;
 
 type SensorSpec = { type: SensorType; rangeNm: number };
 
@@ -336,9 +340,22 @@ export async function recomputeContacts(engagementId: string, roundNumber: numbe
     targetLngSnapshot: number;
   }[] = [];
 
+  // Grenades ASM tirées à la manche précédente : le SONAR (écoute active)
+  // de l'escorteur qui a attaqué reste sourd cette manche-ci, le temps de
+  // reprendre l'écoute après avoir dû passer au-dessus de sa cible — voir
+  // Unit.sonarBlindNextRound et submitTacticalFireShot. Remis à false une
+  // fois consommé, mais PAS ici : `advanceOrEnd` appelle déjà cette fonction
+  // en prévisualisation dès le passage à la manche N+1 (avant tout
+  // mouvement), et `resolveMovementPhase` la rappelle ensuite pour de vrai
+  // une fois les positions réelles connues — remettre le drapeau à false ici
+  // le viderait dès le premier appel, avant que la manche qui compte n'ait
+  // eu l'occasion de le lire. Voir resolveMovementPhase, seul endroit où il
+  // est effectivement consommé.
+
   for (const observer of engagement.participants) {
     if (observer.unit.status === "SUNK") continue;
     const sensors = parseSensors(observer.unit.unitClass.sensors);
+    const sonarBlind = observer.unit.sonarBlindNextRound;
 
     for (const target of engagement.participants) {
       if (target.teamId === observer.teamId) continue;
@@ -353,8 +370,20 @@ export async function recomputeContacts(engagementId: string, roundNumber: numbe
 
       let best: { type: SensorType; margin: number } | null = null;
       for (const sensor of sensors) {
+        // La goniométrie HF (HF_DF) ne se déclenche jamais par simple
+        // proximité, seulement par une émission radio adverse — voir
+        // turnEngine.ts (resolveTurnDetections) pour l'équivalent côté tour
+        // stratégique. Les signaux (/team/comms) se composent à l'échelle du
+        // TOUR, pas de la manche tactique : pas encore de mécanique
+        // d'interception à ce grain-là, donc HF_DF reste inerte ici plutôt
+        // que de se déclencher à tort par simple distance (bug constaté à
+        // l'ajout du premier HF_DF sur une unité engagée tactiquement, voir
+        // scénario PQ-18).
+        if (sensor.type === "HF_DF") continue;
         // Immergé : ni radar ni visuel, seulement l'écoute.
         if (targetSubmerged && (sensor.type === "RADAR" || sensor.type === "VISUAL")) continue;
+        // Contact ASDIC actif rompu par une attaque aux grenades ASM la manche précédente (Hedgehog non concerné, voir plus haut).
+        if (sonarBlind && sensor.type === "SONAR") continue;
         const range = effectiveSensorRangeNm(
           sensor.type,
           sensor.rangeNm,
@@ -392,6 +421,7 @@ export async function recomputeContacts(engagementId: string, roundNumber: numbe
   if (rows.length > 0) {
     await prisma.tacticalContact.createMany({ data: rows, skipDuplicates: true });
   }
+
   return rows;
 }
 
@@ -472,12 +502,32 @@ export async function submitTacticalMovementForUnit(params: {
     participant.unit.unitClass.accelerationKnotsPerMin ??
     defaultAccelerationKnotsPerMin(participant.unit.unitClass.category, participant.unit.unitClass.name);
   const lastSpeed = lastSpeedByUnit.get(params.unitId) ?? 0;
-  const { minReachable, maxReachable } = reachableSpeedRange({
+  const { minReachable, maxReachable: maxReachableBeforeDive } = reachableSpeedRange({
     lastSpeedKnots: lastSpeed,
     accelKnotsPerMin,
     roundMinutes: engagement.roundMinutes,
     effectiveMaxSpeedKnots,
   });
+
+  // Plongée d'urgence (voir UnitClass.emergencyDiveSeconds, recherche
+  // 2026-08-14) : le temps passé à plonger n'est pas disponible pour faire
+  // route — un sous-marin qui plonge depuis la surface cette manche voit son
+  // budget de vitesse max réduit à due proportion du temps de plongée dans
+  // la durée de la manche (jamais totalement immobilisé : au-delà de sa
+  // plongée, il continue sur son erre).
+  const isDivingThisRound =
+    participant.unit.unitClass.category === "SUBMARINE" &&
+    participant.unit.depthBand === "SURFACE" &&
+    params.depthBand != null &&
+    params.depthBand !== "SURFACE";
+  const maxReachable = isDivingThisRound
+    ? maxReachableBeforeDive *
+      (1 -
+        Math.min(
+          0.9,
+          (participant.unit.unitClass.emergencyDiveSeconds ?? DEFAULT_EMERGENCY_DIVE_SECONDS) / (engagement.roundMinutes * 60)
+        ))
+    : maxReachableBeforeDive;
 
   const turningRadiusNm =
     (participant.unit.unitClass.turningRadiusM ?? defaultTurningRadiusM(participant.unit.unitClass.category, participant.unit.unitClass.name)) /
@@ -580,6 +630,7 @@ export function gunWeaponSlot(gunIndex: number): string {
 }
 export const TORPEDO_WEAPON_SLOT = "torpedo";
 export const DEPTH_CHARGE_WEAPON_SLOT = "depth_charge";
+export const HEDGEHOG_WEAPON_SLOT = "hedgehog";
 export const BOMB_WEAPON_SLOT = "bomb";
 
 function parseGunSlotIndex(weaponSlot: string): number | null {
@@ -677,7 +728,31 @@ export async function submitTacticalFireShot(params: {
     outcome = { hitChancePercent: dc.hitChancePercent, hitRoll: dc.hitRoll, hit: dc.hit, hits: dc.hit ? 1 : 0, damagePoints: dc.damagePoints };
     await prisma.unit.update({
       where: { id: attacker.id },
-      data: { depthChargesRemaining: Math.max(0, (attacker.depthChargesRemaining ?? 0) - dc.chargesUsed) },
+      data: {
+        depthChargesRemaining: Math.max(0, (attacker.depthChargesRemaining ?? 0) - dc.chargesUsed),
+        // L'escorteur doit passer directement au-dessus de sa cible pour
+        // larguer ses grenades : le contact ASDIC actif se rompt le temps de
+        // la passe, à la différence du Hedgehog (voir HEDGEHOG ci-dessous) —
+        // consommé puis remis à false par recomputeContacts à la manche
+        // suivante.
+        sonarBlindNextRound: true,
+      },
+    });
+  } else if (params.weaponType === "HEDGEHOG") {
+    if (!targetSubmerged) throw new OrderValidationError("Le Hedgehog ne vise qu'un sous-marin immergé.");
+    const hh = resolveHedgehogAttack({
+      roundsAvailable: attacker.hedgehogRoundsRemaining ?? 0,
+      rangeM,
+      maxRangeM: ASDIC_ATTACK_RANGE_M,
+      targetDepthBand: target.depthBand as CombatDepthBand,
+    });
+    if (!hh) throw new OrderValidationError("Plus de salve de Hedgehog à bord.");
+    outcome = { hitChancePercent: hh.hitChancePercent, hitRoll: hh.hitRoll, hit: hh.hit, hits: hh.hit ? 1 : 0, damagePoints: hh.damagePoints };
+    await prisma.unit.update({
+      where: { id: attacker.id },
+      data: { hedgehogRoundsRemaining: Math.max(0, (attacker.hedgehogRoundsRemaining ?? 0) - hh.roundsUsed) },
+      // Pas de sonarBlindNextRound ici : le Hedgehog tire vers l'avant sans
+      // jamais rompre l'écoute ASDIC — c'est tout l'intérêt de l'arme.
     });
   } else if (params.weaponType === "GUN" && target.unitClass.category === "AIRCRAFT") {
     // Combat air-air : même WeaponType GUN que l'artillerie navale (une
@@ -1184,6 +1259,18 @@ export async function resolveMovementPhase(engagementId: string) {
   });
 
   await recomputeContacts(engagementId, engagement.roundNumber);
+
+  // Contact ASDIC rompu par des grenades ASM la manche précédente (voir
+  // recomputeContacts) : consommé ICI, une fois les positions réelles de
+  // cette manche connues et prises en compte ci-dessus — pas dans
+  // recomputeContacts elle-même, qui est aussi appelée en prévisualisation
+  // dès le passage de manche (voir advanceOrEnd) avant que ce mouvement-ci
+  // n'ait eu lieu.
+  const sonarBlindObserverIds = engagement.participants.filter((p) => p.unit.sonarBlindNextRound).map((p) => p.unitId);
+  if (sonarBlindObserverIds.length > 0) {
+    await prisma.unit.updateMany({ where: { id: { in: sonarBlindObserverIds } }, data: { sonarBlindNextRound: false } });
+  }
+
   await prisma.tacticalEngagement.update({ where: { id: engagementId }, data: { status: "AWAITING_FIRE" } });
 }
 

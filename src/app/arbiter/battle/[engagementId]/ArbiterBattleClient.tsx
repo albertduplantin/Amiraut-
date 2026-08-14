@@ -47,6 +47,8 @@ export function ArbiterBattleClient(props: {
   participants: Participant[];
   actions: ActionRow[];
   messages: Message[];
+  /** Autres combats en cours sur ce scénario (hors celui-ci) — voir le badge sur le lien "Tableau de bord" ci-dessous. */
+  otherActiveEngagementsCount: number;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -121,10 +123,27 @@ export function ArbiterBattleClient(props: {
             {props.status === "RESOLVED" && <span className="ml-2 text-red-400">({formatEndReason(props.endReason)})</span>}
           </p>
         </div>
-        <Link href="/arbiter" className="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-900">
+        <Link
+          href="/arbiter"
+          className="relative rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-900"
+        >
           Tableau de bord
+          {props.otherActiveEngagementsCount > 0 && (
+            <span
+              className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-600 px-1 text-[11px] font-semibold text-white ring-2 ring-slate-950"
+              title={`${props.otherActiveEngagementsCount} autre${props.otherActiveEngagementsCount > 1 ? "s" : ""} combat${props.otherActiveEngagementsCount > 1 ? "s" : ""} en cours ailleurs`}
+            >
+              {props.otherActiveEngagementsCount}
+            </span>
+          )}
         </Link>
       </div>
+      {props.otherActiveEngagementsCount > 0 && (
+        <p className="mb-4 -mt-2 text-xs text-amber-400">
+          ⚠ {props.otherActiveEngagementsCount} autre{props.otherActiveEngagementsCount > 1 ? "s" : ""} combat
+          {props.otherActiveEngagementsCount > 1 ? "s" : ""} en cours ailleurs sur ce scénario.
+        </p>
+      )}
 
       {props.status !== "RESOLVED" && (
         <div className="mb-4 flex flex-wrap items-center gap-2">

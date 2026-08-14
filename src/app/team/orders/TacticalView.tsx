@@ -17,8 +17,13 @@ import {
   torpedoHitChancePercent,
   bombHitChancePercent,
   airCombatHitChancePercent,
+  depthChargeHitChancePercent,
+  hedgehogHitChancePercent,
   isInGunArc,
   isTorpedoArcClear,
+  DEPTH_CHARGES_PER_ATTACK,
+  HEDGEHOG_ROUNDS_PER_ATTACK,
+  ASDIC_ATTACK_RANGE_M,
   type CombatProfile,
 } from "@/lib/combat";
 import {
@@ -87,6 +92,10 @@ type OwnUnit = {
   turningRadiusM: number;
   accelerationKnotsPerMin: number;
   torpedoesRemaining: number | null;
+  /** Grenades ASM restantes (escorteurs équipés seulement, null sinon) — voir Unit.depthChargesRemaining. */
+  depthChargesRemaining: number | null;
+  /** Salves de Hedgehog restantes (escorteurs équipés seulement, null sinon) — voir Unit.hedgehogRoundsRemaining. */
+  hedgehogRoundsRemaining: number | null;
   /** Pièces détruites (ex: "gun:1", "torpedo") — voir Unit.disabledWeaponSlots. */
   disabledWeaponSlots: string[];
   /** Vitesse max réduite par une avarie de machines (null = pas de plafond). */
@@ -159,6 +168,8 @@ type MovementDraft = { path: LatLng[] };
 const ASSUMED_TARGET_SPEED_RATIO = 0.7;
 const TORPEDO_SLOT = "torpedo";
 const BOMB_SLOT = "bomb";
+const DEPTH_CHARGE_SLOT = "depth_charge";
+const HEDGEHOG_SLOT = "hedgehog";
 const gunSlot = (index: number) => `gun:${index}`;
 
 function weaponSlotsForShip(ship: OwnUnit): string[] {
@@ -170,6 +181,11 @@ function weaponSlotsForShip(ship: OwnUnit): string[] {
   // munitions comme les torpilles) — reflète un avion qui largue toute sa
   // charge d'un coup plutôt que de garder des bombes en réserve.
   if (ship.combatProfile?.bombs) slots.push(BOMB_SLOT);
+  // ASM : un escorteur équipé (depthChargesRemaining/hedgehogRoundsRemaining
+  // non nul) garde la pièce dans sa liste même à sec — le bouton se
+  // désactive plutôt que de disparaître, comme les torpilles.
+  if (ship.depthChargesRemaining != null) slots.push(DEPTH_CHARGE_SLOT);
+  if (ship.hedgehogRoundsRemaining != null) slots.push(HEDGEHOG_SLOT);
   return slots;
 }
 
@@ -500,7 +516,16 @@ export function TacticalView(props: {
 
   function validateShot() {
     if (!selectedShip || !selectedTarget || !selectedWeaponSlot) return;
-    const weaponType = selectedWeaponSlot === TORPEDO_SLOT ? "TORPEDO" : selectedWeaponSlot === BOMB_SLOT ? "BOMB" : "GUN";
+    const weaponType =
+      selectedWeaponSlot === TORPEDO_SLOT
+        ? "TORPEDO"
+        : selectedWeaponSlot === BOMB_SLOT
+          ? "BOMB"
+          : selectedWeaponSlot === DEPTH_CHARGE_SLOT
+            ? "DEPTH_CHARGE"
+            : selectedWeaponSlot === HEDGEHOG_SLOT
+              ? "HEDGEHOG"
+              : "GUN";
     setError(null);
     startTransition(async () => {
       const result = await submitFireShotAction({
@@ -1249,6 +1274,12 @@ function FireDashboard({
   const torpedoFired = !!firedBySlot[`${ship.id}|${TORPEDO_SLOT}`];
   const bombLoadout = ship.combatProfile?.bombs ?? null;
   const bombFired = !!firedBySlot[`${ship.id}|${BOMB_SLOT}`];
+  const hasDepthCharges = ship.depthChargesRemaining != null;
+  const outOfDepthCharges = ship.depthChargesRemaining != null && ship.depthChargesRemaining < DEPTH_CHARGES_PER_ATTACK;
+  const depthChargeFired = !!firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`];
+  const hasHedgehog = ship.hedgehogRoundsRemaining != null;
+  const outOfHedgehog = ship.hedgehogRoundsRemaining != null && ship.hedgehogRoundsRemaining < HEDGEHOG_ROUNDS_PER_ATTACK;
+  const hedgehogFired = !!firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`];
 
   const estimate = useMemo(() => {
     if (!target || rangeM === null || !selectedWeaponSlot) return null;
@@ -1277,6 +1308,12 @@ function FireDashboard({
         targetBeamM,
         targetSpeedKnots: assumedSpeed,
       });
+    }
+    if (selectedWeaponSlot === DEPTH_CHARGE_SLOT || selectedWeaponSlot === HEDGEHOG_SLOT) {
+      if (target.category !== "SUBMARINE") return null;
+      const calc = selectedWeaponSlot === DEPTH_CHARGE_SLOT ? depthChargeHitChancePercent : hedgehogHitChancePercent;
+      // Palier réel non connu côté client (brouillard de guerre) : estimation à un palier moyen, comme l'hypothèse de vitesse ennemie ci-dessus — le vrai calcul serveur connaît le palier réel.
+      return calc({ rangeM, maxRangeM: ASDIC_ATTACK_RANGE_M, targetDepthBand: "MEDIUM" });
     }
     const gunIndex = selectedWeaponSlot.startsWith("gun:") ? Number(selectedWeaponSlot.slice(4)) : null;
     const battery = gunIndex !== null ? allGuns[gunIndex] : undefined;
@@ -1482,7 +1519,89 @@ function FireDashboard({
               </button>
             </li>
           )}
-          {allGuns.length === 0 && !torpedoBattery && !bombLoadout && <li className="text-xs text-slate-600">Aucune arme.</li>}
+          {hasDepthCharges && depthChargeFired && (
+            <li className={`rounded-md border px-2 py-1.5 text-xs ${firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`]?.hit ? "border-red-800 bg-red-950/30" : "border-slate-700 bg-slate-900"}`}>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Grenades ASM</span>
+                <span className="text-emerald-400">✓ larguées</span>
+              </div>
+              {firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`]?.hitRoll !== null && firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`]?.hitChancePercent !== null && (
+                <div className="mt-1 text-slate-500">
+                  Jet : {firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`]?.hitRoll?.toFixed(1)} (seuil{" "}
+                  {firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`]?.hitChancePercent?.toFixed(0)}%)
+                </div>
+              )}
+              {firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`]?.narrative && (
+                <div className="mt-1 text-slate-300">{firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`]?.narrative}</div>
+              )}
+              <DebugDetails text={firedBySlot[`${ship.id}|${DEPTH_CHARGE_SLOT}`]?.debugInfo ?? null} />
+            </li>
+          )}
+          {hasDepthCharges && !depthChargeFired && (
+            <li>
+              <button
+                onClick={() => setSelectedWeaponSlot(DEPTH_CHARGE_SLOT)}
+                disabled={outOfDepthCharges}
+                className={`w-full rounded-md px-2 py-1.5 text-left text-xs transition ${
+                  selectedWeaponSlot === DEPTH_CHARGE_SLOT
+                    ? "bg-brass-900/50 ring-1 ring-brass-500"
+                    : outOfDepthCharges
+                      ? "cursor-not-allowed opacity-40"
+                      : "border border-slate-700 hover:bg-slate-800"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span>Grenades ASM</span>
+                  <span className="text-slate-500">{ship.depthChargesRemaining} restantes</span>
+                </div>
+                {target && target.category !== "SUBMARINE" && <div className="text-[11px] text-amber-400">ne vise qu&apos;un sous-marin immergé</div>}
+                {!target && <div className="text-[11px] text-slate-500">rompt le contact ASDIC une manche, à l&apos;inverse du Hedgehog</div>}
+              </button>
+            </li>
+          )}
+          {hasHedgehog && hedgehogFired && (
+            <li className={`rounded-md border px-2 py-1.5 text-xs ${firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`]?.hit ? "border-red-800 bg-red-950/30" : "border-slate-700 bg-slate-900"}`}>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Hedgehog</span>
+                <span className="text-emerald-400">✓ tiré</span>
+              </div>
+              {firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`]?.hitRoll !== null && firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`]?.hitChancePercent !== null && (
+                <div className="mt-1 text-slate-500">
+                  Jet : {firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`]?.hitRoll?.toFixed(1)} (seuil{" "}
+                  {firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`]?.hitChancePercent?.toFixed(0)}%)
+                </div>
+              )}
+              {firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`]?.narrative && (
+                <div className="mt-1 text-slate-300">{firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`]?.narrative}</div>
+              )}
+              <DebugDetails text={firedBySlot[`${ship.id}|${HEDGEHOG_SLOT}`]?.debugInfo ?? null} />
+            </li>
+          )}
+          {hasHedgehog && !hedgehogFired && (
+            <li>
+              <button
+                onClick={() => setSelectedWeaponSlot(HEDGEHOG_SLOT)}
+                disabled={outOfHedgehog}
+                className={`w-full rounded-md px-2 py-1.5 text-left text-xs transition ${
+                  selectedWeaponSlot === HEDGEHOG_SLOT
+                    ? "bg-brass-900/50 ring-1 ring-brass-500"
+                    : outOfHedgehog
+                      ? "cursor-not-allowed opacity-40"
+                      : "border border-slate-700 hover:bg-slate-800"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span>Hedgehog</span>
+                  <span className="text-slate-500">{ship.hedgehogRoundsRemaining} salve{(ship.hedgehogRoundsRemaining ?? 0) > 1 ? "s" : ""}</span>
+                </div>
+                {target && target.category !== "SUBMARINE" && <div className="text-[11px] text-amber-400">ne vise qu&apos;un sous-marin immergé</div>}
+                {!target && <div className="text-[11px] text-slate-500">ne rompt jamais le contact ASDIC</div>}
+              </button>
+            </li>
+          )}
+          {allGuns.length === 0 && !torpedoBattery && !bombLoadout && !hasDepthCharges && !hasHedgehog && (
+            <li className="text-xs text-slate-600">Aucune arme.</li>
+          )}
         </ul>
       </div>
 
