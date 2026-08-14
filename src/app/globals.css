@@ -214,3 +214,31 @@ body {
     animation: none !important;
   }
 }
+
+/* Compte rendu de fin d'opération (/report) : feuille de papier vieilli
+   posée sur la table à cartes — jaunie, tachée, tramée à la machine à
+   écrire (voir .font-display, déjà chargée avec Special Elite ailleurs
+   dans l'appli, ici filée sur tout le document plutôt que les seuls
+   titres). Tout en dégradés CSS superposés, aucune image externe. */
+.dossier-paper {
+  --paper: #e9ddc0;
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(ellipse 220px 160px at 8% 12%, rgba(120, 90, 40, 0.16), transparent 60%),
+    radial-gradient(ellipse 180px 140px at 92% 85%, rgba(120, 90, 40, 0.14), transparent 60%),
+    radial-gradient(ellipse 140px 100px at 78% 15%, rgba(120, 90, 40, 0.1), transparent 65%),
+    repeating-linear-gradient(0deg, rgba(90, 65, 30, 0.035) 0px, rgba(90, 65, 30, 0.035) 1px, transparent 1px, transparent 3px);
+  color: #2c2210;
+  font-family: var(--font-display), "Courier New", monospace;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.25) inset,
+    0 25px 50px -12px rgba(0, 0, 0, 0.6);
+}
+
+/* Tampon "CONFIDENTIEL" en diagonale, encre rouge délavée. */
+.dossier-stamp {
+  transform: rotate(-11deg);
+  border: 3px solid rgba(150, 30, 24, 0.55);
+  color: rgba(150, 30, 24, 0.65);
+  mix-blend-mode: multiply;
+}

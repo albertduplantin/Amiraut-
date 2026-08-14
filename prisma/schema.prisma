@@ -22,6 +22,10 @@ model Scenario {
   defaultTurnMinutes Int
   status             ScenarioStatus @default(DRAFT)
   createdAt          DateTime       @default(now())
+  // Horodatage de fin de partie (voir Scenario.status = COMPLETED, gameEnd.ts,
+  // action "Mettre fin à la partie" côté arbitre) — sert de date de clôture
+  // affichée sur le compte rendu de fin d'opération (/report).
+  endedAt            DateTime?
 
   teams        Team[]
   units        Unit[]

@@ -169,10 +169,16 @@ export async function saveUnitOrder(params: {
   const { turnId, unitId, submittedById, speedKnots, waypoints, depthBand, standing } = params;
 
   const [turn, unit] = await Promise.all([
-    prisma.turn.findUniqueOrThrow({ where: { id: turnId } }),
+    prisma.turn.findUniqueOrThrow({ where: { id: turnId }, include: { scenario: { select: { status: true } } } }),
     prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } }),
   ]);
 
+  // La clôture de partie (voir gameEnd.ts) ne touche pas le tour PENDING_ORDERS
+  // en cours — cette vérification est donc nécessaire, pas redondante avec
+  // le contrôle de statut ci-dessous.
+  if (turn.scenario.status === "COMPLETED") {
+    throw new OrderValidationError("Cette partie est terminée.");
+  }
   if (turn.status !== "PENDING_ORDERS") {
     throw new OrderValidationError("Ce tour n'accepte plus d'ordres.");
   }

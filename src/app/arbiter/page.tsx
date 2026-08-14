@@ -18,6 +18,12 @@ export default async function ArbiterDashboardPage() {
     }),
   ]);
 
+  // Partie close (voir gameEnd.ts) : plus rien à arbitrer, direction le
+  // compte rendu de fin d'opération plutôt qu'un tableau de bord périmé.
+  if (scenario.status === "COMPLETED") {
+    redirect("/report");
+  }
+
   if (!turn) {
     return <div className="p-6 text-slate-100">Aucun tour trouvé pour ce scénario.</div>;
   }

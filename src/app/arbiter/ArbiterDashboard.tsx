@@ -21,6 +21,7 @@ import {
   toggleArbiterPauseAction,
   arbiterEndEngagementAction,
 } from "./battle/[engagementId]/actions";
+import { EndGameButton } from "./EndGameButton";
 
 /**
  * Tableau de bord arbitre unifié : carte au centre (toujours visible,
@@ -563,6 +564,7 @@ function OverviewPanel(props: {
   turnId: string;
 }) {
   return (
+    <div className="flex h-full flex-col justify-between">
     <div className="space-y-4">
       <h2 className="text-sm font-semibold text-slate-400">Vue d&apos;ensemble</h2>
       <div className="rounded-md bg-slate-900 p-3 text-sm">
@@ -595,6 +597,11 @@ function OverviewPanel(props: {
       <Link href="/team/reports" className="block text-xs text-slate-500 hover:text-slate-300">
         Voir les rapports publiés →
       </Link>
+    </div>
+      <div className="space-y-2 border-t border-slate-800 pt-4">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Zone sensible</h2>
+        <EndGameButton />
+      </div>
     </div>
   );
 }

@@ -13,6 +13,13 @@ export default async function OrdersPage() {
     redirect("/");
   }
 
+  // Partie close (voir gameEnd.ts) : plus d'ordres à donner, direction le
+  // compte rendu de fin d'opération.
+  const scenario = await prisma.scenario.findUniqueOrThrow({ where: { id: session.scenarioId }, select: { status: true } });
+  if (scenario.status === "COMPLETED") {
+    redirect("/report");
+  }
+
   // Dès qu'un combat rapproché est en cours pour cette équipe, il remplace
   // l'écran d'ordres longue durée sur cette même page — pas de bascule
   // d'URL ni de bandeau "mode tactique" : le joueur reste sur la carte.

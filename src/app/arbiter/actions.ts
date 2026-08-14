@@ -1,9 +1,11 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
 import { assertArbiter, AccessDeniedError } from "@/lib/auth";
 import { setTurnWeather, setDetectionStatus, addManualDetection, publishTurn } from "@/lib/turnEngine";
+import { endGame } from "@/lib/gameEnd";
 import { prisma } from "@/lib/prisma";
 
 export async function setWeatherAction(formData: FormData) {
@@ -118,4 +120,20 @@ export async function publishTurnAction(formData: FormData) {
   revalidatePath("/team/orders");
   revalidatePath("/team/reports");
   revalidatePath("/team/waiting");
+}
+
+/**
+ * Termine définitivement la partie (voir gameEnd.ts) et renvoie l'arbitre
+ * sur le compte rendu de fin d'opération. scenarioId vient de la session,
+ * jamais du formulaire — un arbitre ne doit pouvoir clore que SA partie.
+ */
+export async function endGameAction() {
+  const session = await getSession();
+  assertArbiter(session);
+  await endGame(session.scenarioId);
+  revalidatePath("/arbiter");
+  revalidatePath("/team/orders");
+  revalidatePath("/team/waiting");
+  revalidatePath("/team/reports");
+  redirect("/report");
 }
