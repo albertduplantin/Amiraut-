@@ -3,6 +3,20 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createLibraryClassAction, updateLibraryClassAction } from "./actions";
+import { LibraryClassFields, type LibraryClassFieldsValues } from "./LibraryClassFields";
+import { SensorsEditor } from "./ArmamentEditor/SensorsEditor";
+import { CombatProfileEditor } from "./ArmamentEditor/CombatProfileEditor";
+import { WeaponSystemsEditor } from "./ArmamentEditor/WeaponSystemsEditor";
+import {
+  type Sensor,
+  type CombatProfileValue,
+  type WeaponSystemRow,
+  sensorsFromJson,
+  combatProfileFromJson,
+  combatProfileToJson,
+  weaponSystemsFromJson,
+  weaponSystemsToJson,
+} from "./ArmamentEditor/types";
 
 export type LibraryClassData = {
   id?: string;
@@ -36,76 +50,69 @@ export type LibraryClassData = {
   theater: string | null;
 };
 
-const ICON_OPTIONS = ["battleship", "cruiser", "destroyer", "submarine", "aircraft", "cargo"];
-
-function toJsonText(value: unknown, fallback: string): string {
-  if (value === null || value === undefined) return fallback;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return fallback;
-  }
+function initialFieldValues(initial?: LibraryClassData): LibraryClassFieldsValues {
+  return {
+    key: initial?.key ?? "",
+    name: initial?.name ?? "",
+    nation: initial?.nation ?? "",
+    category: initial?.category ?? "SURFACE_SHIP",
+    theater: initial?.theater ?? "Atlantique/Arctique 1939-45",
+    maxSpeedKnots: String(initial?.maxSpeedKnots ?? ""),
+    lengthMeters: String(initial?.lengthMeters ?? ""),
+    beamMeters: String(initial?.beamMeters ?? ""),
+    turningRadiusM: String(initial?.turningRadiusM ?? ""),
+    accelerationKnotsPerMin: String(initial?.accelerationKnotsPerMin ?? ""),
+    agility: String(initial?.agility ?? ""),
+    pilotSkill: initial?.pilotSkill ?? "",
+    detectability: String(initial?.detectability ?? "1"),
+    iconKey: initial?.iconKey ?? "cruiser",
+    profileImageUrl: initial?.profileImageUrl ?? "",
+    resistancePoints: String(initial?.resistancePoints ?? ""),
+    historicalNote: initial?.historicalNote ?? "",
+    passive: initial?.passive ?? false,
+    enduranceMinutes: String(initial?.enduranceMinutes ?? ""),
+    depthChargeStock: String(initial?.depthChargeStock ?? ""),
+    hedgehogStock: String(initial?.hedgehogStock ?? ""),
+    submergedRangeNmAt4kt: String(initial?.submergedRangeNmAt4kt ?? ""),
+    oxygenEnduranceHours: String(initial?.oxygenEnduranceHours ?? ""),
+    torpedoStock: String(initial?.torpedoStock ?? ""),
+    emergencyDiveSeconds: String(initial?.emergencyDiveSeconds ?? ""),
+  };
 }
 
-/** Formulaire de classe de bibliothèque (navire ou avion) — création et modification, voir /library. */
+/**
+ * Formulaire de classe de bibliothèque (navire ou avion) — création et
+ * modification, voir /library. Entièrement visuel depuis le 2026-08-14
+ * (retour utilisateur, chantier constructeur de scénario) : les 3
+ * textareas JSON (capteurs, profil de combat, fiche d'armement) sont
+ * remplacés par des éditeurs structurés — voir ArmamentEditor/. Le payload
+ * final envoyé au serveur a exactement la même forme qu'avant, la
+ * validation zod côté actions.ts est inchangée.
+ */
 export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const [key, setKey] = useState(initial?.key ?? "");
-  const [name, setName] = useState(initial?.name ?? "");
-  const [nation, setNation] = useState(initial?.nation ?? "");
-  const [category, setCategory] = useState<"SURFACE_SHIP" | "SUBMARINE" | "AIRCRAFT">(initial?.category ?? "SURFACE_SHIP");
-  const [theater, setTheater] = useState(initial?.theater ?? "Atlantique/Arctique 1939-45");
-  const [maxSpeedKnots, setMaxSpeedKnots] = useState(String(initial?.maxSpeedKnots ?? ""));
-  const [lengthMeters, setLengthMeters] = useState(String(initial?.lengthMeters ?? ""));
-  const [beamMeters, setBeamMeters] = useState(String(initial?.beamMeters ?? ""));
-  const [turningRadiusM, setTurningRadiusM] = useState(String(initial?.turningRadiusM ?? ""));
-  const [accelerationKnotsPerMin, setAccelerationKnotsPerMin] = useState(String(initial?.accelerationKnotsPerMin ?? ""));
-  const [agility, setAgility] = useState(String(initial?.agility ?? ""));
-  const [pilotSkill, setPilotSkill] = useState(initial?.pilotSkill ?? "");
-  const [detectability, setDetectability] = useState(String(initial?.detectability ?? "1"));
-  const [iconKey, setIconKey] = useState(initial?.iconKey ?? "cruiser");
-  const [profileImageUrl, setProfileImageUrl] = useState(initial?.profileImageUrl ?? "");
-  const [resistancePoints, setResistancePoints] = useState(String(initial?.resistancePoints ?? ""));
-  const [historicalNote, setHistoricalNote] = useState(initial?.historicalNote ?? "");
-  const [passive, setPassive] = useState(initial?.passive ?? false);
-  const [enduranceMinutes, setEnduranceMinutes] = useState(String(initial?.enduranceMinutes ?? ""));
-  const [depthChargeStock, setDepthChargeStock] = useState(String(initial?.depthChargeStock ?? ""));
-  const [hedgehogStock, setHedgehogStock] = useState(String(initial?.hedgehogStock ?? ""));
-  const [submergedRangeNmAt4kt, setSubmergedRangeNmAt4kt] = useState(String(initial?.submergedRangeNmAt4kt ?? ""));
-  const [oxygenEnduranceHours, setOxygenEnduranceHours] = useState(String(initial?.oxygenEnduranceHours ?? ""));
-  const [torpedoStock, setTorpedoStock] = useState(String(initial?.torpedoStock ?? ""));
-  const [emergencyDiveSeconds, setEmergencyDiveSeconds] = useState(String(initial?.emergencyDiveSeconds ?? ""));
+  const [values, setValues] = useState<LibraryClassFieldsValues>(() => initialFieldValues(initial));
+  const [sensors, setSensors] = useState<Sensor[]>(() => {
+    const existing = sensorsFromJson(initial?.sensors);
+    if (existing.length > 0) return existing;
+    // Nouvelle classe (pas de modification en cours) : un point de départ
+    // plausible plutôt qu'une liste vide, sans forcer l'utilisateur à
+    // deviner le format attendu — l'ancien exemple JSON servait le même but.
+    return initial
+      ? []
+      : [
+          { type: "RADAR", rangeNm: 15 },
+          { type: "VISUAL", rangeNm: 12 },
+        ];
+  });
+  const [combatProfile, setCombatProfile] = useState<CombatProfileValue>(() => combatProfileFromJson(initial?.combatProfile));
+  const [weaponSystems, setWeaponSystems] = useState<WeaponSystemRow[]>(() => weaponSystemsFromJson(initial?.weaponSystems));
 
-  const [sensorsText, setSensorsText] = useState(toJsonText(initial?.sensors, '[\n  { "type": "RADAR", "rangeNm": 15 },\n  { "type": "VISUAL", "rangeNm": 12 }\n]'));
-  const [combatProfileText, setCombatProfileText] = useState(
-    toJsonText(
-      initial?.combatProfile,
-      '{\n  "guns": [\n    { "calibreMm": 152, "count": 6, "rangeM": 23000, "roundsPerMinute": 8, "arc": "FORWARD" }\n  ]\n}'
-    )
-  );
-  const [weaponSystemsText, setWeaponSystemsText] = useState(toJsonText(initial?.weaponSystems, '{\n  "mainGuns": "6 x 152mm"\n}'));
-
-  const [sensorsError, setSensorsError] = useState<string | null>(null);
-  const [combatProfileError, setCombatProfileError] = useState<string | null>(null);
-  const [weaponSystemsError, setWeaponSystemsError] = useState<string | null>(null);
-
-  function parseJsonField(text: string, setFieldError: (e: string | null) => void, optional: boolean): unknown {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      setFieldError(null);
-      return optional ? undefined : trimmed;
-    }
-    try {
-      const value = JSON.parse(trimmed);
-      setFieldError(null);
-      return value;
-    } catch (e) {
-      setFieldError(e instanceof Error ? e.message : "JSON invalide");
-      return undefined;
-    }
+  function updateValues(patch: Partial<LibraryClassFieldsValues>) {
+    setValues((v) => ({ ...v, ...patch }));
   }
 
   function numOrUndefined(text: string): number | undefined {
@@ -117,43 +124,36 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
 
   function submit() {
     setError(null);
-    const sensors = parseJsonField(sensorsText, setSensorsError, false);
-    const combatProfile = parseJsonField(combatProfileText, setCombatProfileError, true);
-    const weaponSystems = parseJsonField(weaponSystemsText, setWeaponSystemsError, true);
-    if (sensorsError || combatProfileError || weaponSystemsError) {
-      setError("Corrigez les champs JSON en erreur avant d'enregistrer.");
-      return;
-    }
 
     const payload = {
-      key: key.trim(),
-      name: name.trim(),
-      nation: nation.trim(),
-      category,
-      theater: theater.trim() || undefined,
-      maxSpeedKnots: numOrUndefined(maxSpeedKnots),
-      lengthMeters: numOrUndefined(lengthMeters),
-      beamMeters: numOrUndefined(beamMeters),
-      turningRadiusM: numOrUndefined(turningRadiusM),
-      accelerationKnotsPerMin: numOrUndefined(accelerationKnotsPerMin),
-      agility: numOrUndefined(agility),
-      pilotSkill: pilotSkill.trim() || undefined,
+      key: values.key.trim(),
+      name: values.name.trim(),
+      nation: values.nation.trim(),
+      category: values.category,
+      theater: values.theater.trim() || undefined,
+      maxSpeedKnots: numOrUndefined(values.maxSpeedKnots),
+      lengthMeters: numOrUndefined(values.lengthMeters),
+      beamMeters: numOrUndefined(values.beamMeters),
+      turningRadiusM: numOrUndefined(values.turningRadiusM),
+      accelerationKnotsPerMin: numOrUndefined(values.accelerationKnotsPerMin),
+      agility: numOrUndefined(values.agility),
+      pilotSkill: values.pilotSkill.trim() || undefined,
       sensors,
-      detectability: numOrUndefined(detectability),
-      iconKey,
-      profileImageUrl: profileImageUrl.trim() || undefined,
-      historicalNote: historicalNote.trim() || undefined,
-      resistancePoints: numOrUndefined(resistancePoints),
-      combatProfile,
-      weaponSystems,
-      depthChargeStock: numOrUndefined(depthChargeStock),
-      hedgehogStock: numOrUndefined(hedgehogStock),
-      submergedRangeNmAt4kt: numOrUndefined(submergedRangeNmAt4kt),
-      oxygenEnduranceHours: numOrUndefined(oxygenEnduranceHours),
-      torpedoStock: numOrUndefined(torpedoStock),
-      emergencyDiveSeconds: numOrUndefined(emergencyDiveSeconds),
-      enduranceMinutes: numOrUndefined(enduranceMinutes),
-      passive,
+      detectability: numOrUndefined(values.detectability),
+      iconKey: values.iconKey,
+      profileImageUrl: values.profileImageUrl.trim() || undefined,
+      historicalNote: values.historicalNote.trim() || undefined,
+      resistancePoints: numOrUndefined(values.resistancePoints),
+      combatProfile: combatProfileToJson(combatProfile),
+      weaponSystems: weaponSystemsToJson(weaponSystems),
+      depthChargeStock: numOrUndefined(values.depthChargeStock),
+      hedgehogStock: numOrUndefined(values.hedgehogStock),
+      submergedRangeNmAt4kt: numOrUndefined(values.submergedRangeNmAt4kt),
+      oxygenEnduranceHours: numOrUndefined(values.oxygenEnduranceHours),
+      torpedoStock: numOrUndefined(values.torpedoStock),
+      emergencyDiveSeconds: numOrUndefined(values.emergencyDiveSeconds),
+      enduranceMinutes: numOrUndefined(values.enduranceMinutes),
+      passive: values.passive,
     };
 
     startTransition(async () => {
@@ -167,9 +167,6 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
     });
   }
 
-  const fieldClass = "mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm";
-  const labelClass = "block text-xs font-medium text-slate-400";
-
   return (
     <div className="chart-room-bg min-h-screen text-slate-100">
       <div className="mx-auto max-w-3xl px-6 py-10">
@@ -180,187 +177,24 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
         </p>
 
         <div className="mt-6 space-y-5">
-          <section className="grid grid-cols-2 gap-3">
-            <label className={labelClass}>
-              Clé (identifiant stable)
-              <input value={key} onChange={(e) => setKey(e.target.value)} placeholder="ex: spitfire-mk-vb" className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Catégorie
-              <select value={category} onChange={(e) => setCategory(e.target.value as typeof category)} className={fieldClass}>
-                <option value="SURFACE_SHIP">Navire de surface</option>
-                <option value="SUBMARINE">Sous-marin</option>
-                <option value="AIRCRAFT">Avion</option>
-              </select>
-            </label>
-            <label className={labelClass}>
-              Nom
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="ex: Supermarine Spitfire Mk Vb" className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Nation
-              <input value={nation} onChange={(e) => setNation(e.target.value)} placeholder="ex: Royaume-Uni" className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Théâtre (repère libre)
-              <input value={theater} onChange={(e) => setTheater(e.target.value)} className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Icône carte
-              <select value={iconKey} onChange={(e) => setIconKey(e.target.value)} className={fieldClass}>
-                {ICON_OPTIONS.map((k) => (
-                  <option key={k} value={k}>
-                    {k}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </section>
-
-          <section className="grid grid-cols-3 gap-3">
-            <label className={labelClass}>
-              Vitesse max (nds)
-              <input value={maxSpeedKnots} onChange={(e) => setMaxSpeedKnots(e.target.value)} className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Longueur (m)
-              <input value={lengthMeters} onChange={(e) => setLengthMeters(e.target.value)} className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Largeur (m)
-              <input value={beamMeters} onChange={(e) => setBeamMeters(e.target.value)} className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Rayon de giration (m)
-              <input value={turningRadiusM} onChange={(e) => setTurningRadiusM(e.target.value)} className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Accélération (nds/min)
-              <input value={accelerationKnotsPerMin} onChange={(e) => setAccelerationKnotsPerMin(e.target.value)} className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Détectabilité (×, 1 = neutre)
-              <input value={detectability} onChange={(e) => setDetectability(e.target.value)} className={fieldClass} />
-            </label>
-            <label className={labelClass}>
-              Résistance (potentiel de combat)
-              <input value={resistancePoints} onChange={(e) => setResistancePoints(e.target.value)} className={fieldClass} />
-            </label>
-            {category === "AIRCRAFT" && (
-              <>
-                <label className={labelClass} title="Maniabilité en combat air-air, 0 à 1 — voir combat.ts">
-                  Maniabilité air-air (0-1)
-                  <input value={agility} onChange={(e) => setAgility(e.target.value)} className={fieldClass} />
-                </label>
-                <label className={labelClass} title="A (élite) à F (très mauvais) — moyen (C) si laissé vide, voir combat.ts pilotSkillMultiplier">
-                  Niveau équipage (A-F)
-                  <input value={pilotSkill} onChange={(e) => setPilotSkill(e.target.value.toUpperCase().slice(0, 1))} className={fieldClass} />
-                </label>
-                <label className={labelClass}>
-                  Autonomie de vol (min)
-                  <input value={enduranceMinutes} onChange={(e) => setEnduranceMinutes(e.target.value)} className={fieldClass} />
-                </label>
-              </>
-            )}
-          </section>
-
-          {category === "SUBMARINE" && (
-            <section className="grid grid-cols-3 gap-3 rounded-md border border-slate-800 p-3">
-              <p className="col-span-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Sous-marin</p>
-              <label className={labelClass}>
-                Autonomie immergée (nm à 4 nds)
-                <input value={submergedRangeNmAt4kt} onChange={(e) => setSubmergedRangeNmAt4kt(e.target.value)} className={fieldClass} />
-              </label>
-              <label className={labelClass}>
-                Autonomie oxygène (h)
-                <input value={oxygenEnduranceHours} onChange={(e) => setOxygenEnduranceHours(e.target.value)} className={fieldClass} />
-              </label>
-              <label className={labelClass}>
-                Stock torpilles
-                <input value={torpedoStock} onChange={(e) => setTorpedoStock(e.target.value)} className={fieldClass} />
-              </label>
-              <label className={labelClass} title="Recherche 2026-08-14 : ~30s U-Boote, ~45s japonais/américains, ~60s britanniques/italiens">
-                Plongée d&apos;urgence (s)
-                <input value={emergencyDiveSeconds} onChange={(e) => setEmergencyDiveSeconds(e.target.value)} className={fieldClass} />
-              </label>
-            </section>
-          )}
-
-          {category === "SURFACE_SHIP" && (
-            <section className="grid grid-cols-3 gap-3 rounded-md border border-slate-800 p-3">
-              <p className="col-span-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Escorteur (optionnel)</p>
-              <label className={labelClass}>
-                Stock grenades ASM
-                <input value={depthChargeStock} onChange={(e) => setDepthChargeStock(e.target.value)} className={fieldClass} />
-              </label>
-              <label className={labelClass} title="Une salve = une gerbe de 24 projectiles, comptée comme une seule recharge — voir combat.ts">
-                Salves Hedgehog
-                <input value={hedgehogStock} onChange={(e) => setHedgehogStock(e.target.value)} className={fieldClass} />
-              </label>
-            </section>
-          )}
+          <LibraryClassFields values={values} onChange={updateValues} />
 
           <section>
-            <label className={labelClass}>
-              Capteurs (JSON — tableau {"{"}type, rangeNm{"}"})
-              <textarea value={sensorsText} onChange={(e) => setSensorsText(e.target.value)} rows={4} className={`${fieldClass} font-mono text-xs`} />
-            </label>
-            {sensorsError && <p className="mt-1 text-xs text-red-400">{sensorsError}</p>}
+            <SensorsEditor value={sensors} onChange={setSensors} />
           </section>
 
           <section>
-            <label className={labelClass}>
-              Profil de combat (JSON — guns / torpedoTubes / bombs, voir combat.ts). Laisser vide si aucun armement.
-              <textarea
-                value={combatProfileText}
-                onChange={(e) => setCombatProfileText(e.target.value)}
-                rows={6}
-                className={`${fieldClass} font-mono text-xs`}
-              />
-            </label>
-            {combatProfileError && <p className="mt-1 text-xs text-red-400">{combatProfileError}</p>}
+            <p className="mb-1 text-xs font-medium text-slate-400">Armement (laisser toutes les cases décochées si aucun)</p>
+            <CombatProfileEditor value={combatProfile} onChange={setCombatProfile} />
             <p className="mt-1 text-[11px] text-slate-600">
-              Avion torpilleur : <code>{`{"torpedoTubes":{"count":1,"rangeM":900,"speedKnots":40}}`}</code>. Bombardier :{" "}
-              <code>{`{"bombs":{"count":1,"weightKg":250,"method":"DIVE"}}`}</code> (<code>method</code> : <code>DIVE</code>,{" "}
-              <code>LEVEL</code> ou <code>SKIP</code> — basse altitude/ricochet). Chasseur :{" "}
-              <code>{`{"guns":[{"calibreMm":20,"count":2,"rangeM":500,"roundsPerMinute":600,"arc":"FORWARD"}]}`}</code>. Un même canon
-              d&apos;avion sert aussi bien au combat air-air qu&apos;au mitraillage d&apos;un navire, selon la cible visée en jeu.
-              Navire équipé de DCA : ajouter <code>{`"antiAircraft":{"gunCount":4}`}</code> au même objet (chances d&apos;abattre
-              l&apos;avion attaquant, voir combat.ts).
+              Un même canon d&apos;avion sert aussi bien au combat air-air qu&apos;au mitraillage d&apos;un navire, selon la
+              cible visée en jeu.
             </p>
           </section>
 
           <section>
-            <label className={labelClass}>
-              Fiche d&apos;armement affichée aux joueurs (JSON libre, texte). Laisser vide si inutile.
-              <textarea
-                value={weaponSystemsText}
-                onChange={(e) => setWeaponSystemsText(e.target.value)}
-                rows={3}
-                className={`${fieldClass} font-mono text-xs`}
-              />
-            </label>
-            {weaponSystemsError && <p className="mt-1 text-xs text-red-400">{weaponSystemsError}</p>}
+            <WeaponSystemsEditor value={weaponSystems} onChange={setWeaponSystems} />
           </section>
-
-          <section>
-            <label className={labelClass}>
-              Note historique
-              <textarea value={historicalNote} onChange={(e) => setHistoricalNote(e.target.value)} rows={4} className={fieldClass} />
-            </label>
-          </section>
-
-          <section>
-            <label className={labelClass}>
-              Silhouette de profil (URL, optionnel)
-              <input value={profileImageUrl} onChange={(e) => setProfileImageUrl(e.target.value)} placeholder="/ships/spitfire.png" className={fieldClass} />
-            </label>
-          </section>
-
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={passive} onChange={(e) => setPassive(e.target.checked)} className="h-4 w-4" />
-            Installation immobile (station d&apos;écoute, base fixe…) plutôt qu&apos;un navire/avion manoeuvrable
-          </label>
         </div>
 
         {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
