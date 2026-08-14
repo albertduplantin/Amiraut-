@@ -528,6 +528,8 @@ export function ArbiterDashboard(props: {
                 detections={props.detections}
                 hoveredDetectionId={hoveredDetectionId}
                 onHover={setHoveredDetectionId}
+                currentWeather={props.weather}
+                currentTurnDurationMinutes={props.turnDurationMinutes}
               />
             )}
             {rightPanel === "combats" && <CombatsPanel engagements={props.engagements} />}
@@ -694,6 +696,16 @@ function DetectionsPanel(props: {
   detections: DetectionDto[];
   hoveredDetectionId: string | null;
   onHover: (id: string | null) => void;
+  /** Météo du tour EN COURS (celui qu'on s'apprête à publier) — sert de pré-remplissage pour le tour suivant, rarement très différente d'une manche à l'autre. */
+  currentWeather: {
+    visibilityNm: number;
+    seaState: number;
+    daylight: string;
+    precipitation: string;
+    windKnots: number | null;
+    notes: string | null;
+  } | null;
+  currentTurnDurationMinutes: number;
 }) {
   const [manualObserver, setManualObserver] = useState(props.units[0]?.id ?? "");
   if (props.turnStatus !== "PENDING_ARBITER_REVIEW" && props.turnStatus !== "RESOLVING") {
@@ -706,13 +718,7 @@ function DetectionsPanel(props: {
   }
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-400">Détections proposées ({props.detections.length})</h2>
-        <form action={publishTurnAction}>
-          <input type="hidden" name="turnId" value={props.turnId} />
-          <PublishButton />
-        </form>
-      </div>
+      <h2 className="text-sm font-semibold text-slate-400">Détections proposées ({props.detections.length})</h2>
       <ul className="space-y-2">
         {props.detections.map((d) => (
           <li
@@ -780,6 +786,86 @@ function DetectionsPanel(props: {
         </label>
         <AddManualButton />
       </form>
+
+      <div className="mt-6 space-y-3 border-t border-slate-800 pt-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Publier et ouvrir le tour suivant</h3>
+        <p className="text-xs text-slate-500">
+          Fixe aussi la météo du tour qui vient — les deux étapes n&apos;en font plus qu&apos;une. Modifiable ensuite tant qu&apos;aucun
+          ordre n&apos;a été soumis (onglet Météo).
+        </p>
+        <form action={publishTurnAction} className="space-y-3 text-sm">
+          <input type="hidden" name="turnId" value={props.turnId} />
+          <label className="block">
+            Durée du tour suivant (heures)
+            <input
+              name="durationHours"
+              type="number"
+              min={1}
+              step="0.5"
+              defaultValue={props.currentTurnDurationMinutes / 60}
+              required
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+            />
+          </label>
+          <label className="block">
+            Visibilité (nm)
+            <input
+              name="visibilityNm"
+              type="number"
+              step="0.5"
+              defaultValue={props.currentWeather?.visibilityNm ?? 8}
+              required
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+            />
+          </label>
+          <label className="block">
+            État de mer (0-9)
+            <input
+              name="seaState"
+              type="number"
+              min={0}
+              max={9}
+              defaultValue={props.currentWeather?.seaState ?? 4}
+              required
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+            />
+          </label>
+          <label className="block">
+            Luminosité
+            <select name="daylight" defaultValue={props.currentWeather?.daylight ?? "NIGHT"} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1">
+              <option value="DAY">Jour</option>
+              <option value="TWILIGHT">Crépuscule</option>
+              <option value="NIGHT">Nuit</option>
+              <option value="POLAR_NIGHT">Nuit polaire</option>
+              <option value="POLAR_DAY">Jour polaire</option>
+            </select>
+          </label>
+          <label className="block">
+            Précipitations
+            <select name="precipitation" defaultValue={props.currentWeather?.precipitation ?? "NONE"} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1">
+              <option value="NONE">Aucune</option>
+              <option value="RAIN">Pluie</option>
+              <option value="SNOW">Neige</option>
+              <option value="FOG">Brouillard</option>
+            </select>
+          </label>
+          <label className="block">
+            Vent (nds, optionnel)
+            <input
+              name="windKnots"
+              type="number"
+              step="1"
+              defaultValue={props.currentWeather?.windKnots ?? undefined}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1"
+            />
+          </label>
+          <label className="block">
+            Notes (optionnel)
+            <textarea name="notes" rows={2} defaultValue={props.currentWeather?.notes ?? undefined} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1" />
+          </label>
+          <PublishButton />
+        </form>
+      </div>
     </div>
   );
 }
@@ -787,8 +873,8 @@ function DetectionsPanel(props: {
 function PublishButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium hover:bg-emerald-500 disabled:opacity-60">
-      {pending ? "Publication…" : "Publier le tour"}
+    <button type="submit" disabled={pending} className="w-full rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium hover:bg-emerald-500 disabled:opacity-60">
+      {pending ? "Publication…" : "Publier et ouvrir le tour suivant"}
     </button>
   );
 }

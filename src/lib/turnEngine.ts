@@ -894,18 +894,7 @@ export async function addManualDetection(params: {
   });
 }
 
-export async function setTurnWeather(
-  turnId: string,
-  weather: {
-    visibilityNm: number;
-    seaState: number;
-    daylight: string;
-    precipitation: string;
-    windKnots?: number;
-    notes?: string;
-    durationMinutes?: number;
-  }
-) {
+export async function setTurnWeather(turnId: string, weather: WeatherInput & { durationMinutes?: number }) {
   const turn = await prisma.turn.findUniqueOrThrow({ where: { id: turnId } });
   if (turn.status !== "PENDING_ORDERS") {
     throw new OrderValidationError("Ce tour n'est plus modifiable (ordres déjà en cours ou tour publié).");
@@ -944,11 +933,27 @@ export async function setTurnWeather(
   });
 }
 
+export type WeatherInput = {
+  visibilityNm: number;
+  seaState: number;
+  daylight: string;
+  precipitation: string;
+  windKnots?: number;
+  notes?: string;
+};
+
 /**
  * Fige les positions des unités ayant reçu un ordre, génère le rapport
  * filtré de chaque équipe, publie le tour et ouvre le suivant.
+ *
+ * `nextTurn` (météo + durée) fusionne ce qui exigeait auparavant deux
+ * actions arbitre séparées — publier, puis se rendre sur l'onglet Météo
+ * pour "ouvrir le tour aux ordres" — en une seule (retour utilisateur,
+ * 2026-08-14) : le tour suivant est créé directement avec sa météo déjà
+ * renseignée, jouable pour les joueurs sans étape intermédiaire. Reste
+ * modifiable ensuite via setTurnWeather tant qu'aucun ordre n'a été soumis.
  */
-export async function publishTurn(turnId: string) {
+export async function publishTurn(turnId: string, nextTurn?: { weather: WeatherInput; durationMinutes?: number }) {
   const turn = await prisma.turn.findUniqueOrThrow({ where: { id: turnId }, include: { scenario: true } });
   if (turn.status !== "PENDING_ARBITER_REVIEW") {
     throw new Error("Ce tour n'est pas en attente de publication.");
@@ -1086,13 +1091,32 @@ export async function publishTurn(turnId: string) {
 
       await tx.turn.update({ where: { id: turnId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
 
+      // Météo du tour suivant créée à part puis reliée par weatherId (voir le
+      // commentaire sur publishTurn) : un nested `weather: { create }` dans
+      // tx.turn.create ci-dessous entre en conflit de typage Prisma avec le
+      // scenarioId scalaire déjà utilisé pour ce create (variante "unchecked"
+      // de l'input, qui attend un weatherId scalaire, pas une relation imbriquée).
+      const nextWeather = nextTurn?.weather
+        ? await tx.weather.create({
+            data: {
+              visibilityNm: nextTurn.weather.visibilityNm,
+              seaState: nextTurn.weather.seaState,
+              daylight: nextTurn.weather.daylight as never,
+              precipitation: nextTurn.weather.precipitation as never,
+              windKnots: nextTurn.weather.windKnots,
+              notes: nextTurn.weather.notes,
+            },
+          })
+        : null;
+
       await tx.turn.create({
         data: {
           scenarioId: turn.scenarioId,
           number: turn.number + 1,
           status: "PENDING_ORDERS",
           gameStartAt: new Date(turn.gameStartAt.getTime() + turn.durationMinutes * 60_000),
-          durationMinutes: turn.scenario.defaultTurnMinutes,
+          durationMinutes: nextTurn?.durationMinutes ?? turn.scenario.defaultTurnMinutes,
+          weatherId: nextWeather?.id,
         },
       });
     },

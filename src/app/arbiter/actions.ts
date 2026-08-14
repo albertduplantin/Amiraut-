@@ -112,10 +112,26 @@ export async function updateFleetPositionAction(params: {
   return { ok: true };
 }
 
+/**
+ * Publie le tour ET ouvre le suivant aux ordres en un seul geste — voir le
+ * commentaire sur publishTurn (turnEngine.ts). Les champs météo/durée sont
+ * ceux du formulaire fusionné dans DetectionsPanel (ArbiterDashboard.tsx),
+ * mêmes noms que setWeatherAction pour rester cohérent.
+ */
 export async function publishTurnAction(formData: FormData) {
   const session = await getSession();
   assertArbiter(session);
-  await publishTurn(String(formData.get("turnId")));
+  await publishTurn(String(formData.get("turnId")), {
+    weather: {
+      visibilityNm: Number(formData.get("visibilityNm")),
+      seaState: Number(formData.get("seaState")),
+      daylight: String(formData.get("daylight")),
+      precipitation: String(formData.get("precipitation")),
+      windKnots: formData.get("windKnots") ? Number(formData.get("windKnots")) : undefined,
+      notes: formData.get("notes") ? String(formData.get("notes")) : undefined,
+    },
+    durationMinutes: formData.get("durationHours") ? Number(formData.get("durationHours")) * 60 : undefined,
+  });
   revalidatePath("/arbiter");
   revalidatePath("/team/orders");
   revalidatePath("/team/reports");
