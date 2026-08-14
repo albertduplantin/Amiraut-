@@ -8,12 +8,15 @@ import { ChooseEngagementMode } from "./ChooseEngagementMode";
 /**
  * Point d'entrée du lien « Engager » sur une détection confirmée. Deux cas :
  *
- *   - Navire contre navire (comportement historique, inchangé) : ouvre (ou
- *     rejoint) directement l'engagement tactique complet, sans étape
- *     intermédiaire — le lien reste un simple clic.
- *   - Un avion attaque (bloc combat aérien) : propose le choix hybride
- *     demandé par l'utilisateur entre résolution automatique (un seul jet,
- *     voir resolveAirEncounterAutomatically) et engagement tactique complet.
+ *   - Navire contre navire (inchangé) : ouvre (ou rejoint) directement
+ *     l'engagement tactique complet, sans étape intermédiaire — le lien
+ *     reste un simple clic.
+ *   - Un avion est impliqué, qu'il soit observateur ou cible de cette
+ *     détection (bloc combat aérien) : toujours résolution automatique
+ *     (voir resolveAirEncounterAutomatically) — le combat tactique complet
+ *     a été abandonné pour l'aviation (retour utilisateur 2026-08-14). Un
+ *     avion n'est d'ailleurs plus jamais accepté comme participant d'un
+ *     engagement tactique (openTacticalEngagement).
  */
 export default async function OpenBattlePage({ params }: { params: Promise<{ detectionId: string }> }) {
   const { detectionId } = await params;
@@ -56,11 +59,6 @@ export default async function OpenBattlePage({ params }: { params: Promise<{ det
       detectionId={detectionId}
       observerName={detection.observerUnit.name}
       targetName={detection.targetUnit.name}
-      // Seul un avion ATTAQUANT (l'observateur de cette détection) peut
-      // choisir la résolution automatique — voir resolveAirEncounterAutomatically,
-      // qui largue bombes/torpilles ou ouvre le feu air-air depuis l'avion.
-      // Un navire qui détecte un avion garde la voie tactique classique.
-      canAutoResolve={observerIsAircraft && detection.targetUnit.status !== "SUNK"}
     />
   );
 }
