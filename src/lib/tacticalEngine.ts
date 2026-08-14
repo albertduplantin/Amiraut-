@@ -63,6 +63,14 @@ const DEFAULT_ROUND_MINUTES = 5;
 /** Repli si la classe n'a pas encore emergencyDiveSeconds renseigné (~moyenne toutes marines, voir UnitClass.emergencyDiveSeconds). */
 const DEFAULT_EMERGENCY_DIVE_SECONDS = 45;
 
+/** Ordre des paliers d'immersion — même règle qu'en tour stratégique (voir turnEngine.ts) : un seul cran par manche. */
+const DEPTH_BAND_ORDER: DepthBand[] = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"];
+function isAdjacentDepthBand(current: DepthBand, requested: DepthBand): boolean {
+  const from = DEPTH_BAND_ORDER.indexOf(current);
+  const to = DEPTH_BAND_ORDER.indexOf(requested);
+  return Math.abs(from - to) <= 1;
+}
+
 type SensorSpec = { type: SensorType; rangeNm: number };
 
 function parseSensors(json: unknown): SensorSpec[] {
@@ -519,6 +527,25 @@ export async function submitTacticalMovementForUnit(params: {
   });
   if (!participant || participant.teamId !== params.teamId) {
     throw new OrderValidationError("Cette unité ne participe pas à cet engagement pour votre camp.");
+  }
+
+  // Changement d'immersion en manche tactique (retour utilisateur
+  // 2026-08-14 : le mécanisme existait déjà côté résolution — DCA/RADAR/
+  // VISUAL bien exclus d'un sous-marin immergé, voir recomputeContacts —
+  // mais aucune UI ne l'exposait jamais, ce paramètre restait toujours
+  // undefined depuis TacticalView.tsx). Même garde-fou qu'en tour
+  // stratégique (saveUnitOrder, turnEngine.ts) : un seul palier à la fois,
+  // encore plus justifié sur une manche de quelques minutes qu'un tour
+  // entier.
+  if (params.depthBand) {
+    if (participant.unit.unitClass.category !== "SUBMARINE") {
+      throw new OrderValidationError("Seul un sous-marin peut changer de palier d'immersion.");
+    }
+    if (!isAdjacentDepthBand(participant.unit.depthBand, params.depthBand)) {
+      throw new OrderValidationError(
+        `Changement d'immersion impossible en une manche : ${participant.unit.depthBand} → ${params.depthBand} (un seul palier à la fois).`
+      );
+    }
   }
 
   // Une avarie de machines (voir Unit.speedCapKnots, cas Scharnhorst au cap

@@ -360,6 +360,7 @@ async function renderTacticalView(engagementId: string, teamId: string) {
         speedKnots: a.speedKnots,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         movementPath: (a.movementPath as any) ?? null,
+        depthBand: a.depthBand,
       }))}
       ownTrailByUnit={Object.fromEntries(ownTrailByUnit)}
       enemyTrailByTarget={Object.fromEntries(

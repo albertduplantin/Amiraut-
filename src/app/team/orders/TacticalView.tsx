@@ -164,12 +164,23 @@ type LogEntry = {
   debugInfo: string | null;
 };
 
-type MovementAction = { unitId: string; speedKnots: number | null; movementPath: LatLng[] | null };
+type MovementAction = { unitId: string; speedKnots: number | null; movementPath: LatLng[] | null; depthBand: string | null };
 
 type BattleMessage = { id: string; kind: string; authorName: string; body: string; roundNumber: number };
 
-/** Pas de vitesse dans le brouillon : elle est déduite de la longueur du trajet, pas choisie séparément. */
-type MovementDraft = { path: LatLng[] };
+/** Un seul cran par manche (même règle qu'en tour stratégique) — voir tacticalEngine.ts::isAdjacentDepthBand. */
+const DEPTH_BAND_ORDER = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"] as const;
+type DepthBandKey = (typeof DEPTH_BAND_ORDER)[number];
+
+/**
+ * Pas de vitesse dans le brouillon : elle est déduite de la longueur du
+ * trajet, pas choisie séparément. `depthBand` (sous-marins uniquement) :
+ * `null` = pas de changement d'immersion choisi cette manche, garde le
+ * palier actuel — même convention que l'écran d'ordres stratégique
+ * (OrdersClient.tsx), pour que "Effectuer un changement" reste un geste
+ * explicite plutôt qu'une valeur par défaut ambiguë.
+ */
+type MovementDraft = { path: LatLng[]; depthBand: DepthBandKey | null };
 
 const ASSUMED_TARGET_SPEED_RATIO = 0.7;
 const TORPEDO_SLOT = "torpedo";
@@ -209,9 +220,9 @@ function activeWeaponSlotsForShip(ship: OwnUnit): string[] {
   return weaponSlotsForShip(ship).filter((s) => !ship.disabledWeaponSlots.includes(s));
 }
 
-/** Brouillon initial d'un navire : reprend le trajet déjà validé cette manche (rechargement de page en cours de phase) si présent, sinon aucun trajet. */
+/** Brouillon initial d'un navire : reprend le trajet (et l'immersion choisie) déjà validés cette manche (rechargement de page en cours de phase) si présents, sinon aucun trajet/changement. */
 function initialDraftFor(savedThisRound: MovementAction | undefined): MovementDraft {
-  return { path: savedThisRound?.movementPath ?? [] };
+  return { path: savedThisRound?.movementPath ?? [], depthBand: (savedThisRound?.depthBand as DepthBandKey | null | undefined) ?? null };
 }
 
 export function TacticalView(props: {
@@ -452,6 +463,12 @@ export function TacticalView(props: {
     setMovementDrafts((prev) => ({ ...prev, [selectedShip.id]: { ...prev[selectedShip.id], path: [] } }));
   }
 
+  /** Choix d'immersion pour la manche en cours (sous-marins) — voir MovementDraft.depthBand. */
+  function setDraftDepthBand(band: DepthBandKey) {
+    if (!selectedShip) return;
+    setMovementDrafts((prev) => ({ ...prev, [selectedShip.id]: { ...prev[selectedShip.id], depthBand: band } }));
+  }
+
   function handleMapClick(pos: LatLng) {
     if (torpedoAiming) {
       setTorpedoAimPoint(pos);
@@ -510,6 +527,7 @@ export function TacticalView(props: {
         engagementId: props.engagementId,
         unitId: shipId,
         path: movementDrafts[shipId]?.path ?? [],
+        depthBand: movementDrafts[shipId]?.depthBand ?? undefined,
       });
       if (!result.ok) {
         setError(result.error);
@@ -1108,6 +1126,8 @@ export function TacticalView(props: {
                 isPending={isPending}
                 onClear={clearDraftPath}
                 onSave={saveShipMovement}
+                draftDepthBand={draft?.depthBand ?? null}
+                onDepthBandChange={setDraftDepthBand}
                 torpedoAiming={torpedoAiming}
                 setTorpedoAiming={setTorpedoAiming}
                 torpedoAimPoint={torpedoAimPoint}
@@ -1261,6 +1281,8 @@ function MovementDashboard({
   isPending,
   onClear,
   onSave,
+  draftDepthBand,
+  onDepthBandChange,
   torpedoAiming,
   setTorpedoAiming,
   torpedoAimPoint,
@@ -1287,6 +1309,8 @@ function MovementDashboard({
   isPending: boolean;
   onClear: () => void;
   onSave: () => void;
+  draftDepthBand: DepthBandKey | null;
+  onDepthBandChange: (band: DepthBandKey) => void;
   torpedoAiming: boolean;
   setTorpedoAiming: (v: boolean) => void;
   torpedoAimPoint: LatLng | null;
@@ -1311,6 +1335,9 @@ function MovementDashboard({
       </div>
       <HealthBar unit={ship} />
       <DamageReport ship={ship} />
+      {ship.category === "SUBMARINE" && (
+        <TacticalDepthBandControl currentDepthBand={ship.depthBand as DepthBandKey} draftDepthBand={draftDepthBand} onChange={onDepthBandChange} />
+      )}
       {ship.rudderJammed ? (
         <p className="rounded-md border border-red-800 bg-red-950/30 px-2 py-1 text-xs text-red-300">
           ⚠ Gouvernail bloqué — le navire poursuit tout droit au cap {Math.round(ship.headingDeg ?? 0)}° à pleine vitesse disponible (
@@ -2005,6 +2032,53 @@ function formatDuration(minutes: number) {
   if (minutes < 60) return `${minutes % 1 === 0 ? minutes : minutes.toFixed(1)} min`;
   const h = minutes / 60;
   return Number.isInteger(h) ? `${h} h` : `${h.toFixed(1)} h`;
+}
+
+/**
+ * Changement d'immersion en manche tactique (retour utilisateur
+ * 2026-08-14) : même principe que DepthBandControl côté ordres
+ * stratégiques (OrdersClient.tsx) — un seul cran par manche, boutons hors
+ * portée d'un cran désactivés plutôt que cachés sans explication.
+ */
+function TacticalDepthBandControl({
+  currentDepthBand,
+  draftDepthBand,
+  onChange,
+}: {
+  currentDepthBand: DepthBandKey;
+  draftDepthBand: DepthBandKey | null;
+  onChange: (band: DepthBandKey) => void;
+}) {
+  const selected = draftDepthBand ?? currentDepthBand;
+  const currentIndex = DEPTH_BAND_ORDER.indexOf(currentDepthBand);
+
+  return (
+    <div className="rounded-md bg-slate-900 p-2 text-xs">
+      <div className="mb-1 font-semibold text-slate-400">Immersion (1 palier par manche)</div>
+      <div className="flex gap-1">
+        {DEPTH_BAND_ORDER.map((band, i) => {
+          const adjacent = Math.abs(i - currentIndex) <= 1;
+          return (
+            <button
+              key={band}
+              disabled={!adjacent}
+              onClick={() => onChange(band)}
+              title={formatDepthBand(band)}
+              className={`flex-1 rounded-md px-1.5 py-1 text-center transition ${
+                selected === band
+                  ? "bg-brass-900/50 ring-1 ring-brass-500"
+                  : adjacent
+                    ? "hover:bg-slate-800"
+                    : "cursor-not-allowed opacity-30"
+              }`}
+            >
+              {formatDepthBand(band)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function formatDepthBand(band: string) {
