@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import { assertPlayer, assertCanViewDetection } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { openOrJoinEngagementForDetection } from "@/lib/tacticalEngine";
+import type { CombatProfile } from "@/lib/combat";
 import { ChooseEngagementMode } from "./ChooseEngagementMode";
 
 /**
@@ -39,8 +40,8 @@ export default async function OpenBattlePage({ params }: { params: Promise<{ det
   const detection = await prisma.detectionEvent.findUnique({
     where: { id: detectionId },
     include: {
-      observerUnit: { select: { id: true, name: true, unitClass: { select: { category: true, maxSpeedKnots: true } }, fleet: { select: { teamId: true } } } },
-      targetUnit: { select: { id: true, name: true, status: true, unitClass: { select: { category: true, maxSpeedKnots: true } }, fleet: { select: { teamId: true } } } },
+      observerUnit: { select: { id: true, name: true, unitClass: { select: { category: true, maxSpeedKnots: true, combatProfile: true } }, fleet: { select: { teamId: true } } } },
+      targetUnit: { select: { id: true, name: true, status: true, unitClass: { select: { category: true, maxSpeedKnots: true, combatProfile: true } }, fleet: { select: { teamId: true } } } },
     },
   });
   if (!detection) redirect("/team/orders");
@@ -119,11 +120,25 @@ export default async function OpenBattlePage({ params }: { params: Promise<{ det
   const isAirAir = observerIsAircraft && targetIsAircraft;
   const canBreakOff = !isAirAir || myUnit.unitClass.maxSpeedKnots >= otherUnit.unitClass.maxSpeedKnots;
 
+  // Avion de reconnaissance pure, sans aucun armement (bug corrigé le
+  // 2026-08-14, revue utilisateur des cas de rencontre) : en air-mer/
+  // air-sous-marin, "Résoudre le contact" n'a rigoureusement rien à faire
+  // — l'avion n'a ni bombe, ni torpille, ni mitrailleuse. Un tel avion ne
+  // peut qu'observer et rentrer (voir breakOffAirToSurface, qui ne
+  // présuppose jamais d'arme et gère déjà très bien ce cas — la DCA
+  // adverse garde sa chance). En air-air, pas de restriction : même sans
+  // riposter, "Résoudre" reste une action sensée (voir
+  // resolveAutoAirToAir, qui gère déjà proprement un avion sans arme).
+  const myProfile = myUnit.unitClass.combatProfile as CombatProfile | null;
+  const myIsArmed = !!(myProfile?.guns?.length || myProfile?.bombs || myProfile?.torpedoTubes);
+  const canResolve = isAirAir || myIsArmed;
+
   return (
     <ChooseEngagementMode
       detectionId={detectionId}
       observerName={detection.observerUnit.name}
       targetName={detection.targetUnit.name}
+      canResolve={canResolve}
       canBreakOff={canBreakOff}
       breakOffDisabledReason={isAirAir && !canBreakOff ? `${myUnit.name} est trop lent pour rompre le combat face à ${otherUnit.name}.` : null}
     />

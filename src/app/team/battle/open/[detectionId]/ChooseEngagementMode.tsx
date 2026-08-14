@@ -11,12 +11,16 @@ import { resolveAirEncounterAutomaticallyAction, breakOffAirEncounterAction } fr
  * résoudre en un seul jet (voir resolveAirEncounterAutomatically), ou
  * rompre le combat et rentrer à la base (voir breakOffAirEncounter) — pas
  * toujours possible en air-air (faut être au moins aussi rapide que
- * l'adversaire, voir canBreakOff/breakOffDisabledReason).
+ * l'adversaire, voir canBreakOff/breakOffDisabledReason). Un avion de
+ * reconnaissance pure sans aucun armement n'a pas de bouton "Résoudre" du
+ * tout en air-mer/air-sous-marin (voir canResolve, page.tsx) : il n'a rien
+ * à attaquer, seule la reconnaissance-et-retour a un sens pour lui.
  */
 export function ChooseEngagementMode(props: {
   detectionId: string;
   observerName: string;
   targetName: string;
+  canResolve: boolean;
   canBreakOff: boolean;
   breakOffDisabledReason: string | null;
 }) {
@@ -78,18 +82,22 @@ export function ChooseEngagementMode(props: {
           {props.observerName} → {props.targetName}
         </h1>
         <p className="mt-2 text-sm text-slate-400">
-          Résolution automatique — un seul passage, résultat immédiat, pas de manche de tir.
+          {props.canResolve
+            ? "Résolution automatique — un seul passage, résultat immédiat, pas de manche de tir."
+            : "Avion non armé — aucune attaque possible, seule la reconnaissance a un sens ici."}
         </p>
 
         <div className="mt-5 space-y-3">
-          <button
-            onClick={resolveAuto}
-            disabled={isPending}
-            className="w-full rounded-md border border-brass-700 bg-brass-900/30 px-4 py-3 text-left text-sm hover:bg-brass-900/50 disabled:opacity-50"
-          >
-            <div className="font-medium text-brass-300">{isPending ? "Résolution…" : "Résoudre le contact"}</div>
-            <div className="mt-0.5 text-xs text-slate-400">Attaque immédiatement.</div>
-          </button>
+          {props.canResolve && (
+            <button
+              onClick={resolveAuto}
+              disabled={isPending}
+              className="w-full rounded-md border border-brass-700 bg-brass-900/30 px-4 py-3 text-left text-sm hover:bg-brass-900/50 disabled:opacity-50"
+            >
+              <div className="font-medium text-brass-300">{isPending ? "Résolution…" : "Résoudre le contact"}</div>
+              <div className="mt-0.5 text-xs text-slate-400">Attaque immédiatement.</div>
+            </button>
+          )}
 
           {props.canBreakOff ? (
             <button
@@ -97,9 +105,13 @@ export function ChooseEngagementMode(props: {
               disabled={isPending}
               className="w-full rounded-md border border-slate-700 bg-slate-900 px-4 py-3 text-left text-sm hover:bg-slate-800 disabled:opacity-50"
             >
-              <div className="font-medium">{isPending ? "…" : "Rompre le contact — rentrer à la base"}</div>
+              <div className="font-medium">
+                {isPending ? "…" : props.canResolve ? "Rompre le contact — rentrer à la base" : "Effectuer la reconnaissance et rentrer à la base"}
+              </div>
               <div className="mt-0.5 text-xs text-slate-400">
-                Renonce à attaquer — pas totalement sans risque, l&apos;adversaire garde une dernière chance de tirer.
+                {props.canResolve
+                  ? "Renonce à attaquer — pas totalement sans risque, l'adversaire garde une dernière chance de tirer."
+                  : "Passage d'observation — pas sans risque, la DCA adverse garde une dernière chance de tirer."}
               </div>
             </button>
           ) : (

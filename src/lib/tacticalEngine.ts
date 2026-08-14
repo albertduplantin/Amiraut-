@@ -1252,6 +1252,18 @@ async function resolveAutoAirToSurface(
   }
 
   const profile = aircraft.unitClass.combatProfile as CombatProfile | null;
+  // Un avion de reconnaissance pure (pas de bombe/torpille/mitrailleuse —
+  // ça existe réellement en bibliothèque) n'a rien à attaquer : vérifié
+  // AVANT que la DCA ne tire, pas après (bug corrigé le 2026-08-14, revue
+  // utilisateur des cas de rencontre) — sinon la cible encaissait quand
+  // même un tir de DCA bien réel avant que la fonction ne plante faute
+  // d'arme, PV perdus sans aucun CombatEvent pour en garder la trace.
+  // Seule l'action "Rompre le contact" a un sens pour un tel avion (voir
+  // breakOffAirToSurface, qui ne présuppose jamais d'arme) — l'UI ne
+  // propose d'ailleurs plus "Résoudre" dans ce cas (page.tsx).
+  if (!profile?.bombs && !profile?.torpedoTubes && !profile?.guns?.length) {
+    throw new OrderValidationError(`${aircraft.name} n'est pas armé — il ne peut qu'observer et rompre le contact, pas attaquer.`);
+  }
   const aircraftHealthCurrent = aircraft.healthCurrent ?? aircraft.healthMax ?? 1;
   const aircraftHealthMax = aircraft.healthMax ?? 1;
   const pilotSkillFactor = pilotSkillMultiplier(aircraft.unitClass.pilotSkill);
