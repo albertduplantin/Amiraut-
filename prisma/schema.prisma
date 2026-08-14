@@ -31,6 +31,7 @@ model Scenario {
   units        Unit[]
   turns        Turn[]
   participants Participant[]
+  squadrons    Squadron[]
 
   tacticalEngagements TacticalEngagement[]
 }
@@ -89,6 +90,37 @@ model Fleet {
   scopedTokens       ParticipantFleetScope[]
 }
 
+// Escadrille (avions, bloc constructeur de scénario visuel, retour
+// utilisateur 2026-08-14 — recherche historique §4.1.1.1 Amirauté 2013 :
+// l'unité opérationnelle réelle du combat aérien est le groupe, pas l'avion
+// isolé) : regroupe des avions qui partagent une même base, aérienne fixe
+// (baseLat/baseLng/baseName, comme Unit) OU porte-avions (carrierUnitId,
+// jamais les deux — voir ScenarioSquadron/validation.ts). Distincte d'une
+// Fleet : une escadrille n'implique aucune notion de camp/équipe propre
+// (portée par les Unit qui la composent), c'est une organisation aérienne
+// secondaire, pas la structure de commandement principale. Purement
+// organisationnelle à ce stade — le calcul de combat par groupe (dilution
+// DCA, Amirauté 2013 §4.6.2.4) est un chantier séparé, non construit ici ;
+// ce modèle en est le prérequis côté données.
+model Squadron {
+  id         String   @id @default(cuid())
+  scenarioId String
+  scenario   Scenario @relation(fields: [scenarioId], references: [id])
+  name       String
+
+  baseLat       Float?
+  baseLng       Float?
+  baseName      String?
+  // Porte-avions de rattachement (alternative mobile à baseLat/baseLng) —
+  // référence vers l'Unit navire, jamais les deux à la fois avec baseLat/Lng.
+  carrierUnitId String?
+  carrierUnit   Unit?   @relation("SquadronCarrier", fields: [carrierUnitId], references: [id])
+
+  units Unit[] @relation("SquadronMembers")
+
+  @@index([scenarioId])
+}
+
 // ── Bibliothèque d'unités (gabarits réutilisables) ────────
 
 model UnitClass {
@@ -142,7 +174,7 @@ model UnitClass {
   // sources). Nullables pour rester compatibles avec d'anciennes classes
   // non encore renseignées — le moteur applique alors un repli par
   // catégorie plutôt que de planter.
-  turningRadiusM         Float?
+  turningRadiusM          Float?
   accelerationKnotsPerMin Float?
 
   // Combat air-air (avions uniquement) : maniabilité relative au combat
@@ -150,7 +182,7 @@ model UnitClass {
   // transit, en mètres — sans rapport avec l'agilité en dogfight). 0-1,
   // calibrée sur des cas documentés (chasseur monoplace moderne ~0.8-0.95,
   // hydravion/bombardier lourd ~0.1-0.3) — voir combat.ts, airCombatHitChancePercent.
-  agility Float?
+  agility    Float?
   // Niveau de l'équipage (avions uniquement), A (élite) à F (très mauvais) —
   // Amirauté 2013 de F. Marlière §4.1.1.2 : la supériorité japonaise de 1942
   // doit autant à l'excellence des pilotes qu'aux qualités du Zéro, les
@@ -179,35 +211,35 @@ enum UnitCategory {
 // (voir prisma/scenarios/types.ts, ScenarioUnitClass.libraryKey). Mêmes
 // champs qu'UnitClass, à quelques ajouts près (key, theater).
 model LibraryUnitClass {
-  id                    String       @id @default(cuid())
+  id                      String       @id @default(cuid())
   // Slug stable, référencé depuis le JSON d'un scénario (libraryKey) —
   // jamais réutilisé pour une autre classe, même après renommage de `name`.
-  key                   String       @unique
-  name                  String
-  nation                String
-  category              UnitCategory
-  maxSpeedKnots         Float
-  lengthMeters          Float?
-  beamMeters            Float?
-  sensors               Json
-  detectability         Float   @default(1)
-  iconKey               String
-  profileImageUrl       String?
-  planImageUrl          String?
-  historicalNote        String?
-  passive               Boolean @default(false)
-  enduranceMinutes      Int?
-  weaponSystems         Json?
-  combatProfile         Json?
-  depthChargeStock      Int?
-  hedgehogStock         Int? // voir le commentaire équivalent sur UnitClass
-  submergedRangeNmAt4kt Float?
-  oxygenEnduranceHours  Float?
-  torpedoStock          Int?
-  emergencyDiveSeconds  Float? // voir le commentaire équivalent sur UnitClass
-  turningRadiusM         Float?
+  key                     String       @unique
+  name                    String
+  nation                  String
+  category                UnitCategory
+  maxSpeedKnots           Float
+  lengthMeters            Float?
+  beamMeters              Float?
+  sensors                 Json
+  detectability           Float        @default(1)
+  iconKey                 String
+  profileImageUrl         String?
+  planImageUrl            String?
+  historicalNote          String?
+  passive                 Boolean      @default(false)
+  enduranceMinutes        Int?
+  weaponSystems           Json?
+  combatProfile           Json?
+  depthChargeStock        Int?
+  hedgehogStock           Int? // voir le commentaire équivalent sur UnitClass
+  submergedRangeNmAt4kt   Float?
+  oxygenEnduranceHours    Float?
+  torpedoStock            Int?
+  emergencyDiveSeconds    Float? // voir le commentaire équivalent sur UnitClass
+  turningRadiusM          Float?
   accelerationKnotsPerMin Float?
-  agility                Float?
+  agility                 Float?
   pilotSkill              String? // voir le commentaire équivalent sur UnitClass
   resistancePoints        Float // voir UnitClass.healthMax/Current, calculé à l'instanciation à partir de cette valeur
   // Repère libre pour le classement dans /library (ex. "Atlantique/Arctique
@@ -221,47 +253,47 @@ model LibraryUnitClass {
 // ── Instances d'unités dans un scénario ───────────────────
 
 model Unit {
-  id                    String     @id @default(cuid())
-  scenarioId            String
-  scenario              Scenario   @relation(fields: [scenarioId], references: [id])
-  fleetId               String
-  fleet                 Fleet      @relation(fields: [fleetId], references: [id])
+  id                      String     @id @default(cuid())
+  scenarioId              String
+  scenario                Scenario   @relation(fields: [scenarioId], references: [id])
+  fleetId                 String
+  fleet                   Fleet      @relation(fields: [fleetId], references: [id])
   // Transfert de flotte demandé par un joueur (ordre par signal) : prend
   // effet à la publication du tour en cours, pas immédiatement — le navire
   // a besoin d'un tour pour rallier sa nouvelle formation.
-  pendingFleetId        String?
-  pendingFleet          Fleet?     @relation("PendingFleetTransfer", fields: [pendingFleetId], references: [id])
-  unitClassId           String
-  unitClass             UnitClass  @relation(fields: [unitClassId], references: [id])
-  name                  String
-  pennant               String?
-  historicalNote        String? // contexte historique propre à ce navire (rôle dans la bataille, etc.)
-  status                UnitStatus @default(ACTIVE)
-  healthMax             Float? // potentiel de résistance initial (formule du livret : Dw/1000 + blindage + K%)
-  healthCurrent         Float?
-  currentLat            Float
-  currentLng            Float
-  currentHeadingDeg     Float?
-  lastResolvedTurn      Int        @default(0)
+  pendingFleetId          String?
+  pendingFleet            Fleet?     @relation("PendingFleetTransfer", fields: [pendingFleetId], references: [id])
+  unitClassId             String
+  unitClass               UnitClass  @relation(fields: [unitClassId], references: [id])
+  name                    String
+  pennant                 String?
+  historicalNote          String? // contexte historique propre à ce navire (rôle dans la bataille, etc.)
+  status                  UnitStatus @default(ACTIVE)
+  healthMax               Float? // potentiel de résistance initial (formule du livret : Dw/1000 + blindage + K%)
+  healthCurrent           Float?
+  currentLat              Float
+  currentLng              Float
+  currentHeadingDeg       Float?
+  lastResolvedTurn        Int        @default(0)
   // Palier d'immersion courant (sous-marins uniquement ; toujours SURFACE
   // pour les autres catégories). Changé par ordre, un seul palier adjacent
   // à la fois — voir UnitOrder.depthBand et resolveTurnDetections/resolveCombat.
-  depthBand             DepthBand  @default(SURFACE)
-  depthChargesRemaining Int? // grenades ASM restantes (escorteurs uniquement, null sinon)
+  depthBand               DepthBand  @default(SURFACE)
+  depthChargesRemaining   Int? // grenades ASM restantes (escorteurs uniquement, null sinon)
   hedgehogRoundsRemaining Int? // salves de Hedgehog restantes (escorteurs équipés uniquement, null sinon)
   // Contact ASDIC actif rompu par la dernière attaque aux grenades ASM (voir
   // combat.ts/tacticalEngine.ts) : la manche suivante, ce navire n'entend
   // plus au SONAR (seulement HYDROPHONE/RADAR/VISUEL) le temps de reprendre
   // l'écoute — consommé puis remis à false dans recomputeContacts. Un tir de
   // Hedgehog ne pose jamais ce drapeau : c'est tout l'intérêt de l'arme.
-  sonarBlindNextRound   Boolean   @default(false)
+  sonarBlindNextRound     Boolean    @default(false)
   // Autonomie sous-marine courante (sous-marins uniquement, null sinon) : la
   // batterie se vide en immersion (vite à haute vitesse, cf. combat.ts),
   // l'oxygène se consomme au temps passé immergé quelle que soit la vitesse.
   // Les deux se rechargent/renouvellent intégralement en faisant surface.
-  batteryChargePercent  Float?
-  oxygenHoursRemaining  Float?
-  torpedoesRemaining    Int? // torpilles restantes (sous-marins), tous types confondus
+  batteryChargePercent    Float?
+  oxygenHoursRemaining    Float?
+  torpedoesRemaining      Int? // torpilles restantes (sous-marins), tous types confondus
 
   // ── Dégâts localisés (mode tactique, bâtiments de surface) ──────────
   // Au-delà de la simple perte de PV, un coup au but "solide" peut
@@ -273,10 +305,10 @@ model Unit {
   // Bismarck détruite tôt dans son dernier combat, le magasin du Hood qui
   // a explosé. Dégâts permanents pour la durée de l'engagement (pas de
   // réparation en cours de combat) — voir tacticalEngine.ts.
-  disabledWeaponSlots   String[]  @default([]) // pièces détruites (ex: "gun:1", "torpedo") — voir TacticalAction.weaponSlot
-  speedCapKnots         Float? // vitesse max réduite par une avarie de machines (null = pas de plafond, utilise UnitClass.maxSpeedKnots)
-  rudderJammed          Boolean   @default(false) // gouvernail bloqué : ne peut plus manœuvrer, cap maintenu
-  fireControlDamaged    Boolean   @default(false) // télépointage endommagé : pénalité de précision sur ses propres tirs
+  disabledWeaponSlots String[] @default([]) // pièces détruites (ex: "gun:1", "torpedo") — voir TacticalAction.weaponSlot
+  speedCapKnots       Float? // vitesse max réduite par une avarie de machines (null = pas de plafond, utilise UnitClass.maxSpeedKnots)
+  rudderJammed        Boolean  @default(false) // gouvernail bloqué : ne peut plus manœuvrer, cap maintenu
+  fireControlDamaged  Boolean  @default(false) // télépointage endommagé : pénalité de précision sur ses propres tirs
 
   // ── Ordres permanents (bloc 3) ──────────────────────────────────────
   // Un ordre marqué permanent est reconduit automatiquement par le moteur
@@ -310,6 +342,24 @@ model Unit {
   airPatrolLat         Float?
   airPatrolLng         Float?
   fuelMinutesRemaining Float?
+  // Escadrille de rattachement (avions uniquement, bloc constructeur de
+  // scénario visuel, retour utilisateur 2026-08-14) — voir Squadron. Quand
+  // renseigné, la base (aérienne ou porte-avions) de l'escadrille prime sur
+  // baseLat/baseLng/baseName ci-dessus, voir turnEngine.ts.
+  squadronId           String?
+  squadron             Squadron?          @relation("SquadronMembers", fields: [squadronId], references: [id])
+  // Porte-avions de rattachement direct (avions isolés hors escadrille,
+  // même retour utilisateur) — référence un autre Unit (toujours
+  // SURFACE_SHIP) : la position de "home" suit ce navire au lieu d'être
+  // fixe, voir turnEngine.ts. Jamais renseigné en même temps que baseLat/
+  // baseLng littéraux (garde applicative, pas de contrainte SQL — voir
+  // validation.ts côté scénario).
+  carrierUnitId        String?
+  carrierUnit          Unit?              @relation("CarrierAircraft", fields: [carrierUnitId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // Avions basés sur CE navire, si c'est un porte-avions (relation inverse).
+  carrierBasedAircraft Unit[]             @relation("CarrierAircraft")
+  // Escadrilles basées sur CE navire, si c'est un porte-avions (relation inverse de Squadron.carrierUnit).
+  squadronsBasedHere   Squadron[]         @relation("SquadronCarrier")
 
   orders           UnitOrder[]
   detectedAs       DetectionEvent[] @relation("TargetUnit")
@@ -320,14 +370,16 @@ model Unit {
 
   tacticalParticipations TacticalParticipant[]
   tacticalActions        TacticalAction[]
-  tacticalTargetedBy     TacticalAction[]      @relation("TacticalTarget")
-  tacticalContactedAs    TacticalContact[]     @relation("TacticalContactTarget")
+  tacticalTargetedBy     TacticalAction[]       @relation("TacticalTarget")
+  tacticalContactedAs    TacticalContact[]      @relation("TacticalContactTarget")
   torpedoSalvosFired     TacticalTorpedoSalvo[] @relation("TorpedoSalvoFirer")
   torpedoSalvosTargeted  TacticalTorpedoSalvo[] @relation("TorpedoSalvoTarget")
   torpedoSalvosHitBy     TacticalTorpedoSalvo[] @relation("TorpedoSalvoHit")
   standingRoutes         StandingRoute[]
 
   @@index([scenarioId, fleetId])
+  @@index([squadronId])
+  @@index([carrierUnitId])
 }
 
 enum UnitStatus {
@@ -519,31 +571,31 @@ model Waypoint {
 // RouteWaypoint sont renseignés selon `kind`.
 
 model StandingRoute {
-  id     String @id @default(cuid())
-  unitId String
-  unit   Unit   @relation(fields: [unitId], references: [id])
+  id             String            @id @default(cuid())
+  unitId         String
+  unit           Unit              @relation(fields: [unitId], references: [id])
   // ROUTE (navire, trajet de transit) ou AIR_PATROL (avion, rotation de
   // zones de recherche) — jamais TRANSIT simple, qui n'a pas besoin de ce
   // modèle. Voir StandingOrderKind.
-  kind   StandingOrderKind
-  status RouteStatus       @default(ACTIVE)
+  kind           StandingOrderKind
+  status         RouteStatus       @default(ACTIVE)
   // Index (dans `waypoints`, triés par `sequence`) du prochain point pas
   // encore atteint. Pas besoin de stocker une position de curseur séparée :
   // Unit.currentLat/Lng fait déjà foi pour la position exacte le long de la
   // route, y compris en cours de segment.
-  cursorSequence Int      @default(0)
-  createdAt      DateTime @default(now())
+  cursorSequence Int               @default(0)
+  createdAt      DateTime          @default(now())
 
   waypoints RouteWaypoint[]
 }
 
 model RouteWaypoint {
-  id      String        @id @default(cuid())
-  routeId String
-  route   StandingRoute @relation(fields: [routeId], references: [id])
-  sequence Int
-  lat     Float
-  lng     Float
+  id           String        @id @default(cuid())
+  routeId      String
+  route        StandingRoute @relation(fields: [routeId], references: [id])
+  sequence     Int
+  lat          Float
+  lng          Float
   // ROUTE : vitesse jusqu'à ce point (nds). AIR_PATROL : non renseigné.
   speedKnots   Float?
   // AIR_PATROL : nombre de cycles décollage → recherche → retour à
@@ -563,24 +615,24 @@ enum RouteStatus {
 // ── Détection / revue arbitre ───────────────────────────────
 
 model DetectionEvent {
-  id                       String        @id @default(cuid())
-  turnId                   String
-  turn                     Turn          @relation(fields: [turnId], references: [id])
-  observerUnitId           String
-  observerUnit             Unit          @relation("ObserverUnit", fields: [observerUnitId], references: [id])
-  targetUnitId             String
-  targetUnit               Unit          @relation("TargetUnit", fields: [targetUnitId], references: [id])
-  method                   SensorType
-  cpaDistanceNm            Float
-  cpaMinutesIntoTurn       Float
-  observerLatAtCpa         Float
-  observerLngAtCpa         Float
-  targetLatAtCpa           Float
-  targetLngAtCpa           Float
-  systemProposed           Boolean       @default(true)
-  arbiterStatus            ArbiterStatus @default(PROPOSED)
-  arbiterNote              String?
-  decidedById              String?
+  id                 String        @id @default(cuid())
+  turnId             String
+  turn               Turn          @relation(fields: [turnId], references: [id])
+  observerUnitId     String
+  observerUnit       Unit          @relation("ObserverUnit", fields: [observerUnitId], references: [id])
+  targetUnitId       String
+  targetUnit         Unit          @relation("TargetUnit", fields: [targetUnitId], references: [id])
+  method             SensorType
+  cpaDistanceNm      Float
+  cpaMinutesIntoTurn Float
+  observerLatAtCpa   Float
+  observerLngAtCpa   Float
+  targetLatAtCpa     Float
+  targetLngAtCpa     Float
+  systemProposed     Boolean       @default(true)
+  arbiterStatus      ArbiterStatus @default(PROPOSED)
+  arbiterNote        String?
+  decidedById        String?
 
   combatEvents CombatEvent[]
 
@@ -684,24 +736,24 @@ model Report {
 // d'un contenu limité à des formes standard.
 
 model Signal {
-  id            String        @id @default(cuid())
-  turnId        String
-  turn          Turn          @relation(fields: [turnId], references: [id])
-  teamId        String
-  team          Team          @relation(fields: [teamId], references: [id])
-  senderUnitId  String
-  senderUnit    Unit          @relation(fields: [senderUnitId], references: [id])
-  channel       SignalChannel
+  id             String        @id @default(cuid())
+  turnId         String
+  turn           Turn          @relation(fields: [turnId], references: [id])
+  teamId         String
+  team           Team          @relation(fields: [teamId], references: [id])
+  senderUnitId   String
+  senderUnit     Unit          @relation(fields: [senderUnitId], references: [id])
+  channel        SignalChannel
   // Forme standard du message si canal = HF_KURZSIGNAL (CONTACT / POSITION /
   // MÉTÉO) — null pour les trois autres canaux, en texte libre.
   kurzsignalType String?
-  body          String
+  body           String
   // Vrai dès qu'au moins une détection HF_DF a été calculée à partir de ce
   // message (voir resolveTurnDetections) — feedback pour le joueur sur la
   // discipline radio, indépendant de la confirmation arbitre de cette
   // détection.
-  intercepted   Boolean       @default(false)
-  createdAt     DateTime      @default(now())
+  intercepted    Boolean       @default(false)
+  createdAt      DateTime      @default(now())
 
   @@index([turnId, teamId])
 }
@@ -746,11 +798,11 @@ model TacticalEngagement {
   startedAt     DateTime           @default(now())
   endedAt       DateTime?
 
-  participants TacticalParticipant[]
-  actions      TacticalAction[]
-  contacts     TacticalContact[]
-  submissions  TacticalSubmission[]
-  messages     TacticalMessage[]
+  participants  TacticalParticipant[]
+  actions       TacticalAction[]
+  contacts      TacticalContact[]
+  submissions   TacticalSubmission[]
+  messages      TacticalMessage[]
   torpedoSalvos TacticalTorpedoSalvo[]
 
   @@index([scenarioId, status])
@@ -869,16 +921,16 @@ enum TacticalPhase {
 
 /// Qui voit quoi à l'issue de la phase de mouvement d'une manche.
 model TacticalContact {
-  id             String             @id @default(cuid())
-  engagementId   String
-  engagement     TacticalEngagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
-  roundNumber    Int
-  observerTeamId String
-  observerUnitId String
-  targetUnitId   String
-  targetUnit     Unit               @relation("TacticalContactTarget", fields: [targetUnitId], references: [id])
-  method         SensorType
-  distanceNm     Float
+  id                String             @id @default(cuid())
+  engagementId      String
+  engagement        TacticalEngagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  roundNumber       Int
+  observerTeamId    String
+  observerUnitId    String
+  targetUnitId      String
+  targetUnit        Unit               @relation("TacticalContactTarget", fields: [targetUnitId], references: [id])
+  method            SensorType
+  distanceNm        Float
   /// Position réelle de la cible au moment du relevé — pas transmise telle
   /// quelle au joueur (qui ne voit que distance/relèvement reconstruit) :
   /// sert à replacer le marqueur sur la carte et à estimer un vecteur de
@@ -944,34 +996,34 @@ enum TacticalMessageKind {
 // classique — sa distance de largage est déjà négligeable devant la durée
 // d'une manche tactique. Voir torpedoSalvo.ts.
 model TacticalTorpedoSalvo {
-  id               String              @id @default(cuid())
-  engagementId     String
-  engagement       TacticalEngagement  @relation(fields: [engagementId], references: [id], onDelete: Cascade)
-  firedRoundNumber Int
-  firedByUnitId    String
-  firedByUnit      Unit                @relation("TorpedoSalvoFirer", fields: [firedByUnitId], references: [id])
-  firedByTeamId    String
+  id                  String             @id @default(cuid())
+  engagementId        String
+  engagement          TacticalEngagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  firedRoundNumber    Int
+  firedByUnitId       String
+  firedByUnit         Unit               @relation("TorpedoSalvoFirer", fields: [firedByUnitId], references: [id])
+  firedByTeamId       String
   /// Cible visée à l'origine — indicatif seulement (aide à l'affichage/à la narration), l'interception réelle est purement géométrique et ne dépend pas de ce champ.
-  targetUnitId     String?
-  targetUnit       Unit?               @relation("TorpedoSalvoTarget", fields: [targetUnitId], references: [id])
-  torpedoTypeId    String?
+  targetUnitId        String?
+  targetUnit          Unit?              @relation("TorpedoSalvoTarget", fields: [targetUnitId], references: [id])
+  torpedoTypeId       String?
   /// Nombre de torpilles de la salve — détermine la largeur de la zone de danger (voir torpedoSalvo.ts) et est déduit du stock du tireur au lancement.
-  torpedoCount     Int
-  spread           TorpedoSpread       @default(STANDARD)
-  headingDeg       Float
-  speedKnots       Float
-  maxRangeM        Float
+  torpedoCount        Int
+  spread              TorpedoSpread      @default(STANDARD)
+  headingDeg          Float
+  speedKnots          Float
+  maxRangeM           Float
   /// Fiabilité (0-1) figée au lancement — voir DEFAULT_TORPEDO_RELIABILITY dans combat.ts.
-  reliability      Float               @default(0.75)
+  reliability         Float              @default(0.75)
   /// Position courante de la salve (avance chaque manche tant que IN_TRANSIT) — pas la position du tireur, qui a pu bouger depuis.
-  currentLat       Float
-  currentLng       Float
-  distanceTraveledM Float              @default(0)
-  status           TorpedoSalvoStatus  @default(IN_TRANSIT)
-  hitUnitId        String?
-  hitUnit          Unit?               @relation("TorpedoSalvoHit", fields: [hitUnitId], references: [id])
+  currentLat          Float
+  currentLng          Float
+  distanceTraveledM   Float              @default(0)
+  status              TorpedoSalvoStatus @default(IN_TRANSIT)
+  hitUnitId           String?
+  hitUnit             Unit?              @relation("TorpedoSalvoHit", fields: [hitUnitId], references: [id])
   resolvedRoundNumber Int?
-  createdAt        DateTime            @default(now())
+  createdAt           DateTime           @default(now())
 
   @@index([engagementId, status])
 }

@@ -821,6 +821,48 @@ async function applyTransitLeg(turnId: string, turnDurationMinutes: number, unit
 }
 
 /**
+ * Position de "home" effective d'un avion pour un cycle de patrouille
+ * aérienne (retour utilisateur 2026-08-14 — porte-avions = référence
+ * mobile) : résout dans l'ordre porte-avions rattaché directement
+ * (`Unit.carrierUnitId`), porte-avions de l'escadrille de rattachement
+ * (`Unit.squadronId` → `Squadron.carrierUnitId`), base de l'escadrille
+ * (`Squadron.baseLat/Lng`), puis repli sur la base littérale de l'unité
+ * (`Unit.baseLat/Lng`) et enfin sa position courante — comportement
+ * inchangé pour toute unité sans escadrille/porte-avions. Appelée à
+ * CHAQUE reconduction de l'ordre permanent (voir applyAirPatrolLeg,
+ * rappelée chaque tour par applyStandingOrders) : un avion basé sur
+ * porte-avions suit donc la position RÉELLE du navire tour après tour,
+ * sans mécanique de patrouille supplémentaire à construire.
+ */
+async function resolveAirHomePosition(unit: {
+  baseLat: number | null;
+  baseLng: number | null;
+  currentLat: number;
+  currentLng: number;
+  squadronId: string | null;
+  carrierUnitId: string | null;
+}): Promise<LatLng> {
+  if (unit.carrierUnitId) {
+    const carrier = await prisma.unit.findUnique({ where: { id: unit.carrierUnitId }, select: { currentLat: true, currentLng: true } });
+    if (carrier) return { lat: carrier.currentLat, lng: carrier.currentLng };
+  }
+  if (unit.squadronId) {
+    const squadron = await prisma.squadron.findUnique({
+      where: { id: unit.squadronId },
+      select: { baseLat: true, baseLng: true, carrierUnitId: true },
+    });
+    if (squadron?.carrierUnitId) {
+      const carrier = await prisma.unit.findUnique({ where: { id: squadron.carrierUnitId }, select: { currentLat: true, currentLng: true } });
+      if (carrier) return { lat: carrier.currentLat, lng: carrier.currentLng };
+    }
+    if (squadron?.baseLat != null && squadron?.baseLng != null) {
+      return { lat: squadron.baseLat, lng: squadron.baseLng };
+    }
+  }
+  return { lat: unit.baseLat ?? unit.currentLat, lng: unit.baseLng ?? unit.currentLng };
+}
+
+/**
  * Reconduit un ordre AIR_PATROL : décollage → recherche → retour. Consomme
  * le carburant du tour, décide du demi-tour dès que l'autonomie restante ne
  * couvre plus le trajet retour + marge, et relance un nouveau décollage dès
@@ -832,7 +874,13 @@ async function applyAirPatrolLeg(turnId: string, turnDurationMinutes: number, un
 
   const cruiseSpeedKnots = unit.unitClass.maxSpeedKnots * AIR_PATROL_CRUISE_RATIO;
   const enduranceMinutes = unit.unitClass.enduranceMinutes ?? DEFAULT_ENDURANCE_MINUTES;
-  const home: LatLng = { lat: unit.airHomeLat ?? unit.currentLat, lng: unit.airHomeLng ?? unit.currentLng };
+  const home = await resolveAirHomePosition(unit);
+  // Garde la valeur affichée aux joueurs (OrdersClient.tsx, trait
+  // base→zone) synchronisée avec le "home" réellement simulé ci-dessus,
+  // sans attendre qu'un nouvel ordre soit soumis.
+  if (home.lat !== unit.airHomeLat || home.lng !== unit.airHomeLng) {
+    await prisma.unit.update({ where: { id: unitId }, data: { airHomeLat: home.lat, airHomeLng: home.lng } });
+  }
   const patrolPoint: LatLng = { lat: unit.airPatrolLat ?? unit.currentLat, lng: unit.airPatrolLng ?? unit.currentLng };
   const current: LatLng = { lat: unit.currentLat, lng: unit.currentLng };
 

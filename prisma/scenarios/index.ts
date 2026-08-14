@@ -210,6 +210,20 @@ export async function instantiateScenario(
   // Clé "équipe::flotte" — plusieurs équipes peuvent réutiliser le même nom
   // de flotte, d'où le namespacing (voir playersByTeamName ci-dessous).
   const fleetIdByTeamAndName = new Map<string, string>();
+  // Nom → {id, catégorie} de chaque unité créée — sert à résoudre les
+  // références par nom (Squadron/Unit.carrierUnitName) une fois toutes les
+  // unités posées, et à faire respecter strictement "réservé aux avions"/
+  // "doit être un navire" avec la catégorie RÉSOLUE (contrairement au
+  // superRefine côté validation.ts, limité aux classes définies en ligne).
+  const unitByName = new Map<string, { id: string; category: string }>();
+  // squadronKey en attente d'affectation (avions) — résolu après la
+  // création des Squadron (pass B ci-dessous), voir Unit.squadronId.
+  const pendingSquadronAssignment: { unitId: string; unitName: string; squadronKey: string }[] = [];
+  // carrierUnitName direct (avion isolé, hors escadrille) — résolu après
+  // que toutes les unités existent (un porte-avions peut être créé après
+  // l'avion qui le référence dans l'ordre du scénario).
+  const pendingCarrierAssignment: { unitId: string; unitName: string; carrierUnitName: string }[] = [];
+
   for (const t of definition.teams) {
     const team = await prisma.team.create({
       data: { scenarioId: scenario.id, name: t.name, colorHex: t.colorHex },
@@ -242,12 +256,16 @@ export async function instantiateScenario(
         // sur les champs littéraux si les deux sont présents (déjà rejeté
         // par ScenarioDefinitionSchema.superRefine à ce stade, mais on reste
         // défensif ici plutôt que de dépendre uniquement de la validation
-        // amont). squadronKey/carrierUnitName : voir Phase 2 (escadrilles).
+        // amont). squadronKey/carrierUnitName (escadrille/porte-avions) sont
+        // résolus APRÈS que toutes les unités existent, voir plus bas.
         const airbase = u.airbaseKey ? airbaseByKey.get(u.airbaseKey) : undefined;
         if (u.airbaseKey && !airbase) {
           throw new Error(`Base aérienne inconnue « ${u.airbaseKey} » pour l'unité ${u.name}`);
         }
-        await prisma.unit.create({
+        if ((u.squadronKey || u.carrierUnitName) && unitClass.category !== "AIRCRAFT") {
+          throw new Error(`${u.name} : escadrille/porte-avions réservés aux avions (classe « ${unitClass.name} »)`);
+        }
+        const created = await prisma.unit.create({
           data: {
             scenarioId: scenario.id,
             fleetId: targetFleetId,
@@ -270,8 +288,60 @@ export async function instantiateScenario(
             baseName: airbase?.name ?? u.baseName,
           },
         });
+        unitByName.set(u.name, { id: created.id, category: unitClass.category });
+        if (u.squadronKey) pendingSquadronAssignment.push({ unitId: created.id, unitName: u.name, squadronKey: u.squadronKey });
+        if (u.carrierUnitName) pendingCarrierAssignment.push({ unitId: created.id, unitName: u.name, carrierUnitName: u.carrierUnitName });
       }
     }
+  }
+
+  // Escadrilles (retour utilisateur 2026-08-14) — créées une fois toutes les
+  // unités posées (une escadrille peut référencer un porte-avions créé
+  // après elle dans l'ordre du scénario, voir carrierUnitName ci-dessous).
+  // La base de l'escadrille (aérienne ou porte-avions) N'EST PAS recopiée
+  // sur chaque Unit membre : Unit.baseLat/baseLng restent null pour un avion
+  // en escadrille, la résolution passe par Unit.squadronId → Squadron au
+  // moment voulu (turnEngine.ts, saveAirPatrolOrder) — source unique,
+  // jamais périmée si le porte-avions référencé change de position.
+  const squadronIdByKey = new Map<string, string>();
+  for (const sq of definition.squadrons ?? []) {
+    const squadronAirbase = sq.airbaseKey ? airbaseByKey.get(sq.airbaseKey) : undefined;
+    if (sq.airbaseKey && !squadronAirbase) {
+      throw new Error(`Base aérienne inconnue « ${sq.airbaseKey} » pour l'escadrille ${sq.name}`);
+    }
+    let carrierUnitId: string | undefined;
+    if (sq.carrierUnitName) {
+      const carrier = unitByName.get(sq.carrierUnitName);
+      if (!carrier) throw new Error(`Unité porte-avions inconnue « ${sq.carrierUnitName} » pour l'escadrille ${sq.name}`);
+      if (carrier.category !== "SURFACE_SHIP") {
+        throw new Error(`« ${sq.carrierUnitName} » n'est pas un navire de surface (escadrille ${sq.name})`);
+      }
+      carrierUnitId = carrier.id;
+    }
+    const created = await prisma.squadron.create({
+      data: {
+        scenarioId: scenario.id,
+        name: sq.name,
+        baseLat: squadronAirbase?.lat,
+        baseLng: squadronAirbase?.lng,
+        baseName: squadronAirbase?.name,
+        carrierUnitId,
+      },
+    });
+    squadronIdByKey.set(sq.key, created.id);
+  }
+  for (const pending of pendingSquadronAssignment) {
+    const squadronId = squadronIdByKey.get(pending.squadronKey);
+    if (!squadronId) throw new Error(`Escadrille inconnue « ${pending.squadronKey} » pour l'unité ${pending.unitName}`);
+    await prisma.unit.update({ where: { id: pending.unitId }, data: { squadronId } });
+  }
+  for (const pending of pendingCarrierAssignment) {
+    const carrier = unitByName.get(pending.carrierUnitName);
+    if (!carrier) throw new Error(`Unité porte-avions inconnue « ${pending.carrierUnitName} » pour l'unité ${pending.unitName}`);
+    if (carrier.category !== "SURFACE_SHIP") {
+      throw new Error(`« ${pending.carrierUnitName} » n'est pas un navire de surface (rattachement de ${pending.unitName})`);
+    }
+    await prisma.unit.update({ where: { id: pending.unitId }, data: { carrierUnitId: carrier.id } });
   }
 
   // Météo + premier tour

@@ -121,6 +121,14 @@ const AirbaseSchema = z.object({
   lng: z.number().min(-180).max(180),
 });
 
+/** Escadrille — voir ScenarioSquadron (types.ts). */
+const SquadronSchema = z.object({
+  key: z.string().min(1),
+  name: z.string().min(1),
+  airbaseKey: z.string().min(1).optional(),
+  carrierUnitName: z.string().min(1).optional(),
+});
+
 const FleetSchema = z.object({
   name: z.string().min(1),
   units: z.array(UnitSchema).min(1, "une flotte doit avoir au moins une unité"),
@@ -168,6 +176,8 @@ export const ScenarioDefinitionSchema = z
     // Bases aériennes réutilisables (constructeur visuel, retour utilisateur
     // 2026-08-14) — voir ScenarioAirbase (types.ts).
     airbases: z.array(AirbaseSchema).optional(),
+    // Escadrilles (même retour utilisateur) — voir ScenarioSquadron (types.ts).
+    squadrons: z.array(SquadronSchema).optional(),
     objectives: z.array(z.object({ teamName: z.string().min(1), text: z.string().min(1) })),
     source: z.string().min(1),
   })
@@ -175,6 +185,47 @@ export const ScenarioDefinitionSchema = z
     const classKeys = new Set(def.unitClasses.map((c) => c.key));
     const teamNames = new Set(def.teams.map((t) => t.name));
     const airbaseKeys = new Set((def.airbases ?? []).map((a) => a.key));
+    const squadronKeys = new Set((def.squadrons ?? []).map((s) => s.key));
+    // Catégorie par clé de classe — seulement connue pour les classes
+    // définies EN LIGNE (UnitClassSchema complet) ; une référence
+    // { key, libraryKey } n'est résolue qu'à l'instanciation (accès DB
+    // asynchrone) — voir instantiateScenario, seul endroit qui peut
+    // appliquer strictement "réservé aux avions"/"doit être un navire" pour
+    // ce cas-là. Ici, contrôle au mieux, sans faux positif.
+    const categoryByClassKey = new Map(
+      def.unitClasses.filter((c): c is typeof c & { category: string } => "category" in c).map((c) => [c.key, c.category])
+    );
+    // Nom → catégorie (au mieux, même limite) de toutes les unités du
+    // scénario — pour valider `carrierUnitName` (doit référencer un navire).
+    const categoryByUnitName = new Map<string, string | undefined>();
+    for (const team of def.teams) {
+      for (const fleet of team.fleets) {
+        for (const unit of fleet.units) {
+          categoryByUnitName.set(unit.name, categoryByClassKey.get(unit.classKey));
+        }
+      }
+    }
+
+    for (const [si, squadron] of (def.squadrons ?? []).entries()) {
+      if (squadron.airbaseKey && !airbaseKeys.has(squadron.airbaseKey)) {
+        ctx.addIssue({ code: "custom", message: `base aérienne inconnue « ${squadron.airbaseKey} »`, path: ["squadrons", si, "airbaseKey"] });
+      }
+      if (squadron.carrierUnitName) {
+        const carrierCategory = categoryByUnitName.get(squadron.carrierUnitName);
+        if (!categoryByUnitName.has(squadron.carrierUnitName)) {
+          ctx.addIssue({ code: "custom", message: `unité porte-avions inconnue « ${squadron.carrierUnitName} »`, path: ["squadrons", si, "carrierUnitName"] });
+        } else if (carrierCategory && carrierCategory !== "SURFACE_SHIP") {
+          ctx.addIssue({ code: "custom", message: `« ${squadron.carrierUnitName} » n'est pas un navire de surface`, path: ["squadrons", si, "carrierUnitName"] });
+        }
+      }
+      if (squadron.airbaseKey && squadron.carrierUnitName) {
+        ctx.addIssue({ code: "custom", message: `« ${squadron.name} » : base aérienne OU porte-avions, pas les deux`, path: ["squadrons", si] });
+      }
+    }
+    const dupSquadronKeys = (def.squadrons ?? []).map((s) => s.key).filter((k, i, arr) => arr.indexOf(k) !== i);
+    if (dupSquadronKeys.length > 0) {
+      ctx.addIssue({ code: "custom", message: `clés d'escadrille en double : ${dupSquadronKeys.join(", ")}`, path: ["squadrons"] });
+    }
 
     for (const [ti, team] of def.teams.entries()) {
       const fleetNamesInTeam = new Map<string, number>();
@@ -193,6 +244,40 @@ export const ScenarioDefinitionSchema = z
               code: "custom",
               message: `base aérienne inconnue « ${unit.airbaseKey} »`,
               path: ["teams", ti, "fleets", fi, "units", ui, "airbaseKey"],
+            });
+          }
+          if (unit.squadronKey && !squadronKeys.has(unit.squadronKey)) {
+            ctx.addIssue({
+              code: "custom",
+              message: `escadrille inconnue « ${unit.squadronKey} »`,
+              path: ["teams", ti, "fleets", fi, "units", ui, "squadronKey"],
+            });
+          }
+          if (unit.carrierUnitName) {
+            const carrierCategory = categoryByUnitName.get(unit.carrierUnitName);
+            if (!categoryByUnitName.has(unit.carrierUnitName)) {
+              ctx.addIssue({
+                code: "custom",
+                message: `unité porte-avions inconnue « ${unit.carrierUnitName} »`,
+                path: ["teams", ti, "fleets", fi, "units", ui, "carrierUnitName"],
+              });
+            } else if (carrierCategory && carrierCategory !== "SURFACE_SHIP") {
+              ctx.addIssue({
+                code: "custom",
+                message: `« ${unit.carrierUnitName} » n'est pas un navire de surface`,
+                path: ["teams", ti, "fleets", fi, "units", ui, "carrierUnitName"],
+              });
+            }
+          }
+          // squadronKey/carrierUnitName réservés aux avions — vérifié au
+          // mieux (catégorie de CETTE unité connue seulement si sa classe
+          // est définie en ligne, voir categoryByClassKey plus haut).
+          const ownCategory = categoryByClassKey.get(unit.classKey);
+          if ((unit.squadronKey || unit.carrierUnitName) && ownCategory && ownCategory !== "AIRCRAFT") {
+            ctx.addIssue({
+              code: "custom",
+              message: `${unit.name} : escadrille/porte-avions réservés aux avions`,
+              path: ["teams", ti, "fleets", fi, "units", ui],
             });
           }
           // Au plus UNE source de base : littérale (baseLat/baseLng), base
