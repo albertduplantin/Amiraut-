@@ -1,12 +1,27 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { deleteLibraryClassAction } from "../../actions";
 
 /** Suppression d'une classe de la bibliothèque — double clic de confirmation plutôt qu'une boîte de dialogue navigateur. */
 export function DeleteButton({ id, name }: { id: string; name: string }) {
+  const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function confirmDelete() {
+    setError(null);
+    startTransition(async () => {
+      const result = await deleteLibraryClassAction(id);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      router.push("/library");
+    });
+  }
 
   if (!confirming) {
     return (
@@ -24,16 +39,17 @@ export function DeleteButton({ id, name }: { id: string; name: string }) {
       </p>
       <div className="mt-2 flex gap-2">
         <button
-          onClick={() => startTransition(() => deleteLibraryClassAction(id))}
+          onClick={confirmDelete}
           disabled={isPending}
           className="rounded-md bg-red-700 px-3 py-1 text-red-100 hover:bg-red-600 disabled:opacity-50"
         >
-          Confirmer la suppression
+          {isPending ? "…" : "Confirmer la suppression"}
         </button>
         <button onClick={() => setConfirming(false)} className="rounded-md border border-slate-700 px-3 py-1 hover:bg-slate-900">
           Annuler
         </button>
       </div>
+      {error && <p className="mt-2 text-red-400">{error}</p>}
     </div>
   );
 }

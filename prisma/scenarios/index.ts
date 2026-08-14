@@ -200,6 +200,11 @@ export async function instantiateScenario(
   }
   const resistanceByKey = new Map(resolvedUnitClasses.map((uc) => [uc.key, uc.resistancePoints]));
 
+  // Bases aériennes réutilisables (constructeur visuel, retour utilisateur
+  // 2026-08-14) — résolues ici en baseLat/baseLng/baseName au moment de
+  // créer chaque unité, voir ScenarioAirbase (types.ts).
+  const airbaseByKey = new Map((definition.airbases ?? []).map((a) => [a.key, a]));
+
   // Équipes, flottes, unités
   const teamIdByName = new Map<string, string>();
   // Clé "équipe::flotte" — plusieurs équipes peuvent réutiliser le même nom
@@ -233,6 +238,15 @@ export async function instantiateScenario(
               throw new Error(`Flotte cible inconnue « ${overrideFleetName} » pour l'unité ${u.name}`);
             })())
           : fleetIdByTeamAndName.get(`${t.name}::${f.name}`)!;
+        // Base aérienne par référence (voir airbaseByKey ci-dessus) : prime
+        // sur les champs littéraux si les deux sont présents (déjà rejeté
+        // par ScenarioDefinitionSchema.superRefine à ce stade, mais on reste
+        // défensif ici plutôt que de dépendre uniquement de la validation
+        // amont). squadronKey/carrierUnitName : voir Phase 2 (escadrilles).
+        const airbase = u.airbaseKey ? airbaseByKey.get(u.airbaseKey) : undefined;
+        if (u.airbaseKey && !airbase) {
+          throw new Error(`Base aérienne inconnue « ${u.airbaseKey} » pour l'unité ${u.name}`);
+        }
         await prisma.unit.create({
           data: {
             scenarioId: scenario.id,
@@ -251,9 +265,9 @@ export async function instantiateScenario(
             torpedoesRemaining: unitClass.torpedoStock ?? undefined,
             batteryChargePercent: unitClass.category === "SUBMARINE" ? 100 : undefined,
             oxygenHoursRemaining: unitClass.category === "SUBMARINE" ? unitClass.oxygenEnduranceHours : undefined,
-            baseLat: u.baseLat,
-            baseLng: u.baseLng,
-            baseName: u.baseName,
+            baseLat: airbase?.lat ?? u.baseLat,
+            baseLng: airbase?.lng ?? u.baseLng,
+            baseName: airbase?.name ?? u.baseName,
           },
         });
       }

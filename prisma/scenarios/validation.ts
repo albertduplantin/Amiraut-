@@ -105,6 +105,20 @@ const UnitSchema = z.object({
   baseLat: z.number().min(-90).max(90).optional(),
   baseLng: z.number().min(-180).max(180).optional(),
   baseName: z.string().optional(),
+  // Alternatives à baseLat/baseLng/baseName (constructeur visuel, retour
+  // utilisateur 2026-08-14) — au plus une source de base, voir le
+  // superRefine de ScenarioDefinitionSchema plus bas.
+  airbaseKey: z.string().min(1).optional(),
+  squadronKey: z.string().min(1).optional(),
+  carrierUnitName: z.string().min(1).optional(),
+});
+
+/** Base aérienne réutilisable — voir ScenarioAirbase (types.ts). */
+const AirbaseSchema = z.object({
+  key: z.string().min(1),
+  name: z.string().min(1),
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
 });
 
 const FleetSchema = z.object({
@@ -151,15 +165,21 @@ export const ScenarioDefinitionSchema = z
     weather: WeatherSchema,
     unitClasses: z.array(UnitClassEntrySchema).min(1, "au moins une classe d'unité"),
     teams: z.array(TeamSchema).min(2, "au moins deux équipes"),
+    // Bases aériennes réutilisables (constructeur visuel, retour utilisateur
+    // 2026-08-14) — voir ScenarioAirbase (types.ts).
+    airbases: z.array(AirbaseSchema).optional(),
     objectives: z.array(z.object({ teamName: z.string().min(1), text: z.string().min(1) })),
     source: z.string().min(1),
   })
   .superRefine((def, ctx) => {
     const classKeys = new Set(def.unitClasses.map((c) => c.key));
     const teamNames = new Set(def.teams.map((t) => t.name));
+    const airbaseKeys = new Set((def.airbases ?? []).map((a) => a.key));
 
     for (const [ti, team] of def.teams.entries()) {
+      const fleetNamesInTeam = new Map<string, number>();
       for (const [fi, fleet] of team.fleets.entries()) {
+        fleetNamesInTeam.set(fleet.name, (fleetNamesInTeam.get(fleet.name) ?? 0) + 1);
         for (const [ui, unit] of fleet.units.entries()) {
           if (!classKeys.has(unit.classKey)) {
             ctx.addIssue({
@@ -168,7 +188,39 @@ export const ScenarioDefinitionSchema = z
               path: ["teams", ti, "fleets", fi, "units", ui, "classKey"],
             });
           }
+          if (unit.airbaseKey && !airbaseKeys.has(unit.airbaseKey)) {
+            ctx.addIssue({
+              code: "custom",
+              message: `base aérienne inconnue « ${unit.airbaseKey} »`,
+              path: ["teams", ti, "fleets", fi, "units", ui, "airbaseKey"],
+            });
+          }
+          // Au plus UNE source de base : littérale (baseLat/baseLng), base
+          // aérienne (airbaseKey), escadrille (squadronKey) ou porte-avions
+          // (carrierUnitName) — sinon ambigu, laquelle prime ?
+          const baseSourcesCount =
+            (unit.baseLat != null || unit.baseLng != null ? 1 : 0) +
+            (unit.airbaseKey ? 1 : 0) +
+            (unit.squadronKey ? 1 : 0) +
+            (unit.carrierUnitName ? 1 : 0);
+          if (baseSourcesCount > 1) {
+            ctx.addIssue({
+              code: "custom",
+              message: `${unit.name} : une seule source de base à la fois (position directe, base aérienne, escadrille ou porte-avions)`,
+              path: ["teams", ti, "fleets", fi, "units", ui],
+            });
+          }
         }
+      }
+      const dupFleetNames = Array.from(fleetNamesInTeam.entries())
+        .filter(([, count]) => count > 1)
+        .map(([name]) => name);
+      if (dupFleetNames.length > 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: `« ${team.name} » : noms de flotte en double : ${dupFleetNames.join(", ")}`,
+          path: ["teams", ti, "fleets"],
+        });
       }
     }
     for (const [oi, objective] of def.objectives.entries()) {
@@ -183,6 +235,14 @@ export const ScenarioDefinitionSchema = z
     const dupClassKeys = def.unitClasses.map((c) => c.key).filter((k, i, arr) => arr.indexOf(k) !== i);
     if (dupClassKeys.length > 0) {
       ctx.addIssue({ code: "custom", message: `clés de classe en double : ${dupClassKeys.join(", ")}`, path: ["unitClasses"] });
+    }
+    const dupTeamNames = def.teams.map((t) => t.name).filter((n, i, arr) => arr.indexOf(n) !== i);
+    if (dupTeamNames.length > 0) {
+      ctx.addIssue({ code: "custom", message: `noms d'équipe en double : ${dupTeamNames.join(", ")}`, path: ["teams"] });
+    }
+    const dupAirbaseKeys = (def.airbases ?? []).map((a) => a.key).filter((k, i, arr) => arr.indexOf(k) !== i);
+    if (dupAirbaseKeys.length > 0) {
+      ctx.addIssue({ code: "custom", message: `clés de base aérienne en double : ${dupAirbaseKeys.join(", ")}`, path: ["airbases"] });
     }
   });
 

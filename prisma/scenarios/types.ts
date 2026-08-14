@@ -91,10 +91,67 @@ export type ScenarioUnit = {
    * (éventuellement en vol de transit). Un ordre de patrouille aérienne
    * ramène l'avion ici, pas à sa position de départ. Repli sur lat/lng côté
    * moteur si absent.
+   *
+   * Trois façons alternatives de renseigner cette base (au plus une à la
+   * fois, voir ScenarioDefinitionSchema.superRefine) — littérale ci-dessous,
+   * ou par référence via `airbaseKey`/`squadronKey`/`carrierUnitName`
+   * (constructeur de scénario visuel, retour utilisateur 2026-08-14) :
+   * garder les champs littéraux permet aux scénarios existants (écrits à la
+   * main) de continuer à fonctionner sans migration.
    */
   baseLat?: number;
   baseLng?: number;
   baseName?: string;
+  /** Référence vers `ScenarioDefinition.airbases[].key` — alternative à baseLat/baseLng/baseName. */
+  airbaseKey?: string;
+  /**
+   * Référence vers `ScenarioDefinition.squadrons[].key` (avions uniquement) :
+   * la base est héritée de l'escadrille plutôt que fixée unité par unité —
+   * voir ScenarioSquadron. Réservé aux avions qui volent en groupe (chasse,
+   * bombardement) ; un avion isolé (reconnaissance, attaque navale solitaire)
+   * garde `airbaseKey`/`carrierUnitName`/lat-lng littéraux.
+   */
+  squadronKey?: string;
+  /**
+   * Référence directe (par nom) vers une autre unité SURFACE_SHIP du même
+   * scénario servant de porte-avions — alternative mobile à une base
+   * aérienne fixe : la position suit le navire (voir turnEngine.ts,
+   * résolution de Unit.airHomeLat/Lng). Pas de simulation de cycles de pont
+   * d'envol, juste une référence de base mobile (retour utilisateur
+   * 2026-08-14, recherche historique §4.3 Amirauté 2013 — hors périmètre).
+   */
+  carrierUnitName?: string;
+};
+
+/**
+ * Base aérienne réutilisable (constructeur de scénario visuel, retour
+ * utilisateur 2026-08-14) : créée une fois, référencée par plusieurs avions
+ * via `ScenarioUnit.airbaseKey` — remplace la répétition de baseLat/baseLng/
+ * baseName sur chaque unité. `key` est local au scénario, comme les clés de
+ * `unitClasses`.
+ */
+export type ScenarioAirbase = {
+  key: string;
+  name: string;
+  lat: number;
+  lng: number;
+};
+
+/**
+ * Escadrille (constructeur de scénario visuel, retour utilisateur
+ * 2026-08-14, recherche historique §4.1.1.1 Amirauté 2013 — l'unité
+ * opérationnelle réelle de combat aérien est le groupe/escadron, pas
+ * l'avion isolé) : regroupe des avions qui partagent une même base
+ * (aérienne OU porte-avions, au plus une des deux). Purement organisation
+ * à ce stade — le calcul de combat par groupe (dilution DCA §4.6.2.4) est
+ * un chantier séparé, non construit ici ; ce conteneur en est le
+ * prérequis côté données pour ne pas avoir à refaire l'éditeur plus tard.
+ */
+export type ScenarioSquadron = {
+  key: string;
+  name: string;
+  airbaseKey?: string;
+  carrierUnitName?: string;
 };
 
 export type ScenarioFleet = {
@@ -141,6 +198,10 @@ export type ScenarioDefinition = {
    */
   unitClasses: (ScenarioUnitClass | { key: string; libraryKey: string })[];
   teams: ScenarioTeam[];
+  /** Bases aériennes réutilisables (constructeur visuel, retour utilisateur 2026-08-14) — voir ScenarioAirbase. */
+  airbases?: ScenarioAirbase[];
+  /** Escadrilles (constructeur visuel, retour utilisateur 2026-08-14) — voir ScenarioSquadron. */
+  squadrons?: ScenarioSquadron[];
   /** Objectifs affichés à chaque camp, pour donner un but clair à la partie. */
   objectives: { teamName: string; text: string }[];
   source: string;

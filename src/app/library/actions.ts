@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { assertArbiter, AccessDeniedError } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -130,10 +129,50 @@ export async function updateLibraryClassAction(id: string, input: unknown): Prom
   return { ok: true, id };
 }
 
-export async function deleteLibraryClassAction(id: string) {
+export type DeleteLibraryClassResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Supprime une classe de la bibliothèque — garde-fou ajouté le 2026-08-14
+ * (retour utilisateur, chantier constructeur de scénario visuel) : le
+ * constructeur fait de `{key, libraryKey}` le chemin d'autorat PAR DÉFAUT
+ * (glisser une classe depuis la bibliothèque), donc supprimer une classe
+ * encore référencée par un scénario enregistré (`CustomScenario`) casserait
+ * silencieusement ce scénario au prochain lancement — `instantiateScenario`
+ * lèverait "Classe de bibliothèque introuvable" bien après coup, sans lien
+ * évident avec cette suppression. Les scénarios INTÉGRÉS (fichiers TS,
+ * `prisma/scenarios/*.ts`) ne sont jamais concernés : ils ne référencent
+ * jamais la bibliothèque partagée par ce même mécanisme au moment de la
+ * suppression (relecture à chaque déploiement, pas en base).
+ */
+export async function deleteLibraryClassAction(id: string): Promise<DeleteLibraryClassResult> {
   const session = await getSession();
-  assertArbiter(session);
+  try {
+    assertArbiter(session);
+  } catch (error) {
+    if (error instanceof AccessDeniedError) return { ok: false, error: error.message };
+    throw error;
+  }
+
+  const target = await prisma.libraryUnitClass.findUnique({ where: { id }, select: { key: true } });
+  if (!target) return { ok: false, error: "Classe introuvable." };
+
+  const customScenarios = await prisma.customScenario.findMany({ select: { name: true, definition: true } });
+  const referencedBy: string[] = [];
+  for (const s of customScenarios) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const unitClasses = (s.definition as any)?.unitClasses;
+    if (!Array.isArray(unitClasses)) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (unitClasses.some((uc: any) => uc?.libraryKey === target.key)) referencedBy.push(s.name);
+  }
+  if (referencedBy.length > 0) {
+    return {
+      ok: false,
+      error: `Cette classe est utilisée par ${referencedBy.length === 1 ? "le scénario" : "les scénarios"} « ${referencedBy.join(" », « ")} » — retirez-la de ${referencedBy.length === 1 ? "ce scénario" : "ces scénarios"} avant de la supprimer.`,
+    };
+  }
+
   await prisma.libraryUnitClass.delete({ where: { id } });
   revalidatePath("/library");
-  redirect("/library");
+  return { ok: true };
 }
