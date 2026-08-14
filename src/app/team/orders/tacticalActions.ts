@@ -10,14 +10,16 @@ import {
   submitTacticalFireShot,
   finishFirePhase,
   postTacticalMessage,
+  fireTorpedoSalvo,
   type FireShotResult,
 } from "@/lib/tacticalEngine";
 import { OrderValidationError } from "@/lib/turnEngine";
-import type { DepthBand, WeaponType } from "@/generated/prisma/client";
+import type { DepthBand, WeaponType, TorpedoSpread } from "@/generated/prisma/client";
 import type { LatLng } from "@/lib/geo";
 
 export type TacticalActionResult = { ok: true } | { ok: false; error: string };
 export type FireShotActionResult = { ok: true; result: FireShotResult } | { ok: false; error: string };
+export type FireTorpedoSalvoActionResult = { ok: true; salvoId: string; headingDeg: number } | { ok: false; error: string };
 
 async function assertOwnsUnits(teamId: string, unitIds: string[]) {
   const count = await prisma.unit.count({ where: { id: { in: unitIds }, fleet: { teamId } } });
@@ -93,6 +95,44 @@ export async function submitFireShotAction(params: {
     });
     revalidatePath("/team/orders");
     return { ok: true, result };
+  } catch (error) {
+    if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
+    throw error;
+  }
+}
+
+/**
+ * Tir d'une salve de torpilles (navires/sous-marins) — action de la phase
+ * de MOUVEMENT, pas de tir : voir tacticalEngine.fireTorpedoSalvo. La salve
+ * avance ensuite manche après manche jusqu'à interception ou portée
+ * maximale dépassée, résolue automatiquement à chaque résolution de
+ * mouvement (aucun second appel nécessaire côté joueur).
+ */
+export async function fireTorpedoSalvoAction(params: {
+  engagementId: string;
+  unitId: string;
+  aimLat: number;
+  aimLng: number;
+  spread: TorpedoSpread;
+  torpedoTypeId?: string;
+  targetUnitId?: string;
+}): Promise<FireTorpedoSalvoActionResult> {
+  const session = await getSession();
+  try {
+    assertPlayer(session);
+    await assertOwnsUnits(session.teamId, [params.unitId]);
+    const result = await fireTorpedoSalvo({
+      engagementId: params.engagementId,
+      teamId: session.teamId,
+      unitId: params.unitId,
+      aimLat: params.aimLat,
+      aimLng: params.aimLng,
+      spread: params.spread,
+      torpedoTypeId: params.torpedoTypeId,
+      targetUnitId: params.targetUnitId,
+    });
+    revalidatePath("/team/orders");
+    return { ok: true, salvoId: result.salvoId, headingDeg: result.headingDeg };
   } catch (error) {
     if (error instanceof AccessDeniedError || error instanceof OrderValidationError) return { ok: false, error: error.message };
     throw error;

@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { distanceNm, bearingDeg, destinationPoint, pathLengthNm, speedBudgetNm, turnPenaltyNm, type LatLng } from "@/lib/geo";
+import { distanceNm, bearingDeg, destinationPoint, pathLengthNm, speedBudgetNm, turnPenaltyNm, buildTimedTrack, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm, type WeatherConditions } from "@/lib/weather";
 import {
   resolveGunEngagement,
@@ -9,6 +9,9 @@ import {
   resolveHedgehogAttack,
   resolveBombingEngagement,
   resolveAirCombatEngagement,
+  resolveTorpedoSalvoIntercept,
+  torpedoDangerZoneWidthM,
+  DEFAULT_TORPEDO_RELIABILITY,
   rollLocalizedDamage,
   selectTorpedoBattery,
   isTorpedoArcClear,
@@ -17,6 +20,7 @@ import {
   type CombatProfile,
   type DepthBand as CombatDepthBand,
   type HitChanceBreakdown,
+  type TorpedoSpreadType,
 } from "@/lib/combat";
 import {
   describeShot,
@@ -29,7 +33,7 @@ import {
 } from "@/lib/tacticalNarrative";
 import { OrderValidationError, currentOpenTurn, switchTurnToTacticalScale } from "@/lib/turnEngine";
 import { classifySilhouette, DEFAULT_TURNING_RADIUS_M, DEFAULT_ACCELERATION_KNOTS_PER_MIN } from "@/lib/shipSilhouettes";
-import type { DepthBand, SensorType, WeaponType } from "@/generated/prisma/client";
+import type { DepthBand, SensorType, WeaponType, TorpedoSpread as PrismaTorpedoSpread } from "@/generated/prisma/client";
 import { Prisma } from "@/generated/prisma/client";
 
 /** Précision réduite d'un tireur au télépointage endommagé (voir Unit.fireControlDamaged) — cas Bismarck, 27 mai 1941. */
@@ -810,11 +814,21 @@ export async function submitTacticalFireShot(params: {
       accuracyMultiplier,
     });
   } else if (params.weaponType === "TORPEDO") {
+    // Torpille de NAVIRE/SOUS-MARIN : plus résolue ici depuis la refonte
+    // 2026-08-14 (voir fireTorpedoSalvo/advanceTorpedoSalvos) — une torpille
+    // met plusieurs minutes à atteindre sa cible, largement plus qu'une
+    // manche tactique, et doit donc pouvoir être esquivée par un
+    // changement de cap après le lancement, ce qu'une résolution
+    // instantanée en phase de tir ne permet jamais. Seule la torpille
+    // AÉRIENNE (larguée à quelques centaines de mètres, temps de trajet
+    // négligeable) reste sur ce chemin instantané.
+    if (attacker.unitClass.category !== "AIRCRAFT") {
+      throw new OrderValidationError(
+        "Les torpilles de navire/sous-marin se tirent désormais en phase de mouvement (cap + largeur de salve), pas ici."
+      );
+    }
     if (target.unitClass.category === "AIRCRAFT") throw new OrderValidationError("Une torpille ne vise pas un avion — torpille aérienne ou pas, la cible reste un navire.");
     if (targetSubmerged) throw new OrderValidationError("Une torpille classique ne touche pas un sous-marin immergé.");
-    if (attacker.unitClass.category === "SUBMARINE" && (attacker.depthBand === "MEDIUM" || attacker.depthBand === "DEEP")) {
-      throw new OrderValidationError("Torpilles impossibles en immersion moyenne ou grande.");
-    }
     if (attacker.torpedoesRemaining != null && attacker.torpedoesRemaining <= 0) {
       throw new OrderValidationError("Plus aucune torpille à bord.");
     }
@@ -1209,6 +1223,41 @@ export async function resolveMovementPhase(engagementId: string) {
   const untouchedUnitIds = engagement.participants.filter((p) => p.unit.status !== "SUNK" && !moveByUnit.has(p.unitId)).map((p) => p.unitId);
   const lastSpeedByUnit = await getLastKnownSpeedsByUnit(engagementId, untouchedUnitIds, engagement.roundNumber);
 
+  // Trajectoire de chaque unité PENDANT cette manche (position de départ,
+  // déjà connue avant toute mise à jour ci-dessous, + le chemin réellement
+  // parcouru) — sert exclusivement à advanceTorpedoSalvos plus bas, pour
+  // vérifier si une salve en transit croise la route d'une cible qui a
+  // continué de bouger APRÈS le lancement. Construite ici plutôt que
+  // recalculée depuis la base : `engagement.participants` contient encore
+  // les positions de PRÉ-manche à ce stade de la fonction.
+  const unitTracksThisRound = new Map<string, UnitRoundTrack>();
+  for (const p of engagement.participants) {
+    const move = moveByUnit.get(p.unitId);
+    const start = { lat: p.unit.currentLat, lng: p.unit.currentLng };
+    let track: ReturnType<typeof buildTimedTrack>;
+    if (move) {
+      const path = Array.isArray(move.movementPath) ? (move.movementPath as unknown as LatLng[]) : [];
+      track = buildTimedTrack([start, ...path], move.speedKnots ?? 0);
+    } else {
+      const lastSpeed = lastSpeedByUnit.get(p.unitId) ?? 0;
+      const coastNm = lastSpeed > 0 ? speedBudgetNm(lastSpeed, engagement.roundMinutes) : 0;
+      const dest = coastNm > 0 ? destinationPoint(start, p.unit.currentHeadingDeg ?? 0, coastNm) : start;
+      track = buildTimedTrack([start, dest], lastSpeed);
+    }
+    unitTracksThisRound.set(p.unitId, {
+      teamId: p.teamId,
+      category: p.unit.unitClass.category,
+      lengthMeters: p.unit.unitClass.lengthMeters ?? 100,
+      beamMeters: p.unit.unitClass.beamMeters ?? 12,
+      track,
+      status: p.unit.status,
+      // Palier EFFECTIF pour cette manche (l'ordre de cette manche prime sur
+      // la valeur figée du tour précédent) — une torpille classique ne
+      // touche jamais un sous-marin immergé, exactement comme submitTacticalFireShot.
+      depthBand: move?.depthBand ?? p.unit.depthBand,
+    });
+  }
+
   for (const p of engagement.participants) {
     if (p.unit.status === "SUNK") continue;
     const move = moveByUnit.get(p.unitId);
@@ -1258,6 +1307,13 @@ export async function resolveMovementPhase(engagementId: string) {
     data: { resolved: true },
   });
 
+  await advanceTorpedoSalvos({
+    engagementId,
+    roundNumber: engagement.roundNumber,
+    roundMinutes: engagement.roundMinutes,
+    unitTracks: unitTracksThisRound,
+  });
+
   await recomputeContacts(engagementId, engagement.roundNumber);
 
   // Contact ASDIC rompu par des grenades ASM la manche précédente (voir
@@ -1272,6 +1328,328 @@ export async function resolveMovementPhase(engagementId: string) {
   }
 
   await prisma.tacticalEngagement.update({ where: { id: engagementId }, data: { status: "AWAITING_FIRE" } });
+}
+
+// ── Salve de torpilles en transit (navires/sous-marins) ──────
+//
+// Recherche 2026-08-14 (Paul Bois + Amirauté 2013 de Francis Marlière — voir
+// combat.ts pour la justification complète et les sources). Une salve de
+// torpilles n'est pas résolue dans la manche où elle est tirée : elle
+// avance manche après manche (voir advanceTorpedoSalvos, appelée depuis
+// resolveMovementPhase, APRÈS que toutes les unités ont bougé) jusqu'à
+// interception, portée maximale dépassée, ou fin de l'engagement — une
+// cible peut donc esquiver en changeant de cap après le lancement.
+
+/** Pas d'échantillonnage (minutes) pour chercher le point de plus courte approche entre une salve et une cible pendant une manche — même principe que CPA_SAMPLE_STEP_MINUTES côté détection stratégique. */
+const TORPEDO_SALVO_SAMPLE_STEP_MINUTES = 0.5;
+
+/**
+ * Tir d'une salve de torpilles — action de la phase de MOUVEMENT, pas de
+ * tir (voir le commentaire ci-dessus). Une salve = tout le contenu d'un
+ * affût tiré ensemble (Amirauté 2013 §2.2.2.5 : "une salve de torpille ne
+ * peut provenir que d'un seul affût") ; `aimLat/aimLng` sert uniquement à
+ * déduire un CAP (le joueur "dessine sa trajectoire" en visant un point),
+ * pas une portée — la salve voyage ensuite en ligne droite jusqu'à
+ * interception ou épuisement de sa portée réelle.
+ */
+export async function fireTorpedoSalvo(params: {
+  engagementId: string;
+  teamId: string;
+  unitId: string;
+  aimLat: number;
+  aimLng: number;
+  spread: PrismaTorpedoSpread;
+  torpedoTypeId?: string;
+  targetUnitId?: string;
+}): Promise<{ salvoId: string; headingDeg: number }> {
+  const engagement = await prisma.tacticalEngagement.findUniqueOrThrow({ where: { id: params.engagementId } });
+  if (engagement.status === "RESOLVED") throw new OrderValidationError("Cet engagement est terminé.");
+  if (engagement.arbiterPaused) throw new OrderValidationError("L'arbitre a suspendu le combat.");
+  if (engagement.status !== "AWAITING_MOVEMENT") throw new OrderValidationError("Les torpilles se tirent en phase de mouvement, pas de tir.");
+
+  const participant = await prisma.tacticalParticipant.findUnique({
+    where: { engagementId_unitId: { engagementId: params.engagementId, unitId: params.unitId } },
+    include: { unit: { include: { unitClass: true } } },
+  });
+  if (!participant || participant.teamId !== params.teamId) {
+    throw new OrderValidationError("Cette unité ne participe pas à cet engagement pour votre camp.");
+  }
+  const attacker = participant.unit;
+  if (attacker.status === "SUNK") throw new OrderValidationError("Cette unité est coulée.");
+  if (attacker.unitClass.category === "AIRCRAFT") {
+    throw new OrderValidationError("Un avion largue sa torpille en phase de tir classique, pas ici.");
+  }
+  if (attacker.unitClass.category === "SUBMARINE" && (attacker.depthBand === "MEDIUM" || attacker.depthBand === "DEEP")) {
+    throw new OrderValidationError("Torpilles impossibles en immersion moyenne ou grande — il faut remonter en surface ou faible immersion.");
+  }
+
+  const profile = attacker.unitClass.combatProfile as CombatProfile | null;
+  const battery = selectTorpedoBattery(profile, params.torpedoTypeId);
+  if (!battery) throw new OrderValidationError("Aucun tube lance-torpilles disponible.");
+  if (attacker.torpedoesRemaining != null && attacker.torpedoesRemaining < battery.count) {
+    throw new OrderValidationError("Pas assez de torpilles à bord pour une salve complète.");
+  }
+
+  const already = await prisma.tacticalTorpedoSalvo.findFirst({
+    where: { engagementId: params.engagementId, firedByUnitId: params.unitId, firedRoundNumber: engagement.roundNumber },
+  });
+  if (already) throw new OrderValidationError(`${attacker.name} : déjà tiré une salve de torpilles cette manche.`);
+
+  const origin = { lat: attacker.currentLat, lng: attacker.currentLng };
+  const headingDeg = bearingDeg(origin, { lat: params.aimLat, lng: params.aimLng });
+  const relativeBearing = headingDeg - (attacker.currentHeadingDeg ?? 0);
+  if (!isTorpedoArcClear(battery, relativeBearing)) {
+    throw new OrderValidationError("Ce cap est hors de l'arc de tir des tubes lance-torpilles.");
+  }
+
+  const salvo = await prisma.tacticalTorpedoSalvo.create({
+    data: {
+      engagementId: params.engagementId,
+      firedRoundNumber: engagement.roundNumber,
+      firedByUnitId: attacker.id,
+      firedByTeamId: params.teamId,
+      targetUnitId: params.targetUnitId,
+      torpedoTypeId: params.torpedoTypeId,
+      torpedoCount: battery.count,
+      spread: params.spread,
+      headingDeg,
+      speedKnots: battery.speedKnots,
+      maxRangeM: battery.rangeM,
+      reliability: battery.reliability ?? DEFAULT_TORPEDO_RELIABILITY,
+      currentLat: origin.lat,
+      currentLng: origin.lng,
+    },
+  });
+
+  if (attacker.torpedoesRemaining != null) {
+    await prisma.unit.update({
+      where: { id: attacker.id },
+      data: { torpedoesRemaining: Math.max(0, attacker.torpedoesRemaining - battery.count) },
+    });
+  }
+
+  return { salvoId: salvo.id, headingDeg };
+}
+
+type UnitRoundTrack = {
+  teamId: string;
+  category: string;
+  lengthMeters: number;
+  beamMeters: number;
+  track: ReturnType<typeof buildTimedTrack>;
+  status: string;
+  /** Le type Prisma complet (4 paliers), pas combat.ts::DepthBand (3 paliers, sans SURFACE — inadapté ici). */
+  depthBand: DepthBand;
+};
+
+/**
+ * Avance toutes les salves IN_TRANSIT de cet engagement d'une manche, et
+ * résout celles qui interceptent une cible ou dépassent leur portée
+ * maximale. Appelée depuis resolveMovementPhase, APRÈS que les positions
+ * réelles des unités pour cette manche sont connues (`unitTracks`) — c'est
+ * ce qui permet à une cible d'esquiver en ayant changé de cap depuis le
+ * lancement. Les coups résolus ici sont écrits en TacticalAction (phase
+ * FIRE, non appliqués) exactement comme un tir classique : resolveFirePhase
+ * de cette même manche les additionnera aux autres tirs simultanés au
+ * moment d'appliquer les dégâts, sans traitement spécial nécessaire.
+ */
+async function advanceTorpedoSalvos(params: {
+  engagementId: string;
+  roundNumber: number;
+  roundMinutes: number;
+  unitTracks: Map<string, UnitRoundTrack>;
+}) {
+  const salvos = await prisma.tacticalTorpedoSalvo.findMany({
+    where: { engagementId: params.engagementId, status: "IN_TRANSIT" },
+    include: { firedByUnit: { select: { name: true, unitClass: { select: { agility: true } } } } },
+  });
+  if (salvos.length === 0) return;
+
+  for (const salvo of salvos) {
+    const remainingRangeM = salvo.maxRangeM - salvo.distanceTraveledM;
+    if (remainingRangeM <= 0) {
+      await finalizeMissedSalvo(params.engagementId, salvo.id, params.roundNumber, salvo.firedByUnitId, salvo.firedByTeamId, salvo.targetUnitId, salvo.firedByUnit.name);
+      continue;
+    }
+
+    const roundTravelNm = (salvo.speedKnots * params.roundMinutes) / 60;
+    const cappedTravelNm = Math.min(roundTravelNm, remainingRangeM / NM_TO_M);
+    const origin = { lat: salvo.currentLat, lng: salvo.currentLng };
+    const endOfRound = destinationPoint(origin, salvo.headingDeg, cappedTravelNm);
+    const torpedoTrack = buildTimedTrack([origin, endOfRound], salvo.speedKnots);
+    const sampleDurationMinutes = salvo.speedKnots > 0 ? (cappedTravelNm / salvo.speedKnots) * 60 : 0;
+
+    // Point de plus courte approche avec chaque cible adverse encore active,
+    // en échantillonnant les deux trajectoires au même instant — la torpille
+    // ne tourne jamais (ligne droite), mais la cible peut avoir manœuvré.
+    let best: { unitId: string; distanceM: number; distanceTraveledAtApproachM: number; impactAngleDeg: number } | null = null;
+    for (const [unitId, u] of params.unitTracks) {
+      if (u.teamId === salvo.firedByTeamId) continue;
+      if (u.status === "SUNK") continue;
+      if (u.category === "AIRCRAFT") continue; // une torpille ne vise pas un avion
+      if (u.category === "SUBMARINE" && u.depthBand !== "SURFACE") continue; // une torpille classique ne touche pas un sous-marin immergé (même règle que submitTacticalFireShot)
+
+      for (let sampleMinute = 0; sampleMinute <= sampleDurationMinutes; sampleMinute += TORPEDO_SALVO_SAMPLE_STEP_MINUTES) {
+        const torpedoPos = torpedoTrack.positionAt(sampleMinute);
+        const targetPos = u.track.positionAt(sampleMinute);
+        const d = distanceNm(torpedoPos, targetPos) * NM_TO_M;
+        if (!best || d < best.distanceM) {
+          const distanceTraveledAtApproachM = salvo.distanceTraveledM + (sampleMinute / 60) * salvo.speedKnots * NM_TO_M;
+          const targetPosSlightlyBefore = u.track.positionAt(Math.max(0, sampleMinute - 0.5));
+          const targetHeadingAtApproach = bearingDeg(targetPosSlightlyBefore, targetPos);
+          const impactAngleDeg = (((salvo.headingDeg - targetHeadingAtApproach + 540) % 360) - 180);
+          best = { unitId, distanceM: d, distanceTraveledAtApproachM, impactAngleDeg };
+        }
+      }
+    }
+
+    const zoneWidthM = best
+      ? torpedoDangerZoneWidthM({ spread: salvo.spread as TorpedoSpreadType, distanceTraveledM: best.distanceTraveledAtApproachM, torpedoCount: salvo.torpedoCount })
+      : 0;
+    const intercepted = best !== null && best.distanceM <= zoneWidthM / 2;
+
+    if (!intercepted) {
+      const newDistanceTraveledM = salvo.distanceTraveledM + cappedTravelNm * NM_TO_M;
+      if (newDistanceTraveledM >= salvo.maxRangeM) {
+        await finalizeMissedSalvo(params.engagementId, salvo.id, params.roundNumber, salvo.firedByUnitId, salvo.firedByTeamId, salvo.targetUnitId, salvo.firedByUnit.name);
+      } else {
+        await prisma.tacticalTorpedoSalvo.update({
+          where: { id: salvo.id },
+          data: { currentLat: endOfRound.lat, currentLng: endOfRound.lng, distanceTraveledM: newDistanceTraveledM },
+        });
+      }
+      continue;
+    }
+
+    // Interception géométrique avérée : reste à savoir si le coup porte (voir combat.ts, torpedoSalvoHitChancePercent).
+    const targetUnit = await prisma.unit.findUniqueOrThrow({ where: { id: best!.unitId }, include: { unitClass: true } });
+    const intercept = resolveTorpedoSalvoIntercept({
+      targetLengthM: targetUnit.unitClass.lengthMeters ?? 100,
+      targetBeamM: targetUnit.unitClass.beamMeters ?? 12,
+      impactAngleDeg: best!.impactAngleDeg,
+      reliability: salvo.reliability,
+      dangerZoneWidthM: zoneWidthM,
+    });
+
+    const targetHealthMax = targetUnit.healthMax ?? 1;
+    const targetHealthBeforePhase = targetUnit.healthCurrent ?? targetHealthMax;
+    const damageRatio = targetHealthMax > 0 ? intercept.damagePoints / targetHealthMax : 0;
+
+    let localizedEffect: LocalizedEffectStored | null = null;
+    if (intercept.hit && targetUnit.unitClass.category === "SURFACE_SHIP") {
+      const { effect } = rollLocalizedDamage({ weaponType: "TORPEDO", damageRatio });
+      if (effect.type === "TURRET") {
+        const slot = pickWeaponSlotToDisable(targetUnit.unitClass.combatProfile as CombatProfile | null, targetUnit.disabledWeaponSlots);
+        if (slot) localizedEffect = { type: "WEAPON_DISABLED", slot };
+      } else if (effect.type === "ENGINE") {
+        localizedEffect = { type: "ENGINE", speedReductionRatio: effect.speedReductionRatio };
+      } else if (effect.type === "RUDDER" && !targetUnit.rudderJammed) {
+        localizedEffect = { type: "RUDDER" };
+      } else if (effect.type === "FIRE_CONTROL" && !targetUnit.fireControlDamaged) {
+        localizedEffect = { type: "FIRE_CONTROL" };
+      } else if (effect.type === "MAGAZINE") {
+        localizedEffect = { type: "MAGAZINE" };
+      }
+    }
+
+    const finalDamagePoints = localizedEffect?.type === "MAGAZINE" ? targetHealthBeforePhase : intercept.damagePoints;
+    const provisionalSunk = intercept.hit && Math.max(0, targetHealthBeforePhase - finalDamagePoints) <= 0;
+
+    const narrative =
+      localizedEffect?.type === "MAGAZINE"
+        ? describeMagazineHit(salvo.firedByUnit.name, targetUnit.name)
+        : `Après ${(best!.distanceTraveledAtApproachM / NM_TO_M).toFixed(1)} nm de course, ` +
+          describeShot({
+            attackerName: salvo.firedByUnit.name,
+            targetName: targetUnit.name,
+            weaponType: "TORPEDO",
+            hit: intercept.hit,
+            hits: intercept.hit ? 1 : 0,
+            damagePoints: finalDamagePoints,
+            damageRatio,
+            targetSunk: provisionalSunk,
+            rangeNm: best!.distanceM / NM_TO_M,
+          }) +
+          (localizedEffect ? " " + describeLocalizedEffect(localizedEffect, targetUnit.name) : "");
+
+    await prisma.tacticalAction.create({
+      data: {
+        engagementId: params.engagementId,
+        roundNumber: params.roundNumber,
+        phase: "FIRE",
+        unitId: salvo.firedByUnitId,
+        teamId: salvo.firedByTeamId,
+        targetUnitId: targetUnit.id,
+        weaponType: "TORPEDO",
+        weaponSlot: `torpedo-salvo:${salvo.id}`,
+        torpedoTypeId: salvo.torpedoTypeId,
+        resolved: true,
+        hit: intercept.hit,
+        hits: intercept.hit ? 1 : 0,
+        damagePoints: finalDamagePoints,
+        targetSunk: provisionalSunk,
+        hitChancePercent: intercept.hitChancePercent,
+        hitRoll: intercept.hitRoll,
+        localizedEffect: localizedEffect ?? undefined,
+        narrative,
+        // Sillage repéré au moment de l'IMPACT (approximation : le vrai
+        // moment "juste" serait le lancement, mais reprendre le mécanisme
+        // de réputation existant ici reste largement préférable à ne
+        // jamais rien révéler — voir fireTorpedoSalvo pour la limite assumée).
+        revealedShooter: true,
+        applied: false,
+      },
+    });
+
+    await prisma.tacticalTorpedoSalvo.update({
+      where: { id: salvo.id },
+      data: {
+        // Interceptée n'est pas synonyme de touchée : la zone de danger a
+        // croisé la route de la cible (voir plus haut), mais le jet de
+        // précision peut encore rater (intercept.hit) — dans les deux cas la
+        // salve est consommée, seul le statut final diffère.
+        status: intercept.hit ? "HIT" : "MISSED",
+        hitUnitId: intercept.hit ? targetUnit.id : null,
+        resolvedRoundNumber: params.roundNumber,
+        currentLat: targetUnit.currentLat,
+        currentLng: targetUnit.currentLng,
+        distanceTraveledM: best!.distanceTraveledAtApproachM,
+      },
+    });
+  }
+}
+
+async function finalizeMissedSalvo(
+  engagementId: string,
+  salvoId: string,
+  roundNumber: number,
+  firedByUnitId: string,
+  firedByTeamId: string,
+  targetUnitId: string | null,
+  firedByUnitName: string
+) {
+  await prisma.tacticalTorpedoSalvo.update({ where: { id: salvoId }, data: { status: "MISSED", resolvedRoundNumber: roundNumber } });
+  await prisma.tacticalAction.create({
+    data: {
+      engagementId,
+      roundNumber,
+      phase: "FIRE",
+      unitId: firedByUnitId,
+      teamId: firedByTeamId,
+      targetUnitId,
+      weaponType: "TORPEDO",
+      weaponSlot: `torpedo-salvo:${salvoId}`,
+      resolved: true,
+      hit: false,
+      hits: 0,
+      damagePoints: 0,
+      targetSunk: false,
+      hitChancePercent: 0,
+      hitRoll: 100,
+      narrative: `La salve de ${firedByUnitName} a épuisé sa portée sans avoir croisé la route d'une cible.`,
+      applied: true, // rien à appliquer, pas la peine d'attendre resolveFirePhase pour ce cas.
+    },
+  });
 }
 
 // ── Résolution : tir ────────────────────────────────────────
@@ -1411,6 +1789,14 @@ export async function endEngagement(
   await prisma.tacticalEngagement.update({
     where: { id: engagementId },
     data: { status: "RESOLVED", endReason: reason, endedAt: new Date() },
+  });
+  // Salves encore en transit à la fin de l'engagement : pas de manche
+  // suivante pour les faire avancer, elles n'atteindront donc jamais leur
+  // cible — les marquer MISSED plutôt que de les laisser IN_TRANSIT pour
+  // toujours (voir advanceTorpedoSalvos).
+  await prisma.tacticalTorpedoSalvo.updateMany({
+    where: { engagementId, status: "IN_TRANSIT" },
+    data: { status: "MISSED" },
   });
 }
 

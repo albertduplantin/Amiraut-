@@ -69,7 +69,14 @@ export type GunBattery = {
   arc: GunArc;
 };
 /** Les tubes lance-torpilles sont montés sur l'axe du navire : arc au travers uniquement, par défaut. */
-export type TorpedoBattery = { count: number; rangeM: number; speedKnots: number; arc?: GunArc };
+export type TorpedoBattery = {
+  count: number;
+  rangeM: number;
+  speedKnots: number;
+  arc?: GunArc;
+  /** Fiabilité (0-1) — voir DEFAULT_TORPEDO_RELIABILITY dans la section "Salve de torpilles en transit" ci-dessous si absente. */
+  reliability?: number;
+};
 
 /**
  * Variante de torpille sélectionnable (sous-marins) : G7a à vapeur (44nds,
@@ -77,7 +84,7 @@ export type TorpedoBattery = { count: number; rangeM: number; speedKnots: number
  * G7e électrique (30nds, sans sillage, mais plus lente donc plus facile à
  * esquiver). Un choix tactique réel, pas juste un chiffre différent.
  */
-export type TorpedoTypeSpec = { id: string; label: string; speedKnots: number; rangeM: number; wakeVisible: boolean };
+export type TorpedoTypeSpec = { id: string; label: string; speedKnots: number; rangeM: number; wakeVisible: boolean; reliability?: number };
 
 /**
  * Charge de bombes (avions uniquement) — voir bombHitChanceBreakdown. Le
@@ -109,7 +116,15 @@ export function selectTorpedoBattery(
 ): TorpedoBattery | null {
   if (torpedoTypeId) {
     const type = profile?.torpedoTypes?.find((t) => t.id === torpedoTypeId);
-    if (type) return { count: profile?.torpedoTubes?.count ?? 1, rangeM: type.rangeM, speedKnots: type.speedKnots };
+    if (type) {
+      return {
+        count: profile?.torpedoTubes?.count ?? 1,
+        rangeM: type.rangeM,
+        speedKnots: type.speedKnots,
+        arc: profile?.torpedoTubes?.arc,
+        reliability: type.reliability ?? profile?.torpedoTubes?.reliability,
+      };
+    }
   }
   return profile?.torpedoTubes ?? null;
 }
@@ -409,6 +424,101 @@ export function resolveTorpedoEngagement(params: {
   for (let i = 0; i < hits; i++) damagePoints += torpedoDamagePerHit(rng);
 
   return { battery, hitChancePercent, hitChanceBreakdown, hitRoll, hit: true, hits, damagePoints };
+}
+
+// ── Salve de torpilles en transit (navires/sous-marins) ──────
+//
+// Recherche 2026-08-14 (règles originales Paul Bois, §"dynamique du jeu" —
+// une torpille prend 5 à 10 minutes et plus pour atteindre sa cible, à la
+// différence de l'artillerie résolue dans la même manche — et Amirauté 2013
+// de Francis Marlière, §2.2) : ces fonctions servent le nouveau modèle où
+// une salve de torpilles avance manche après manche comme une unité
+// miniature (voir torpedoSalvo.ts) plutôt que d'être résolue instantanément
+// à l'ancienne (resolveTorpedoEngagement ci-dessus, conservée telle quelle
+// pour les torpilles AÉRIENNES — larguées à quelques centaines de mètres,
+// leur temps de trajet est négligeable devant la durée d'une manche).
+// L'interception y est d'abord GÉOMÉTRIQUE (la route de la salve croise-t-
+// elle celle de la cible ?), ces fonctions ne couvrent que la seconde étape,
+// probabiliste, une fois cette interception avérée.
+
+export type TorpedoSpreadType = "NARROW" | "STANDARD" | "WIDE";
+
+/** % de la distance parcourue (par la salve, en tout, pas seulement cette manche) qui s'ajoute à la largeur de base — Amirauté 2013 §2.2.2.3. */
+const TORPEDO_SPREAD_WIDTH_PERCENT: Record<TorpedoSpreadType, number> = {
+  NARROW: 0.01,
+  STANDARD: 0.02,
+  WIDE: 0.04,
+};
+
+const YARD_TO_M = 0.9144;
+
+/**
+ * Largeur de la zone de danger (mètres), dans laquelle la cible est
+ * susceptible d'être atteinte : 100 yards de base + n% de la distance
+ * parcourue × nombre de torpilles de la salve. Une zone large aide à
+ * placer la salve sur la cible mais dilue d'autant les chances qu'un coup
+ * y porte réellement — voir torpedoSalvoHitChancePercent.
+ */
+export function torpedoDangerZoneWidthM(params: { spread: TorpedoSpreadType; distanceTraveledM: number; torpedoCount: number }): number {
+  const baseYards = 100;
+  const pct = TORPEDO_SPREAD_WIDTH_PERCENT[params.spread];
+  const widthYards = baseYards + pct * (params.distanceTraveledM / YARD_TO_M) * params.torpedoCount;
+  return widthYards * YARD_TO_M;
+}
+
+/** Fiabilité par défaut si un type de torpille ne la précise pas — proche de la moyenne toutes marines confondues pour un détonateur à contact (Amirauté 2013 §2.2.2.4, plutôt qu'un détonateur magnétique, plus capricieux et très variable selon la nation et la date). */
+export const DEFAULT_TORPEDO_RELIABILITY = 0.75;
+
+/**
+ * Chance qu'un coup porte, UNE FOIS établi que la zone de danger de la
+ * salve a croisé la position de la cible (voir advanceTorpedoSalvos) — pas
+ * la chance globale de toucher, qui dépend d'abord de cette géométrie.
+ * Formule Amirauté 2013 §2.2.2.2 : (taille relative de la cible × fiabilité
+ * des torpilles) / zone de danger.
+ */
+export function torpedoSalvoHitChancePercent(params: {
+  targetLengthM: number;
+  targetBeamM: number;
+  /** Angle entre le cap de la salve et celui de la cible au point de plus courte approche (0°/180° = cible de face/de dos, 90° = travers). */
+  impactAngleDeg: number;
+  reliability: number;
+  dangerZoneWidthM: number;
+}): number {
+  const relativeSizeM = Math.max(
+    params.targetBeamM,
+    params.targetLengthM * Math.abs(Math.sin((params.impactAngleDeg * Math.PI) / 180))
+  );
+  if (params.dangerZoneWidthM <= 0) return 0;
+  return clamp((relativeSizeM * params.reliability * 100) / params.dangerZoneWidthM, 0, 90);
+}
+
+/** Même distribution de dégâts qu'une torpille classique (torpedoDamagePerHit) : la physique de l'explosion sous la flottaison ne change pas, seule la façon de décider si le coup porte change. */
+function torpedoSalvoDamagePerHit(rng: () => number): number {
+  const variability = 0.75 + rng() * 0.6; // 0.75x à 1.35x
+  return REFERENCE_DAMAGE_PER_TORPEDO_HIT * variability;
+}
+
+export type TorpedoSalvoInterceptResult = {
+  hitChancePercent: number;
+  hitRoll: number;
+  hit: boolean;
+  damagePoints: number;
+};
+
+/** Résout le jet probabiliste une fois l'interception géométrique établie. */
+export function resolveTorpedoSalvoIntercept(params: {
+  targetLengthM: number;
+  targetBeamM: number;
+  impactAngleDeg: number;
+  reliability: number;
+  dangerZoneWidthM: number;
+  rng?: () => number;
+}): TorpedoSalvoInterceptResult {
+  const rng = params.rng ?? Math.random;
+  const hitChancePercent = torpedoSalvoHitChancePercent(params);
+  const hitRoll = rng() * 100;
+  const hit = hitRoll < hitChancePercent;
+  return { hitChancePercent, hitRoll, hit, damagePoints: hit ? torpedoSalvoDamagePerHit(rng) : 0 };
 }
 
 // ── Bombardement aérien (avion → navire) ────────────────────

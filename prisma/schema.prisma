@@ -313,6 +313,9 @@ model Unit {
   tacticalActions        TacticalAction[]
   tacticalTargetedBy     TacticalAction[]      @relation("TacticalTarget")
   tacticalContactedAs    TacticalContact[]     @relation("TacticalContactTarget")
+  torpedoSalvosFired     TacticalTorpedoSalvo[] @relation("TorpedoSalvoFirer")
+  torpedoSalvosTargeted  TacticalTorpedoSalvo[] @relation("TorpedoSalvoTarget")
+  torpedoSalvosHitBy     TacticalTorpedoSalvo[] @relation("TorpedoSalvoHit")
 
   @@index([scenarioId, fleetId])
 }
@@ -679,6 +682,7 @@ model TacticalEngagement {
   contacts     TacticalContact[]
   submissions  TacticalSubmission[]
   messages     TacticalMessage[]
+  torpedoSalvos TacticalTorpedoSalvo[]
 
   @@index([scenarioId, status])
 }
@@ -852,4 +856,69 @@ enum TacticalMessageKind {
   ARBITER_EVENT
   /// Message narratif produit par le moteur.
   SYSTEM
+}
+
+// ── Salve de torpilles en transit (navires/sous-marins) ────────────
+//
+// Recherche 2026-08-14 (règles originales Paul Bois §"dynamique du jeu" +
+// Amirauté 2013 de Francis Marlière §2.2) : contrairement à l'artillerie,
+// une torpille n'atteint pas sa cible instantanément — sa vitesse est trop
+// faible relativement à la distance de tir (souvent 5-10 minutes de trajet
+// et plus). Le tireur choisit donc un CAP (pas juste "je vise ce navire")
+// et une largeur de salve, la torpille avance ensuite manche après manche
+// pendant la RÉSOLUTION DU MOUVEMENT (pas du tir) jusqu'à interception,
+// portée max dépassée, ou fin de l'engagement — la cible peut donc esquiver
+// en changeant de cap après le lancement, ce qu'un tir de canon ne permet
+// jamais. Ne concerne QUE les torpilles de navires/sous-marins : une
+// torpille aérienne, larguée à très courte distance (quelques centaines de
+// mètres), reste résolue instantanément via TacticalAction/WeaponType.TORPEDO
+// classique — sa distance de largage est déjà négligeable devant la durée
+// d'une manche tactique. Voir torpedoSalvo.ts.
+model TacticalTorpedoSalvo {
+  id               String              @id @default(cuid())
+  engagementId     String
+  engagement       TacticalEngagement  @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  firedRoundNumber Int
+  firedByUnitId    String
+  firedByUnit      Unit                @relation("TorpedoSalvoFirer", fields: [firedByUnitId], references: [id])
+  firedByTeamId    String
+  /// Cible visée à l'origine — indicatif seulement (aide à l'affichage/à la narration), l'interception réelle est purement géométrique et ne dépend pas de ce champ.
+  targetUnitId     String?
+  targetUnit       Unit?               @relation("TorpedoSalvoTarget", fields: [targetUnitId], references: [id])
+  torpedoTypeId    String?
+  /// Nombre de torpilles de la salve — détermine la largeur de la zone de danger (voir torpedoSalvo.ts) et est déduit du stock du tireur au lancement.
+  torpedoCount     Int
+  spread           TorpedoSpread       @default(STANDARD)
+  headingDeg       Float
+  speedKnots       Float
+  maxRangeM        Float
+  /// Fiabilité (0-1) figée au lancement — voir DEFAULT_TORPEDO_RELIABILITY dans combat.ts.
+  reliability      Float               @default(0.75)
+  /// Position courante de la salve (avance chaque manche tant que IN_TRANSIT) — pas la position du tireur, qui a pu bouger depuis.
+  currentLat       Float
+  currentLng       Float
+  distanceTraveledM Float              @default(0)
+  status           TorpedoSalvoStatus  @default(IN_TRANSIT)
+  hitUnitId        String?
+  hitUnit          Unit?               @relation("TorpedoSalvoHit", fields: [hitUnitId], references: [id])
+  resolvedRoundNumber Int?
+  createdAt        DateTime            @default(now())
+
+  @@index([engagementId, status])
+}
+
+enum TorpedoSpread {
+  /// 100 yards + 1% de la distance parcourue × n torpilles (Amirauté 2013, §2.2.2.3).
+  NARROW
+  /// 100 yards + 2% × distance × n.
+  STANDARD
+  /// 100 yards + 4% × distance × n — croise plus facilement la route de la cible, mais dilue les chances qu'un coup porte.
+  WIDE
+}
+
+enum TorpedoSalvoStatus {
+  IN_TRANSIT
+  HIT
+  /// Portée maximale dépassée sans interception — la salve a coulé sans avoir croisé la route d'une cible.
+  MISSED
 }

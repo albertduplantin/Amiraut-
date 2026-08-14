@@ -32,6 +32,7 @@ import {
   submitFireShotAction,
   finishFirePhaseAction,
   sendBattleChatAction,
+  fireTorpedoSalvoAction,
 } from "./tacticalActions";
 import { SunkShipModal, type SunkShipInfo } from "./SunkShipModal";
 
@@ -108,6 +109,10 @@ type OwnUnit = {
   profileImageUrl: string | null;
   /** Maniabilité en combat air-air (avions uniquement) — voir UnitClass.agility. */
   agility: number | null;
+  /** A déjà tiré une salve de torpilles cette manche (navires/sous-marins) — voir TacticalTorpedoSalvo. */
+  firedTorpedoSalvoThisRound: boolean;
+  /** Salves tirées lors de manches précédentes, toujours en transit (ni touché, ni portée dépassée). */
+  inTransitTorpedoSalvoCount: number;
 };
 
 type Contact = {
@@ -175,7 +180,16 @@ const gunSlot = (index: number) => `gun:${index}`;
 function weaponSlotsForShip(ship: OwnUnit): string[] {
   const guns = ship.combatProfile?.guns ?? [];
   const slots = guns.map((_, i) => gunSlot(i));
-  const hasTorpedoes = ship.combatProfile?.torpedoTubes && (ship.torpedoesRemaining == null || ship.torpedoesRemaining > 0);
+  // Torpille d'AVION seulement ici : les torpilles de navire/sous-marin se
+  // tirent désormais en phase de mouvement (voir la section "Torpilles" du
+  // panneau de mouvement, plus bas) — une torpille met plusieurs minutes à
+  // atteindre sa cible, la cible doit donc pouvoir esquiver en changeant de
+  // cap après le lancement, ce qu'une résolution en phase de tir ne permet
+  // jamais. Recherche 2026-08-14 (Paul Bois + Amirauté 2013 de F. Marlière).
+  const hasTorpedoes =
+    ship.category === "AIRCRAFT" &&
+    ship.combatProfile?.torpedoTubes &&
+    (ship.torpedoesRemaining == null || ship.torpedoesRemaining > 0);
   if (hasTorpedoes) slots.push(TORPEDO_SLOT);
   // Une seule passe de bombardement par engagement (pas de décompte de
   // munitions comme les torpilles) — reflète un avion qui largue toute sa
@@ -295,6 +309,12 @@ export function TacticalView(props: {
   const [selectedWeaponSlot, setSelectedWeaponSlot] = useState<string | null>(null);
   const [selectedTorpedoTypeId, setSelectedTorpedoTypeId] = useState<string | null>(null);
   const [pickingTarget, setPickingTarget] = useState(false);
+  /** Vise une salve de torpilles (navire/sous-marin) : le prochain clic sur la carte fixe le cap plutôt que d'ajouter un point de trajet. */
+  const [torpedoAiming, setTorpedoAiming] = useState(false);
+  const [torpedoAimPoint, setTorpedoAimPoint] = useState<LatLng | null>(null);
+  const [torpedoSpread, setTorpedoSpread] = useState<"NARROW" | "STANDARD" | "WIDE">("STANDARD");
+  const [torpedoSalvoTypeId, setTorpedoSalvoTypeId] = useState<string | null>(null);
+  const [torpedoSalvoResult, setTorpedoSalvoResult] = useState<string | null>(null);
   const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null);
   /** Bascule joueur : projection en pointillé de la position future des contacts ennemis s'ils gardent cap/vitesse (phase de mouvement uniquement). */
   const [showEnemyProjection, setShowEnemyProjection] = useState(false);
@@ -331,6 +351,9 @@ export function TacticalView(props: {
       for (const u of props.ownUnits) init[u.id] = initialDraftFor(savedMovementByUnit[u.id]);
       return init;
     });
+    setTorpedoAiming(false);
+    setTorpedoAimPoint(null);
+    setTorpedoSalvoResult(null);
   }
 
   const hasSubmittedThisPhase = props.submittedTeamIds.includes(props.teamId);
@@ -427,6 +450,10 @@ export function TacticalView(props: {
   }
 
   function handleMapClick(pos: LatLng) {
+    if (torpedoAiming) {
+      setTorpedoAimPoint(pos);
+      return;
+    }
     if (!isMovementPhase || !selectedShip || !draft) return;
     if (selectedShip.rudderJammed) {
       setError("Gouvernail bloqué : le navire poursuit tout droit à pleine vitesse disponible, rien à tracer.");
@@ -452,6 +479,11 @@ export function TacticalView(props: {
       setSelectedShipId(markerId.slice(4));
     } else if (markerId.startsWith("contact-")) {
       const targetId = markerId.slice(8);
+      if (torpedoAiming) {
+        const target = liveContacts.find((c) => c.targetUnitId === targetId);
+        if (target) setTorpedoAimPoint({ lat: target.lat, lng: target.lng });
+        return;
+      }
       if (pickingTarget) {
         setSelectedTargetId(targetId);
         setPickingTarget(false);
@@ -491,6 +523,33 @@ export function TacticalView(props: {
       const result = await finishMovementPhaseAction({ engagementId: props.engagementId });
       if (!result.ok) setError(result.error);
       else router.refresh();
+    });
+  }
+
+  /** Tire la salve visée — indépendant du mouvement du navire (voir fireTorpedoSalvo côté serveur : le cap est déduit du point visé, l'origine reste la position du navire au début de la manche). */
+  function fireSalvo() {
+    if (!selectedShip || !torpedoAimPoint) return;
+    const shipId = selectedShip.id;
+    setError(null);
+    setTorpedoSalvoResult(null);
+    startTransition(async () => {
+      const result = await fireTorpedoSalvoAction({
+        engagementId: props.engagementId,
+        unitId: shipId,
+        aimLat: torpedoAimPoint.lat,
+        aimLng: torpedoAimPoint.lng,
+        spread: torpedoSpread,
+        torpedoTypeId: torpedoSalvoTypeId ?? undefined,
+        targetUnitId: selectedTargetId ?? undefined,
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setTorpedoAiming(false);
+      setTorpedoAimPoint(null);
+      setTorpedoSalvoResult(`Salve tirée, cap ${Math.round(result.headingDeg)}° — elle avancera au fil des prochaines manches.`);
+      router.refresh();
     });
   }
 
@@ -1010,6 +1069,15 @@ export function TacticalView(props: {
                 isPending={isPending}
                 onClear={clearDraftPath}
                 onSave={saveShipMovement}
+                torpedoAiming={torpedoAiming}
+                setTorpedoAiming={setTorpedoAiming}
+                torpedoAimPoint={torpedoAimPoint}
+                torpedoSpread={torpedoSpread}
+                setTorpedoSpread={setTorpedoSpread}
+                torpedoSalvoTypeId={torpedoSalvoTypeId}
+                setTorpedoSalvoTypeId={setTorpedoSalvoTypeId}
+                torpedoSalvoResult={torpedoSalvoResult}
+                onFireSalvo={fireSalvo}
               />
             ) : (
               <FireDashboard
@@ -1154,6 +1222,15 @@ function MovementDashboard({
   isPending,
   onClear,
   onSave,
+  torpedoAiming,
+  setTorpedoAiming,
+  torpedoAimPoint,
+  torpedoSpread,
+  setTorpedoSpread,
+  torpedoSalvoTypeId,
+  setTorpedoSalvoTypeId,
+  torpedoSalvoResult,
+  onFireSalvo,
 }: {
   ship: OwnUnit;
   minBudgetNm: number;
@@ -1171,7 +1248,19 @@ function MovementDashboard({
   isPending: boolean;
   onClear: () => void;
   onSave: () => void;
+  torpedoAiming: boolean;
+  setTorpedoAiming: (v: boolean) => void;
+  torpedoAimPoint: LatLng | null;
+  torpedoSpread: "NARROW" | "STANDARD" | "WIDE";
+  setTorpedoSpread: (v: "NARROW" | "STANDARD" | "WIDE") => void;
+  torpedoSalvoTypeId: string | null;
+  setTorpedoSalvoTypeId: (v: string | null) => void;
+  torpedoSalvoResult: string | null;
+  onFireSalvo: () => void;
 }) {
+  const torpedoBattery = ship.combatProfile?.torpedoTubes ?? null;
+  const torpedoTypes = ship.combatProfile?.torpedoTypes ?? null;
+  const outOfTorpedoes = ship.torpedoesRemaining != null && ship.torpedoesRemaining < (torpedoBattery?.count ?? 1);
   return (
     <div className="space-y-3">
       <div>
@@ -1230,6 +1319,91 @@ function MovementDashboard({
           {isPending ? "Envoi…" : positioned ? "Revalider ce navire" : "Valider le mouvement de ce navire"}
         </button>
       </div>
+
+      {torpedoBattery && (
+        <div className="space-y-2 rounded-md border border-slate-700 bg-slate-900 p-3">
+          <h3 className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <span>Torpilles</span>
+            {ship.torpedoesRemaining != null && <span className="font-normal normal-case text-slate-500">{ship.torpedoesRemaining} restantes</span>}
+          </h3>
+          <p className="text-[11px] text-slate-500">
+            Vise un cap, pas un point d&apos;impact — la salve met plusieurs minutes à arriver et peut être esquivée si la cible change de cap
+            entre-temps.
+          </p>
+          {ship.firedTorpedoSalvoThisRound ? (
+            <p className="text-xs text-emerald-400">✓ Salve tirée cette manche.</p>
+          ) : (
+            <>
+              {torpedoTypes && torpedoTypes.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {torpedoTypes.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setTorpedoSalvoTypeId(t.id)}
+                      className={`rounded-md px-2 py-1 text-[11px] transition ${
+                        torpedoSalvoTypeId === t.id ? "bg-brass-900/50 ring-1 ring-brass-500" : "border border-slate-700 hover:bg-slate-800"
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-1">
+                {(["NARROW", "STANDARD", "WIDE"] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setTorpedoSpread(s)}
+                    className={`flex-1 rounded-md px-2 py-1 text-[11px] transition ${
+                      torpedoSpread === s ? "bg-brass-900/50 ring-1 ring-brass-500" : "border border-slate-700 hover:bg-slate-800"
+                    }`}
+                    title={
+                      s === "NARROW"
+                        ? "Étroite : plus précise si elle porte, mais croise moins facilement la route de la cible."
+                        : s === "WIDE"
+                          ? "Large : croise plus facilement la route de la cible, mais dilue les chances qu'un coup y porte."
+                          : "Standard : compromis."
+                    }
+                  >
+                    {s === "NARROW" ? "Étroite" : s === "WIDE" ? "Large" : "Standard"}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setTorpedoAiming(!torpedoAiming)}
+                disabled={outOfTorpedoes}
+                className={`w-full rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                  torpedoAiming
+                    ? "bg-orange-800 hover:bg-orange-700"
+                    : outOfTorpedoes
+                      ? "cursor-not-allowed border border-slate-800 opacity-40"
+                      : "border border-slate-700 hover:bg-slate-800"
+                }`}
+              >
+                {outOfTorpedoes ? "Plus assez de torpilles" : torpedoAiming ? "Cliquez la carte pour viser…" : "Viser sur la carte"}
+              </button>
+              {torpedoAimPoint && (
+                <div className="text-[11px] text-slate-500">
+                  Point visé : {torpedoAimPoint.lat.toFixed(3)}, {torpedoAimPoint.lng.toFixed(3)}
+                </div>
+              )}
+              <button
+                onClick={onFireSalvo}
+                disabled={!torpedoAimPoint || outOfTorpedoes}
+                className="w-full rounded-md bg-red-800 px-3 py-1.5 text-xs font-medium hover:bg-red-700 disabled:opacity-40"
+              >
+                Tirer la salve
+              </button>
+            </>
+          )}
+          {torpedoSalvoResult && <p className="text-xs text-emerald-400">{torpedoSalvoResult}</p>}
+          {ship.inTransitTorpedoSalvoCount > 0 && (
+            <p className="text-[11px] text-amber-400">
+              {ship.inTransitTorpedoSalvoCount} salve{ship.inTransitTorpedoSalvoCount > 1 ? "s" : ""} déjà en transit, en attente d&apos;interception.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

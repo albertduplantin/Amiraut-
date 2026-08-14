@@ -134,6 +134,23 @@ async function renderTacticalView(engagementId: string, teamId: string) {
   const ownFireActionsThisRound = await prisma.tacticalAction.findMany({
     where: { engagementId, roundNumber: engagement.roundNumber, phase: "FIRE", teamId },
   });
+
+  // Salves de torpilles propres, tous statuts confondus (voir TacticalView,
+  // section "Torpilles" du panneau de mouvement) : sert à savoir si un
+  // navire a déjà tiré cette manche-ci, et combien de salves antérieures
+  // sont encore en transit.
+  const ownTorpedoSalvos = await prisma.tacticalTorpedoSalvo.findMany({
+    where: { engagementId, firedByTeamId: teamId },
+    select: { firedByUnitId: true, firedRoundNumber: true, status: true },
+  });
+  const firedTorpedoThisRoundByUnit = new Set(
+    ownTorpedoSalvos.filter((s) => s.firedRoundNumber === engagement.roundNumber).map((s) => s.firedByUnitId)
+  );
+  const inTransitSalvoCountByUnit = new Map<string, number>();
+  for (const s of ownTorpedoSalvos) {
+    if (s.status !== "IN_TRANSIT" || s.firedRoundNumber === engagement.roundNumber) continue;
+    inTransitSalvoCountByUnit.set(s.firedByUnitId, (inTransitSalvoCountByUnit.get(s.firedByUnitId) ?? 0) + 1);
+  }
   // Navires déjà repositionnés cette manche (soumission par navire, voir
   // TacticalView) : sert à l'indicateur "validé" dans la liste et à
   // pré-remplir le brouillon avec le trajet déjà enregistré si le joueur
@@ -264,6 +281,8 @@ async function renderTacticalView(engagementId: string, teamId: string) {
         fireControlDamaged: u.fireControlDamaged,
         profileImageUrl: u.unitClass.profileImageUrl,
         agility: u.unitClass.agility,
+        firedTorpedoSalvoThisRound: firedTorpedoThisRoundByUnit.has(u.id),
+        inTransitTorpedoSalvoCount: inTransitSalvoCountByUnit.get(u.id) ?? 0,
       }))}
       contacts={Array.from(bestContactByTarget.values()).map((c) => {
         const observer = ownUnits.find((u) => u.id === c.observerUnitId);
