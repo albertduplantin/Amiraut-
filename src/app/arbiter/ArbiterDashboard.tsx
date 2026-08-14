@@ -16,6 +16,8 @@ import {
   setWeatherAction,
   updateUnitPositionAction,
   updateFleetPositionAction,
+  previewShipResolutionAction,
+  applyShipResolutionAction,
 } from "./actions";
 import {
   toggleArbiterPauseAction,
@@ -73,6 +75,22 @@ type DetectionDto = {
   systemProposed: boolean;
 };
 
+/**
+ * Détection navire-contre-navire confirmée mais jamais engagée — filet
+ * automatique supervisé par l'arbitre (retour utilisateur 2026-08-14).
+ * Scénario entier, pas juste le tour courant : une détection peut traîner
+ * plusieurs tours avant que l'arbitre ne juge bon de la trancher.
+ */
+type PendingShipEncounterDto = {
+  id: string;
+  observerName: string;
+  observerTeam: string;
+  targetName: string;
+  targetTeam: string;
+  turnNumber: number;
+  cpaDistanceNm: number;
+};
+
 type EngagementDto = {
   id: string;
   roundNumber: number;
@@ -93,6 +111,9 @@ type EngagementDto = {
     healthMax: number | null;
   }[];
 };
+
+/** Forme exacte du résultat prévisualisé — dérivée de l'action serveur plutôt que ré-importée de tacticalEngine.ts (fichier "server only"). */
+type ShipPreview = Extract<Awaited<ReturnType<typeof previewShipResolutionAction>>, { ok: true }>["preview"];
 
 type Selection = { kind: "unit"; unitId: string } | { kind: "fleet"; fleetId: string } | null;
 type RightPanel = "overview" | "weather" | "detections" | "combats" | null;
@@ -119,6 +140,7 @@ export function ArbiterDashboard(props: {
   teams: { id: string; name: string; colorHex: string }[];
   units: UnitDto[];
   detections: DetectionDto[];
+  pendingShipEncounters: PendingShipEncounterDto[];
   engagements: EngagementDto[];
 }) {
   const router = useRouter();
@@ -379,7 +401,7 @@ export function ArbiterDashboard(props: {
           <PanelTabButton
             label={`Détections${props.detections.length > 0 ? ` (${props.detections.length})` : ""}`}
             active={rightPanel === "detections"}
-            highlight={props.turnStatus === "PENDING_ARBITER_REVIEW"}
+            highlight={props.turnStatus === "PENDING_ARBITER_REVIEW" || props.pendingShipEncounters.length > 0}
             onClick={() => setRightPanel(rightPanel === "detections" ? null : "detections")}
           />
           <PanelTabButton
@@ -526,6 +548,7 @@ export function ArbiterDashboard(props: {
                 turnStatus={props.turnStatus}
                 units={units}
                 detections={props.detections}
+                pendingShipEncounters={props.pendingShipEncounters}
                 hoveredDetectionId={hoveredDetectionId}
                 onHover={setHoveredDetectionId}
                 currentWeather={props.weather}
@@ -694,6 +717,7 @@ function DetectionsPanel(props: {
   turnStatus: string;
   units: UnitDto[];
   detections: DetectionDto[];
+  pendingShipEncounters: PendingShipEncounterDto[];
   hoveredDetectionId: string | null;
   onHover: (id: string | null) => void;
   /** Météo du tour EN COURS (celui qu'on s'apprête à publier) — sert de pré-remplissage pour le tour suivant, rarement très différente d'une manche à l'autre. */
@@ -708,16 +732,27 @@ function DetectionsPanel(props: {
   currentTurnDurationMinutes: number;
 }) {
   const [manualObserver, setManualObserver] = useState(props.units[0]?.id ?? "");
-  if (props.turnStatus !== "PENDING_ARBITER_REVIEW" && props.turnStatus !== "RESOLVING") {
+  const canReviewTurn = props.turnStatus === "PENDING_ARBITER_REVIEW" || props.turnStatus === "RESOLVING";
+
+  // Filet automatique navire-contre-navire (retour utilisateur 2026-08-14) :
+  // disponible à tout moment, quel que soit le tour en cours — contrairement
+  // au reste du panneau ci-dessous, jamais gated par turnStatus, puisque le
+  // but est justement de rattraper des détections restées sans suite depuis
+  // plusieurs tours.
+  if (!canReviewTurn) {
     return (
-      <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-slate-400">Détections</h2>
-        <p className="text-sm text-slate-500">Rien à revoir pour l&apos;instant — attendez que tous les ordres du tour soient soumis.</p>
+      <div className="space-y-4">
+        <ShipEncountersSection encounters={props.pendingShipEncounters} />
+        <div className="space-y-2">
+          <h2 className="text-sm font-semibold text-slate-400">Détections</h2>
+          <p className="text-sm text-slate-500">Rien à revoir pour l&apos;instant — attendez que tous les ordres du tour soient soumis.</p>
+        </div>
       </div>
     );
   }
   return (
     <div className="space-y-4">
+      <ShipEncountersSection encounters={props.pendingShipEncounters} />
       <h2 className="text-sm font-semibold text-slate-400">Détections proposées ({props.detections.length})</h2>
       <ul className="space-y-2">
         {props.detections.map((d) => (
@@ -867,6 +902,123 @@ function DetectionsPanel(props: {
         </form>
       </div>
     </div>
+  );
+}
+
+/**
+ * Filet automatique navire-contre-navire, supervisé par l'arbitre (retour
+ * utilisateur 2026-08-14) : liste les détections confirmées navire-navire
+ * jamais engagées, quel que soit le tour où elles ont été confirmées. Pour
+ * chaque contact, "Proposer" calcule un résultat SANS RIEN ÉCRIRE en base
+ * (previewShipResolutionAction) ; l'arbitre voit narration + dégâts avant
+ * de choisir "Appliquer" (persiste exactement ce qui a été prévisualisé,
+ * aucun nouveau tirage — voir applyAutomaticShipResolution côté serveur)
+ * ou "Ignorer" (referme l'aperçu, rien ne change, le contact reste dans la
+ * liste pour plus tard).
+ */
+function ShipEncountersSection({ encounters }: { encounters: PendingShipEncounterDto[] }) {
+  if (encounters.length === 0) return null;
+  return (
+    <div className="space-y-2 rounded-md border border-amber-800/60 bg-amber-950/20 p-3">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-400">
+        Filet automatique — contacts navires en attente ({encounters.length})
+      </h3>
+      <p className="text-xs text-slate-500">
+        Détections confirmées navire contre navire, sans engagement tactique ni résolution depuis. Rien ne s&apos;applique tant
+        que vous n&apos;avez pas approuvé le résultat proposé.
+      </p>
+      <ul className="space-y-2">
+        {encounters.map((e) => (
+          <ShipEncounterItem key={e.id} encounter={e} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ShipEncounterItem({ encounter }: { encounter: PendingShipEncounterDto }) {
+  const [isPending, startTransition] = useTransition();
+  const [preview, setPreview] = useState<ShipPreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [applied, setApplied] = useState(false);
+
+  function propose() {
+    setError(null);
+    startTransition(async () => {
+      const res = await previewShipResolutionAction({ detectionId: encounter.id });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setPreview(res.preview);
+    });
+  }
+
+  function apply() {
+    if (!preview) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await applyShipResolutionAction({ detectionId: encounter.id, preview });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setApplied(true);
+    });
+  }
+
+  if (applied) {
+    return (
+      <li className="rounded-md border border-emerald-800 bg-emerald-950/30 p-2 text-xs text-emerald-300">
+        Résolution appliquée — {encounter.observerName} vs {encounter.targetName}.
+      </li>
+    );
+  }
+
+  return (
+    <li className="rounded-md border border-slate-800 bg-slate-900 p-2 text-xs">
+      <div>
+        <span className="font-medium">{encounter.observerName}</span> ({encounter.observerTeam}) vs{" "}
+        <span className="font-medium">{encounter.targetName}</span> ({encounter.targetTeam})
+      </div>
+      <div className="text-slate-500">
+        Tour {encounter.turnNumber} · CPA {encounter.cpaDistanceNm.toFixed(1)}nm
+      </div>
+
+      {!preview ? (
+        <button
+          onClick={propose}
+          disabled={isPending}
+          className="mt-2 rounded bg-amber-800 px-2 py-1 text-xs font-medium hover:bg-amber-700 disabled:opacity-50"
+        >
+          {isPending ? "…" : "Proposer une résolution automatique"}
+        </button>
+      ) : (
+        <div className="mt-2 space-y-1 rounded border border-slate-700 bg-slate-950 p-2">
+          <p className={preview.targetSunk ? "text-brass-300" : "text-slate-300"}>{preview.narrative}</p>
+          <p className="text-slate-500">
+            {preview.hit ? `${preview.hits} coup(s), ${preview.damagePoints} dégâts` : "Sans effet"} · PV restants {preview.targetHealthLeft}
+          </p>
+          <div className="mt-1 flex gap-2">
+            <button
+              onClick={() => setPreview(null)}
+              disabled={isPending}
+              className="rounded border border-slate-700 px-2 py-1 hover:bg-slate-900 disabled:opacity-50"
+            >
+              Ignorer
+            </button>
+            <button
+              onClick={apply}
+              disabled={isPending}
+              className="flex-1 rounded bg-emerald-700 px-2 py-1 font-medium hover:bg-emerald-600 disabled:opacity-50"
+            >
+              {isPending ? "…" : "Appliquer"}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="mt-1 text-red-400">{error}</p>}
+    </li>
   );
 }
 

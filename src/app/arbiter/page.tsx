@@ -65,6 +65,53 @@ export default async function ArbiterDashboardPage() {
     }),
   ]);
 
+  // Filet automatique navire-contre-navire, supervisé par l'arbitre (retour
+  // utilisateur 2026-08-14) : candidats sur l'ENSEMBLE du scénario, pas
+  // seulement le tour en cours — voir previewAutomaticShipResolution/
+  // applyAutomaticShipResolution (tacticalEngine.ts). Portée V1 : navire de
+  // surface contre navire de surface uniquement.
+  const shipDetections = await prisma.detectionEvent.findMany({
+    where: {
+      turn: { scenarioId: session.scenarioId },
+      arbiterStatus: { in: ["CONFIRMED", "ADDED_MANUALLY"] },
+      observerUnit: { unitClass: { category: "SURFACE_SHIP" }, status: { in: ["ACTIVE", "DAMAGED"] } },
+      targetUnit: { unitClass: { category: "SURFACE_SHIP" }, status: { in: ["ACTIVE", "DAMAGED"] } },
+    },
+    include: {
+      observerUnit: { select: { id: true, name: true, fleet: { select: { team: { select: { name: true } } } } } },
+      targetUnit: { select: { id: true, name: true, fleet: { select: { team: { select: { name: true } } } } } },
+      turn: { select: { number: true } },
+    },
+    orderBy: [{ turn: { number: "desc" } }],
+  });
+
+  const relevantTurnIds = Array.from(new Set(shipDetections.map((d) => d.turnId)));
+  const combatEventsForPairs =
+    relevantTurnIds.length > 0
+      ? await prisma.combatEvent.findMany({
+          where: { turnId: { in: relevantTurnIds } },
+          select: { turnId: true, attackerUnitId: true, targetUnitId: true },
+        })
+      : [];
+  const resolvedPairKeys = new Set(
+    combatEventsForPairs.map((c) => `${c.turnId}:${[c.attackerUnitId, c.targetUnitId].sort().join("-")}`)
+  );
+  const openEngagementPairKeys = new Set<string>();
+  for (const eng of engagements) {
+    const unitIds = eng.participants.map((p) => p.unitId);
+    for (let i = 0; i < unitIds.length; i++) {
+      for (let j = i + 1; j < unitIds.length; j++) {
+        openEngagementPairKeys.add([unitIds[i], unitIds[j]].sort().join("-"));
+      }
+    }
+  }
+  const pendingShipEncounters = shipDetections.filter((d) => {
+    const pairKey = [d.observerUnitId, d.targetUnitId].sort().join("-");
+    if (resolvedPairKeys.has(`${d.turnId}:${pairKey}`)) return false;
+    if (openEngagementPairKeys.has(pairKey)) return false;
+    return true;
+  });
+
   const engagementIds = engagements.map((e) => e.id);
   const submissions =
     engagementIds.length > 0
@@ -143,6 +190,15 @@ export default async function ArbiterDashboardPage() {
         targetLngAtCpa: d.targetLngAtCpa,
         arbiterStatus: d.arbiterStatus,
         systemProposed: d.systemProposed,
+      }))}
+      pendingShipEncounters={pendingShipEncounters.map((d) => ({
+        id: d.id,
+        observerName: d.observerUnit.name,
+        observerTeam: d.observerUnit.fleet.team.name,
+        targetName: d.targetUnit.name,
+        targetTeam: d.targetUnit.fleet.team.name,
+        turnNumber: d.turn.number,
+        cpaDistanceNm: d.cpaDistanceNm,
       }))}
       engagements={engagements.map((e) => ({
         id: e.id,

@@ -4,9 +4,10 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getSession } from "@/lib/session";
 import { assertArbiter, AccessDeniedError } from "@/lib/auth";
-import { setTurnWeather, setDetectionStatus, addManualDetection, publishTurn } from "@/lib/turnEngine";
+import { setTurnWeather, setDetectionStatus, addManualDetection, publishTurn, OrderValidationError } from "@/lib/turnEngine";
 import { endGame } from "@/lib/gameEnd";
 import { prisma } from "@/lib/prisma";
+import { previewAutomaticShipResolution, applyAutomaticShipResolution, type AutoShipResolutionPreview } from "@/lib/tacticalEngine";
 
 export async function setWeatherAction(formData: FormData) {
   const session = await getSession();
@@ -136,6 +137,52 @@ export async function publishTurnAction(formData: FormData) {
   revalidatePath("/team/orders");
   revalidatePath("/team/reports");
   revalidatePath("/team/waiting");
+}
+
+export type PreviewShipResolutionResult = { ok: true; preview: AutoShipResolutionPreview } | { ok: false; error: string };
+
+/**
+ * Filet automatique navire-contre-navire, supervisé par l'arbitre (retour
+ * utilisateur 2026-08-14) : calcule un tir de canon unique SANS RIEN
+ * ÉCRIRE en base — voir previewAutomaticShipResolution (tacticalEngine.ts)
+ * et applyShipResolutionAction, qui applique le résultat une fois que
+ * l'arbitre l'a vu et approuvé.
+ */
+export async function previewShipResolutionAction(params: { detectionId: string }): Promise<PreviewShipResolutionResult> {
+  const session = await getSession();
+  try {
+    assertArbiter(session);
+    const preview = await previewAutomaticShipResolution(params.detectionId);
+    return { ok: true, preview };
+  } catch (error) {
+    if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+}
+
+export type ApplyShipResolutionResult = { ok: true } | { ok: false; error: string };
+
+/** Applique un résultat déjà prévisualisé (voir previewShipResolutionAction) — aucun nouveau tirage. */
+export async function applyShipResolutionAction(params: {
+  detectionId: string;
+  preview: AutoShipResolutionPreview;
+}): Promise<ApplyShipResolutionResult> {
+  const session = await getSession();
+  try {
+    assertArbiter(session);
+    await applyAutomaticShipResolution(params.detectionId, params.preview);
+  } catch (error) {
+    if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+  revalidatePath("/arbiter");
+  revalidatePath("/team/orders");
+  revalidatePath("/team/reports");
+  return { ok: true };
 }
 
 /**

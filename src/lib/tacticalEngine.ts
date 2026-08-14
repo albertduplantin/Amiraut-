@@ -34,7 +34,7 @@ import {
   assessFiringReveal,
   type LocalizedEffectStored,
 } from "@/lib/tacticalNarrative";
-import { OrderValidationError, currentOpenTurn, switchTurnToTacticalScale } from "@/lib/turnEngine";
+import { OrderValidationError, currentOpenTurn, switchTurnToTacticalScale, cancelStandingOrder } from "@/lib/turnEngine";
 import { classifySilhouette, DEFAULT_TURNING_RADIUS_M, DEFAULT_ACCELERATION_KNOTS_PER_MIN } from "@/lib/shipSilhouettes";
 import type { DepthBand, SensorType, WeaponType, TorpedoSpread as PrismaTorpedoSpread } from "@/generated/prisma/client";
 import { Prisma } from "@/generated/prisma/client";
@@ -974,35 +974,34 @@ export type AutoAirEncounterResult = {
 type AutoAirCombatUnit = Prisma.UnitGetPayload<{ include: { unitClass: true } }>;
 
 /**
- * Résolution automatique — SEUL chemin de combat pour toute détection
- * impliquant un avion depuis l'abandon du combat tactique aérien (retour
- * utilisateur 2026-08-14) : un seul jet, pas de phase de tir manche par
- * manche. Reprend TOUTES les mécaniques du moteur tactique (DCA avec la
- * règle des ~50%, niveau d'équipage, mitraillage, bombe/torpille vs
- * sous-marin en surface — voir combat.ts) plutôt qu'une version appauvrie :
- * rien n'est perdu en abandonnant le tactique, juste condensé en un seul
- * résultat. Seule simplification assumée : pas de dégâts localisés
- * (tourelle/gouvernail/incendie de magasin) — CombatEvent n'a pas la
- * colonne dédiée qu'a TacticalAction, migrer le schéma pour ça serait
- * disproportionné ici.
+ * Charge et valide une détection air-impliquée avant résolution/rupture —
+ * commun à resolveAirEncounterAutomatically et breakOffAirEncounter :
  *
- * L'avion de la paire est TOUJOURS traité comme l'attaquant qui fait sa
- * passe, qu'il soit l'observateur ou la cible de cette détection — un
- * navire qui repère un avion en premier ne "l'attaque" pas, c'est l'avion
- * qui fait sa passe au moment où ce navire choisit d'ouvrir le contact
- * (voir team/battle/open/[detectionId]).
+ *  - Détection confirmée par l'arbitre, aucune unité déjà coulée.
+ *  - Un avion doit être impliqué (observateur ou cible).
+ *  - Seul le camp PROPRIÉTAIRE DE L'AVION peut agir — jamais le camp d'un
+ *    navire qui a simplement détecté l'avion en premier : ce serait lui
+ *    laisser décider si l'adversaire attaque ou pas (retour utilisateur
+ *    2026-08-14). La détection étant généralement mutuelle, le camp de
+ *    l'avion a presque toujours sa propre DetectionEvent pour agir ; voir
+ *    team/battle/open/[detectionId]/page.tsx pour l'écran passif affiché
+ *    à l'autre camp.
+ *  - Garde-fou anti-double-résolution : si un CombatEvent existe déjà pour
+ *    cette paire ce tour-ci (dans un sens ou l'autre — l'autre camp a pu
+ *    agir entre-temps via sa propre détection), refuse.
+ *
+ * Retourne `myUnit` (l'avion du camp appelant, ou l'un des deux avions en
+ * air-air) et `otherUnit` (l'adversaire), jamais dans l'ordre
+ * observateur/cible brut — ce sont les rôles ownership qui comptent.
  */
-export async function resolveAirEncounterAutomatically(params: { detectionEventId: string; teamId: string }): Promise<AutoAirEncounterResult> {
+async function loadAirEncounterContext(detectionEventId: string, teamId: string) {
   const detection = await prisma.detectionEvent.findUniqueOrThrow({
-    where: { id: params.detectionEventId },
+    where: { id: detectionEventId },
     include: {
       observerUnit: { include: { unitClass: true, fleet: true } },
       targetUnit: { include: { unitClass: true, fleet: true } },
     },
   });
-  if (detection.observerUnit.fleet.teamId !== params.teamId) {
-    throw new OrderValidationError("Cette détection n'appartient pas à votre équipe.");
-  }
   if (detection.arbiterStatus !== "CONFIRMED" && detection.arbiterStatus !== "ADDED_MANUALLY") {
     throw new OrderValidationError("Cette détection n'a pas encore été confirmée par l'arbitre.");
   }
@@ -1018,14 +1017,102 @@ export async function resolveAirEncounterAutomatically(params: { detectionEventI
     throw new OrderValidationError("Aucun avion impliqué dans cette détection.");
   }
 
+  const myUnit = observerUnit.fleet.teamId === teamId ? observerUnit : targetUnit.fleet.teamId === teamId ? targetUnit : null;
+  if (!myUnit || myUnit.unitClass.category !== "AIRCRAFT") {
+    throw new OrderValidationError("Seul le camp propriétaire de l'avion peut résoudre ou rompre ce contact.");
+  }
+  const otherUnit = myUnit.id === observerUnit.id ? targetUnit : observerUnit;
+
+  const existingCombat = await prisma.combatEvent.findFirst({
+    where: {
+      turnId: detection.turnId,
+      OR: [
+        { attackerUnitId: observerUnit.id, targetUnitId: targetUnit.id },
+        { attackerUnitId: targetUnit.id, targetUnitId: observerUnit.id },
+      ],
+    },
+  });
+  if (existingCombat) throw new OrderValidationError("Ce contact a déjà été résolu.");
+
+  return { detection, myUnit, otherUnit, observerIsAircraft, targetIsAircraft };
+}
+
+/**
+ * Résolution automatique — SEUL chemin de combat pour toute détection
+ * impliquant un avion depuis l'abandon du combat tactique aérien (retour
+ * utilisateur 2026-08-14) : un seul jet, pas de phase de tir manche par
+ * manche. Reprend TOUTES les mécaniques du moteur tactique (DCA avec la
+ * règle des ~50%, niveau d'équipage, mitraillage, bombe/torpille vs
+ * sous-marin en surface — voir combat.ts) plutôt qu'une version appauvrie :
+ * rien n'est perdu en abandonnant le tactique, juste condensé en un seul
+ * résultat. Seule simplification assumée : pas de dégâts localisés
+ * (tourelle/gouvernail/incendie de magasin) — CombatEvent n'a pas la
+ * colonne dédiée qu'a TacticalAction, migrer le schéma pour ça serait
+ * disproportionné ici.
+ *
+ * L'avion de la paire est TOUJOURS traité comme l'attaquant qui fait sa
+ * passe, qu'il soit l'observateur ou la cible de cette détection — un
+ * navire qui repère un avion en premier ne "l'attaque" pas, c'est l'avion
+ * qui fait sa passe au moment où son propre camp choisit de résoudre le
+ * contact (voir loadAirEncounterContext, team/battle/open/[detectionId]).
+ */
+export async function resolveAirEncounterAutomatically(params: { detectionEventId: string; teamId: string }): Promise<AutoAirEncounterResult> {
+  const { detection, myUnit, otherUnit, observerIsAircraft, targetIsAircraft } = await loadAirEncounterContext(
+    params.detectionEventId,
+    params.teamId
+  );
+
   if (observerIsAircraft && targetIsAircraft) {
-    return resolveAutoAirToAir(detection.id, detection.turnId, detection.cpaDistanceNm, observerUnit, targetUnit);
+    // Air-air : l'avion du camp qui résout prend l'initiative et tire en
+    // premier — l'adversaire riposte s'il survit (échange mutuel).
+    return resolveAutoAirToAir(detection.id, detection.turnId, detection.cpaDistanceNm, myUnit, otherUnit);
   }
 
-  const aircraft = observerIsAircraft ? observerUnit : targetUnit;
-  const surfaceUnit = observerIsAircraft ? targetUnit : observerUnit;
-  const pass = await resolveAutoAirToSurface(detection.id, detection.turnId, detection.cpaDistanceNm, aircraft, surfaceUnit);
+  const pass = await resolveAutoAirToSurface(detection.id, detection.turnId, detection.cpaDistanceNm, myUnit, otherUnit);
   return { passes: [pass] };
+}
+
+/**
+ * Rupture de combat (retour utilisateur 2026-08-14) : le camp de l'avion
+ * renonce à attaquer et rentre à sa base plutôt que de résoudre le contact.
+ * Jamais totalement sans risque : la cible garde une dernière chance de
+ * tirer avant que l'avion n'ouvre la distance (même formules que l'attaque
+ * normale), sauf que l'avion qui rompt ne riposte jamais — il fuit, il ne
+ * se bat pas.
+ */
+export async function breakOffAirEncounter(params: { detectionEventId: string; teamId: string }): Promise<AutoAirEncounterResult> {
+  const { detection, myUnit, otherUnit, observerIsAircraft, targetIsAircraft } = await loadAirEncounterContext(
+    params.detectionEventId,
+    params.teamId
+  );
+
+  // Une patrouille permanente en cours est rappelée — l'avion rentre se
+  // poser puis ne redécolle pas, même comportement qu'une annulation
+  // manuelle (voir cancelStandingOrder). Un ordre ponctuel n'a rien de
+  // spécial à faire : l'avion termine simplement son trajet déjà soumis
+  // ce tour-ci, sans combat.
+  if (myUnit.standingOrderActive) {
+    await cancelStandingOrder(myUnit.id);
+  }
+
+  if (observerIsAircraft && targetIsAircraft) {
+    // Air-air : il faut être au moins aussi rapide que l'adversaire pour
+    // pouvoir creuser l'écart — sinon combat forcé, pas d'échappatoire.
+    if (myUnit.unitClass.maxSpeedKnots < otherUnit.unitClass.maxSpeedKnots) {
+      throw new OrderValidationError(
+        `${myUnit.name} est trop lent pour rompre le combat face à ${otherUnit.name} — le combat doit être résolu.`
+      );
+    }
+    const shot = await fireAirToAirPass(detection.id, detection.turnId, detection.cpaDistanceNm, otherUnit, myUnit);
+    return { passes: [shot.pass] };
+  }
+
+  // Air-mer : toujours autorisé, aucune condition de vitesse — un avion
+  // peut toujours renoncer à attaquer un navire, contrairement à fuir un
+  // chasseur. Seule la DCA (si présente et la cible en surface) a une
+  // dernière chance de tirer.
+  const pass = await breakOffAirToSurface(detection.id, detection.turnId, detection.cpaDistanceNm, myUnit, otherUnit);
+  return { passes: pass ? [pass] : [] };
 }
 
 /** Air-air automatique : l'observateur tire en premier, la cible riposte si elle survit (échange mutuel, voir resolveAirEncounterAutomatically). */
@@ -1165,7 +1252,6 @@ async function resolveAutoAirToSurface(
   }
 
   const profile = aircraft.unitClass.combatProfile as CombatProfile | null;
-  const targetProfile = surfaceUnit.unitClass.combatProfile as CombatProfile | null;
   const aircraftHealthCurrent = aircraft.healthCurrent ?? aircraft.healthMax ?? 1;
   const aircraftHealthMax = aircraft.healthMax ?? 1;
   const pilotSkillFactor = pilotSkillMultiplier(aircraft.unitClass.pilotSkill);
@@ -1173,30 +1259,25 @@ async function resolveAutoAirToSurface(
   // DCA : automatique, avant l'attaque elle-même — voir submitTacticalFireShot pour la même logique côté tactique.
   let dcaNarrative: string | null = null;
   let dcaAbortsAttack = false;
-  const aaBattery = targetProfile?.antiAircraft;
-  if (aaBattery) {
-    const dca = resolveDcaAttack({
-      battery: aaBattery,
-      targetAgility: aircraft.unitClass.agility,
-      targetLengthM: aircraft.unitClass.lengthMeters,
-    });
-    if (dca.hit) {
-      const healthAfter = Math.max(0, aircraftHealthCurrent - dca.damagePoints);
-      const destroyed = healthAfter <= 0;
-      await prisma.unit.update({
-        where: { id: aircraft.id },
-        data: { healthCurrent: healthAfter, status: destroyed ? "SUNK" : healthAfter < aircraftHealthMax * 0.6 ? "DAMAGED" : "ACTIVE" },
-      });
-      if (destroyed) {
-        dcaAbortsAttack = Math.random() >= 0.5;
-        dcaNarrative = dcaAbortsAttack
-          ? `La DCA de ${surfaceUnit.name} abat ${aircraft.name} avant qu'il ait pu achever son attaque.`
-          : `La DCA de ${surfaceUnit.name} touche ${aircraft.name} à mort, mais l'appareil a le temps d'achever sa passe avant de s'écraser.`;
-      } else {
-        dcaNarrative = `La DCA de ${surfaceUnit.name} touche ${aircraft.name} au passage — l'appareil encaisse mais poursuit son attaque.`;
-      }
+  const dcaResult = await fireDcaAtAircraft(surfaceUnit, aircraft);
+  if (dcaResult?.hit) {
+    if (dcaResult.destroyed) {
+      dcaAbortsAttack = Math.random() >= 0.5;
+      dcaNarrative = dcaAbortsAttack
+        ? `La DCA de ${surfaceUnit.name} abat ${aircraft.name} avant qu'il ait pu achever son attaque.`
+        : `La DCA de ${surfaceUnit.name} touche ${aircraft.name} à mort, mais l'appareil a le temps d'achever sa passe avant de s'écraser.`;
+    } else {
+      dcaNarrative = `La DCA de ${surfaceUnit.name} touche ${aircraft.name} au passage — l'appareil encaisse mais poursuit son attaque.`;
     }
   }
+
+  // Vitesse réelle de la cible : lit l'ordre soumis pour ce tour-ci plutôt
+  // qu'une cible supposée immobile — un navire qui manœuvre/zigzague est
+  // mécaniquement plus dur à toucher (recherche 2026-08-14, corrige un
+  // oubli de la version précédente, jamais mis à jour depuis l'ancienne
+  // résolution automatique appauvrie).
+  const targetOrder = await prisma.unitOrder.findUnique({ where: { turnId_unitId: { turnId, unitId: surfaceUnit.id } } });
+  const targetSpeedKnots = targetOrder?.speedKnots ?? 0;
 
   let weaponType: WeaponType;
   let outcome: { hitChancePercent: number; hitRoll: number; hit: boolean; hits: number; damagePoints: number };
@@ -1212,7 +1293,7 @@ async function resolveAutoAirToSurface(
       attackerHealthMax: aircraftHealthMax,
       targetLengthM: surfaceUnit.unitClass.lengthMeters ?? 100,
       targetBeamM: surfaceUnit.unitClass.beamMeters ?? 12,
-      targetSpeedKnots: 0,
+      targetSpeedKnots,
       accuracyMultiplier: pilotSkillFactor,
     });
     if (!bombResult) throw new OrderValidationError("Aucune bombe disponible.");
@@ -1228,7 +1309,7 @@ async function resolveAutoAirToSurface(
       attackerHealthMax: aircraftHealthMax,
       targetLengthM: surfaceUnit.unitClass.lengthMeters ?? 100,
       targetBeamM: surfaceUnit.unitClass.beamMeters ?? 12,
-      targetSpeedKnots: 0,
+      targetSpeedKnots,
       angleOfAttackDeg: 45,
       rangeM: 0,
       accuracyMultiplier: pilotSkillFactor,
@@ -1311,6 +1392,255 @@ async function resolveAutoAirToSurface(
     narrative,
     targetSunk,
   };
+}
+
+/**
+ * DCA d'une cible de surface contre l'avion qui l'attaque OU rompt le
+ * combat face à elle — voir resolveDcaAttack (combat.ts). Retourne `null`
+ * si la cible n'a pas de DCA ou est immergée (rien à tirer, l'appelant n'a
+ * rien à raconter) ; sinon le résultat complet (touché ou pas) pour que
+ * chaque appelant construise son propre récit et décide s'il faut créer un
+ * CombatEvent.
+ */
+async function fireDcaAtAircraft(
+  surfaceUnit: AutoAirCombatUnit,
+  aircraft: AutoAirCombatUnit
+): Promise<{ hitChancePercent: number; hitRoll: number; hit: boolean; damagePoints: number; destroyed: boolean } | null> {
+  const targetSubmerged = surfaceUnit.unitClass.category === "SUBMARINE" && surfaceUnit.depthBand !== "SURFACE";
+  if (targetSubmerged) return null;
+  const targetProfile = surfaceUnit.unitClass.combatProfile as CombatProfile | null;
+  const aaBattery = targetProfile?.antiAircraft;
+  if (!aaBattery) return null;
+
+  const dca = resolveDcaAttack({
+    battery: aaBattery,
+    targetAgility: aircraft.unitClass.agility,
+    targetLengthM: aircraft.unitClass.lengthMeters,
+  });
+  if (!dca.hit) return { ...dca, destroyed: false };
+
+  const aircraftHealthCurrent = aircraft.healthCurrent ?? aircraft.healthMax ?? 1;
+  const aircraftHealthMax = aircraft.healthMax ?? 1;
+  const healthAfter = Math.max(0, aircraftHealthCurrent - dca.damagePoints);
+  const destroyed = healthAfter <= 0;
+  await prisma.unit.update({
+    where: { id: aircraft.id },
+    data: { healthCurrent: healthAfter, status: destroyed ? "SUNK" : healthAfter < aircraftHealthMax * 0.6 ? "DAMAGED" : "ACTIVE" },
+  });
+  return { ...dca, destroyed };
+}
+
+/**
+ * Rupture de combat air-mer : la DCA de la cible a une dernière chance de
+ * tirer avant que l'avion ne rentre à sa base — mais l'avion, lui, ne
+ * largue/tire jamais rien (il fuit, il ne se bat pas). Retourne `null` si
+ * la cible n'a pas de DCA (rupture immédiate, rien à raconter ni à
+ * enregistrer).
+ */
+async function breakOffAirToSurface(
+  detectionEventId: string,
+  turnId: string,
+  rangeNm: number,
+  aircraft: AutoAirCombatUnit,
+  surfaceUnit: AutoAirCombatUnit
+): Promise<AutoAirEncounterPass | null> {
+  const dcaResult = await fireDcaAtAircraft(surfaceUnit, aircraft);
+  if (!dcaResult) return null;
+
+  const narrative = !dcaResult.hit
+    ? `${aircraft.name} rompt le combat et rentre à sa base — la DCA de ${surfaceUnit.name} n'a pas le temps de l'accrocher.`
+    : dcaResult.destroyed
+      ? `La DCA de ${surfaceUnit.name} abat ${aircraft.name} alors qu'il rompait le combat.`
+      : `La DCA de ${surfaceUnit.name} touche ${aircraft.name} au passage, mais l'appareil parvient à rompre le combat et rentre à sa base.`;
+
+  const damagePoints = dcaResult.hit ? dcaResult.damagePoints : 0;
+  const aircraftHealthMax = aircraft.healthMax ?? 1;
+  const healthLeft = Math.max(0, (aircraft.healthCurrent ?? aircraftHealthMax) - damagePoints);
+
+  await prisma.combatEvent.create({
+    data: {
+      turnId,
+      detectionEventId,
+      attackerUnitId: surfaceUnit.id,
+      targetUnitId: aircraft.id,
+      weaponType: "GUN",
+      rangeNm,
+      hitChancePercent: dcaResult.hitChancePercent,
+      hits: dcaResult.hit ? 1 : 0,
+      damagePoints,
+      targetHealthLeft: healthLeft,
+      targetSunk: dcaResult.destroyed,
+      firedTactically: false,
+    },
+  });
+
+  return {
+    attackerName: surfaceUnit.name,
+    targetName: aircraft.name,
+    weaponType: "GUN",
+    hit: dcaResult.hit,
+    hits: dcaResult.hit ? 1 : 0,
+    damagePoints,
+    hitChancePercent: dcaResult.hitChancePercent,
+    hitRoll: dcaResult.hitRoll,
+    narrative,
+    targetSunk: dcaResult.destroyed,
+  };
+}
+
+export type AutoShipResolutionPreview = {
+  attackerUnitId: string;
+  targetUnitId: string;
+  attackerName: string;
+  targetName: string;
+  weaponType: "GUN";
+  hit: boolean;
+  hits: number;
+  damagePoints: number;
+  hitChancePercent: number;
+  hitRoll: number;
+  narrative: string;
+  targetSunk: boolean;
+  targetHealthLeft: number;
+  rangeNm: number;
+};
+
+/** Vérifie qu'aucun CombatEvent n'existe déjà pour cette paire, dans un sens ou l'autre, ce tour-ci — partagé par le filet automatique navires et sa prévisualisation. */
+async function assertPairNotYetResolved(turnId: string, unitAId: string, unitBId: string) {
+  const existingCombat = await prisma.combatEvent.findFirst({
+    where: {
+      turnId,
+      OR: [
+        { attackerUnitId: unitAId, targetUnitId: unitBId },
+        { attackerUnitId: unitBId, targetUnitId: unitAId },
+      ],
+    },
+  });
+  if (existingCombat) throw new OrderValidationError("Ce contact a déjà été résolu.");
+}
+
+/**
+ * Filet automatique navire-contre-navire, supervisé par l'arbitre (retour
+ * utilisateur 2026-08-14) : propose un tir de canon unique entre deux
+ * navires de surface dont la détection est confirmée mais que personne n'a
+ * engagée tactiquement — ne modifie RIEN en base, l'arbitre voit le
+ * résultat avant qu'il s'applique (voir applyAutomaticShipResolution) et
+ * choisit d'approuver ou d'ignorer ; l'automatisme assiste sa décision, il
+ * ne décide jamais seul. Portée V1 : navire de surface contre navire de
+ * surface uniquement — un sous-marin garde ses propres mécaniques
+ * tactiques détaillées (ASDIC, grenades ASM), ce filet grossier n'y
+ * apporterait rien de bon.
+ */
+export async function previewAutomaticShipResolution(detectionEventId: string): Promise<AutoShipResolutionPreview> {
+  const detection = await prisma.detectionEvent.findUniqueOrThrow({
+    where: { id: detectionEventId },
+    include: {
+      observerUnit: { include: { unitClass: true } },
+      targetUnit: { include: { unitClass: true } },
+    },
+  });
+  if (detection.arbiterStatus !== "CONFIRMED" && detection.arbiterStatus !== "ADDED_MANUALLY") {
+    throw new OrderValidationError("Cette détection n'a pas encore été confirmée par l'arbitre.");
+  }
+  const { observerUnit: attacker, targetUnit: target } = detection;
+  if (attacker.unitClass.category !== "SURFACE_SHIP" || target.unitClass.category !== "SURFACE_SHIP") {
+    throw new OrderValidationError("Le filet automatique ne concerne que les navires de surface.");
+  }
+  if (attacker.status === "SUNK" || target.status === "SUNK") {
+    throw new OrderValidationError("Une des deux unités est déjà hors de combat.");
+  }
+  await assertPairNotYetResolved(detection.turnId, attacker.id, target.id);
+
+  const profile = attacker.unitClass.combatProfile as CombatProfile | null;
+  const rangeM = detection.cpaDistanceNm * NM_TO_M;
+  const attackerHealthCurrent = attacker.healthCurrent ?? attacker.healthMax ?? 1;
+  const attackerHealthMax = attacker.healthMax ?? 1;
+
+  const outcome = resolveGunEngagement({
+    attackerProfile: profile,
+    attackerHealthCurrent,
+    attackerHealthMax,
+    targetLengthM: target.unitClass.lengthMeters ?? 100,
+    targetBeamM: target.unitClass.beamMeters ?? 12,
+    targetSpeedKnots: 0,
+    rangeM,
+  });
+  if (!outcome) throw new OrderValidationError("Aucune pièce disponible à cette portée pour proposer un tir.");
+
+  const targetHealthMax = target.healthMax ?? 1;
+  const targetHealthBefore = target.healthCurrent ?? targetHealthMax;
+  const finalDamagePoints = outcome.hit ? outcome.damagePoints : 0;
+  const targetHealthLeft = Math.max(0, targetHealthBefore - finalDamagePoints);
+  const targetSunk = targetHealthLeft <= 0;
+
+  const narrative = describeShot({
+    attackerName: attacker.name,
+    targetName: target.name,
+    weaponType: "GUN",
+    hit: outcome.hit,
+    hits: outcome.hits,
+    damagePoints: finalDamagePoints,
+    damageRatio: targetHealthMax > 0 ? finalDamagePoints / targetHealthMax : 0,
+    targetSunk,
+    rangeNm: detection.cpaDistanceNm,
+    targetIsAircraft: false,
+  });
+
+  return {
+    attackerUnitId: attacker.id,
+    targetUnitId: target.id,
+    attackerName: attacker.name,
+    targetName: target.name,
+    weaponType: "GUN",
+    hit: outcome.hit,
+    hits: outcome.hits,
+    damagePoints: finalDamagePoints,
+    hitChancePercent: outcome.hitChancePercent,
+    hitRoll: outcome.hitRoll,
+    narrative,
+    targetSunk,
+    targetHealthLeft,
+    rangeNm: detection.cpaDistanceNm,
+  };
+}
+
+/**
+ * Applique EXACTEMENT le résultat déjà prévisualisé et affiché à l'arbitre
+ * (voir previewAutomaticShipResolution) — aucun nouveau tirage : l'arbitre
+ * approuve ce qu'il a vu, pas une resimulation qui pourrait différer.
+ */
+export async function applyAutomaticShipResolution(detectionEventId: string, preview: AutoShipResolutionPreview) {
+  const detection = await prisma.detectionEvent.findUniqueOrThrow({ where: { id: detectionEventId } });
+  // Re-vérifie qu'un joueur n'a pas résolu ce contact pendant que l'arbitre regardait l'aperçu.
+  await assertPairNotYetResolved(detection.turnId, preview.attackerUnitId, preview.targetUnitId);
+
+  const target = await prisma.unit.findUniqueOrThrow({ where: { id: preview.targetUnitId } });
+  const targetHealthMax = target.healthMax ?? 1;
+
+  await prisma.unit.update({
+    where: { id: preview.targetUnitId },
+    data: {
+      healthCurrent: preview.targetHealthLeft,
+      status: preview.targetSunk ? "SUNK" : preview.targetHealthLeft < targetHealthMax * 0.6 ? "DAMAGED" : target.status,
+    },
+  });
+
+  await prisma.combatEvent.create({
+    data: {
+      turnId: detection.turnId,
+      detectionEventId,
+      attackerUnitId: preview.attackerUnitId,
+      targetUnitId: preview.targetUnitId,
+      weaponType: preview.weaponType,
+      rangeNm: preview.rangeNm,
+      hitChancePercent: preview.hitChancePercent,
+      hits: preview.hits,
+      damagePoints: preview.damagePoints,
+      targetHealthLeft: preview.targetHealthLeft,
+      targetSunk: preview.targetSunk,
+      firedTactically: false,
+    },
+  });
 }
 
 /** Un camp annonce qu'il a fini de tirer cette manche ; la manche se résout dès que les deux camps l'ont fait. */
