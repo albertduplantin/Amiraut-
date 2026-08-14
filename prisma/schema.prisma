@@ -325,6 +325,7 @@ model Unit {
   torpedoSalvosFired     TacticalTorpedoSalvo[] @relation("TorpedoSalvoFirer")
   torpedoSalvosTargeted  TacticalTorpedoSalvo[] @relation("TorpedoSalvoTarget")
   torpedoSalvosHitBy     TacticalTorpedoSalvo[] @relation("TorpedoSalvoHit")
+  standingRoutes         StandingRoute[]
 
   @@index([scenarioId, fleetId])
 }
@@ -349,7 +350,11 @@ enum DepthBand {
 // Bloc 3 — ordres longue durée : voir Unit.standingOrderActive.
 enum StandingOrderKind {
   TRANSIT // maintien du cap et de la vitesse du dernier ordre
-  AIR_PATROL // décollage → recherche → retour, en boucle (avions)
+  AIR_PATROL // décollage → recherche → retour, en boucle (avions) — avec ou sans rotation de zones, voir StandingRoute
+  // Trajectoire longue durée dessinée à l'avance (navires de surface), vitesse
+  // par segment — voir StandingRoute/RouteWaypoint et applyRouteTransitLeg
+  // dans turnEngine.ts. Recherche 2026-08-14 (refonte ordres permanents).
+  ROUTE
 }
 
 enum AirMissionState {
@@ -416,6 +421,10 @@ model Turn {
   weather         Weather?   @relation(fields: [weatherId], references: [id])
   resolvedAt      DateTime?
   publishedAt     DateTime?
+  // Horodatage réel (pas le temps fictif gameStartAt) de création de ce
+  // tour — utile pour tout diagnostic/tri par récence, notamment sur le
+  // cron d'avancement automatique (voir autoAdvanceScenario, turnEngine.ts).
+  createdAt       DateTime   @default(now())
 
   orders          UnitOrder[]
   detectionEvents DetectionEvent[]
@@ -498,6 +507,57 @@ model Waypoint {
   lng      Float
 
   @@unique([orderId, sequence])
+}
+
+// ── Trajectoire longue durée (bloc 3, refonte) ───────────────
+//
+// Un ordre permanent ROUTE (navire) ou une rotation de patrouilles
+// AIR_PATROL (avion) dessinée à l'avance sur plusieurs manches — voir
+// Unit.standingOrderKind, applyRouteTransitLeg/applyAirPatrolLeg dans
+// turnEngine.ts. Un seul modèle pour les deux usages plutôt que d'en
+// dupliquer un par catégorie d'unité : seuls les champs pertinents de
+// RouteWaypoint sont renseignés selon `kind`.
+
+model StandingRoute {
+  id     String @id @default(cuid())
+  unitId String
+  unit   Unit   @relation(fields: [unitId], references: [id])
+  // ROUTE (navire, trajet de transit) ou AIR_PATROL (avion, rotation de
+  // zones de recherche) — jamais TRANSIT simple, qui n'a pas besoin de ce
+  // modèle. Voir StandingOrderKind.
+  kind   StandingOrderKind
+  status RouteStatus       @default(ACTIVE)
+  // Index (dans `waypoints`, triés par `sequence`) du prochain point pas
+  // encore atteint. Pas besoin de stocker une position de curseur séparée :
+  // Unit.currentLat/Lng fait déjà foi pour la position exacte le long de la
+  // route, y compris en cours de segment.
+  cursorSequence Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  waypoints RouteWaypoint[]
+}
+
+model RouteWaypoint {
+  id      String        @id @default(cuid())
+  routeId String
+  route   StandingRoute @relation(fields: [routeId], references: [id])
+  sequence Int
+  lat     Float
+  lng     Float
+  // ROUTE : vitesse jusqu'à ce point (nds). AIR_PATROL : non renseigné.
+  speedKnots   Float?
+  // AIR_PATROL : nombre de cycles décollage → recherche → retour à
+  // effectuer sur cette zone avant de passer à la suivante de la liste.
+  // ROUTE : non renseigné.
+  patrolCycles Int?
+
+  @@unique([routeId, sequence])
+}
+
+enum RouteStatus {
+  ACTIVE
+  COMPLETED // trajet/rotation entièrement parcouru(e)
+  CANCELLED // annulé par le joueur, ou interrompu par une détection confirmée (ROUTE seulement — voir publishTurn)
 }
 
 // ── Détection / revue arbitre ───────────────────────────────

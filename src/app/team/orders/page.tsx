@@ -434,6 +434,16 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
     prisma.unitOrder.count({ where: { turnId: turn.id } }),
   ]);
 
+  // Routes/rotations longue durée actives (bloc 3, refonte) — au plus une
+  // par unité (une nouvelle soumission annule l'ancienne, voir
+  // saveRouteOrder/saveAirPatrolRotationOrder) ; regroupées par unitId pour
+  // un accès direct dans le map ci-dessous plutôt qu'une requête par unité.
+  const activeRoutes = await prisma.standingRoute.findMany({
+    where: { unitId: { in: units.map((u) => u.id) }, status: "ACTIVE" },
+    include: { waypoints: { orderBy: { sequence: "asc" } } },
+  });
+  const activeRouteByUnitId = new Map(activeRoutes.map((r) => [r.unitId, r]));
+
   // Épaves du camp : uniquement pour l'affichage (marqueur d'épave sur la
   // carte) — jamais mêlées à `units` ci-dessus, qui reste réservé aux
   // unités pouvant recevoir un ordre (liste, flottes, brouillons...).
@@ -518,6 +528,21 @@ async function renderStrategicView(scenarioId: string, teamId: string, fleetIds:
         airHomeLat: u.airHomeLat,
         airHomeLng: u.airHomeLng,
         fuelMinutesRemaining: u.fuelMinutesRemaining,
+        activeRoute: (() => {
+          const route = activeRouteByUnitId.get(u.id);
+          if (!route) return null;
+          return {
+            kind: route.kind as "ROUTE" | "AIR_PATROL",
+            cursorSequence: route.cursorSequence,
+            waypoints: route.waypoints.map((w) => ({
+              sequence: w.sequence,
+              lat: w.lat,
+              lng: w.lng,
+              speedKnots: w.speedKnots,
+              patrolCycles: w.patrolCycles,
+            })),
+          };
+        })(),
         existingOrder:
           u.orders.length > 0
             ? {

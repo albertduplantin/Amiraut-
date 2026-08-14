@@ -7,6 +7,36 @@ export type WeatherConditions = {
   precipitation: Precipitation;
 };
 
+/**
+ * Fait dériver légèrement la météo d'un tour vers le suivant quand personne
+ * n'est là pour la retaper à la main — voir autoAdvanceScenario dans
+ * turnEngine.ts (cron d'avancement automatique des ordres permanents, bloc
+ * 3). Ne change jamais `daylight`/`precipitation` : un tirage aléatoire du
+ * jour à la nuit ou d'une tempête surgie de nulle part serait plus
+ * déroutant qu'utile — seuls les paramètres continus (visibilité, état de
+ * mer, vent) varient, dans des bornes plausibles.
+ */
+export function jitterWeather(previous: {
+  visibilityNm: number;
+  seaState: number;
+  daylight: Daylight | string;
+  precipitation: Precipitation | string;
+  windKnots?: number | null;
+  notes?: string | null;
+}): { visibilityNm: number; seaState: number; daylight: string; precipitation: string; windKnots?: number; notes?: string } {
+  const jitterRatio = () => 1 + (Math.random() * 2 - 1) * 0.15; // ±15%
+  const seaStateDelta = Math.round(Math.random() * 2 - 1); // -1, 0, ou +1
+
+  return {
+    visibilityNm: Math.max(0.5, Math.min(50, previous.visibilityNm * jitterRatio())),
+    seaState: Math.max(0, Math.min(9, previous.seaState + seaStateDelta)),
+    daylight: previous.daylight,
+    precipitation: previous.precipitation,
+    windKnots: previous.windKnots != null ? Math.max(0, previous.windKnots * jitterRatio()) : undefined,
+    notes: previous.notes ?? undefined,
+  };
+}
+
 const DAYLIGHT_VISUAL_MULTIPLIER: Record<Daylight, number> = {
   DAY: 1,
   POLAR_DAY: 1,

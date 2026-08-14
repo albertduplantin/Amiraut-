@@ -6,6 +6,8 @@ import { assertPlayer, assertCanOrderUnit, assertCanOrderFleet, AccessDeniedErro
 import {
   saveUnitOrder,
   saveAirPatrolOrder,
+  saveRouteOrder,
+  saveAirPatrolRotationOrder,
   cancelStandingOrder,
   requestFleetTransfer,
   cancelFleetTransfer,
@@ -66,6 +68,67 @@ export async function submitAirPatrolAction(params: {
     assertPlayer(session);
     await assertCanOrderUnit(session, params.unitId);
     await saveAirPatrolOrder({ turnId: params.turnId, unitId: params.unitId, patrolPoint: params.patrolPoint });
+  } catch (error) {
+    if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+
+  revalidatePath("/team/orders");
+  revalidatePath("/team/waiting");
+  return { ok: true };
+}
+
+/**
+ * Ordre permanent « trajectoire longue durée » (bloc 3, refonte) : le
+ * joueur dessine le trajet complet de son unité en une fois, vitesse par
+ * segment — voir saveRouteOrder dans turnEngine.ts.
+ */
+export async function submitRouteOrderAction(params: {
+  turnId: string;
+  unitId: string;
+  segments: { lat: number; lng: number; speedKnots: number }[];
+}): Promise<SubmitOrderResult> {
+  const session = await getSession();
+
+  try {
+    assertPlayer(session);
+    await assertCanOrderUnit(session, params.unitId);
+    await saveRouteOrder({
+      turnId: params.turnId,
+      unitId: params.unitId,
+      submittedById: session.participantId,
+      segments: params.segments,
+    });
+  } catch (error) {
+    if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+
+  revalidatePath("/team/orders");
+  revalidatePath("/team/waiting");
+  return { ok: true };
+}
+
+/**
+ * Ordre permanent « rotation de patrouilles » (bloc 3, refonte) : une file
+ * de zones successives, chacune survolée un nombre de cycles donné avant de
+ * passer à la suivante — voir saveAirPatrolRotationOrder dans turnEngine.ts.
+ */
+export async function submitAirPatrolRotationAction(params: {
+  turnId: string;
+  unitId: string;
+  zones: { lat: number; lng: number; cyclesCount: number }[];
+}): Promise<SubmitOrderResult> {
+  const session = await getSession();
+
+  try {
+    assertPlayer(session);
+    await assertCanOrderUnit(session, params.unitId);
+    await saveAirPatrolRotationOrder({ turnId: params.turnId, unitId: params.unitId, zones: params.zones });
   } catch (error) {
     if (error instanceof OrderValidationError || error instanceof AccessDeniedError) {
       return { ok: false, error: error.message };

@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { buildTimedTrack, distanceNm, pathLengthNm, speedBudgetNm, bearingDeg, destinationPoint, type LatLng } from "@/lib/geo";
-import { effectiveSensorRangeNm } from "@/lib/weather";
+import { effectiveSensorRangeNm, jitterWeather } from "@/lib/weather";
 import {
   resolveGunEngagement,
   resolveTorpedoEngagement,
@@ -247,8 +247,10 @@ export async function saveUnitOrder(params: {
     });
 
     // Un ordre manuel dessiné à la main remplace toujours un éventuel plan
-    // de vol de patrouille aérienne (le joueur reprend la main sur l'avion) ;
-    // le statut "permanent" du cap tenu, lui, suit le drapeau `standing`.
+    // de vol de patrouille aérienne ou une route longue durée (le joueur
+    // reprend la main sur l'unité) ; le statut "permanent" du cap tenu, lui,
+    // suit le drapeau `standing`.
+    await tx.standingRoute.updateMany({ where: { unitId, status: "ACTIVE" }, data: { status: "CANCELLED" } });
     await tx.unit.update({
       where: { id: unitId },
       data: standing
@@ -321,6 +323,184 @@ export async function saveAirPatrolOrder(params: { turnId: string; unitId: strin
   await checkTurnProgress(turnId);
 }
 
+const ROUTE_MIN_SEGMENTS = 1;
+const ROUTE_MAX_SEGMENTS = 100;
+const AIR_PATROL_ROTATION_MIN_ZONES = 1;
+const AIR_PATROL_ROTATION_MAX_ZONES = 30;
+
+/**
+ * Ordre permanent « trajectoire longue durée » (bloc 3, refonte 2026-08-14) :
+ * le joueur dessine en une fois le trajet complet de son unité, vitesse
+ * ajustable segment par segment, et le moteur le parcourt tout seul manche
+ * après manche (voir applyRouteTransitLeg) jusqu'à ce qu'il soit entièrement
+ * parcouru ou qu'une détection confirmée l'interrompe (voir publishTurn) —
+ * dans les deux cas le joueur doit se reconnecter pour reprendre la main.
+ * Coexiste avec le TRANSIT simple existant (maintien de cap) plutôt que de
+ * le remplacer : celui-ci reste le choix le plus rapide quand il n'y a pas
+ * de vrai trajet à planifier.
+ */
+export async function saveRouteOrder(params: {
+  turnId: string;
+  unitId: string;
+  submittedById: string;
+  segments: { lat: number; lng: number; speedKnots: number }[];
+}) {
+  const { turnId, unitId, submittedById, segments } = params;
+
+  if (segments.length < ROUTE_MIN_SEGMENTS || segments.length > ROUTE_MAX_SEGMENTS) {
+    throw new OrderValidationError(`Une route doit compter entre ${ROUTE_MIN_SEGMENTS} et ${ROUTE_MAX_SEGMENTS} étapes.`);
+  }
+
+  const [turn, unit] = await Promise.all([
+    prisma.turn.findUniqueOrThrow({ where: { id: turnId }, include: { scenario: { select: { status: true } } } }),
+    prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } }),
+  ]);
+
+  if (turn.scenario.status === "COMPLETED") {
+    throw new OrderValidationError("Cette partie est terminée.");
+  }
+  if (turn.status !== "PENDING_ORDERS") {
+    throw new OrderValidationError("Ce tour n'accepte plus d'ordres.");
+  }
+  if (!turn.weatherId) {
+    throw new OrderValidationError("La météo du tour n'a pas encore été définie par l'arbitre.");
+  }
+  if (unit.unitClass.category !== "SURFACE_SHIP") {
+    throw new OrderValidationError("Une route longue durée ne peut être tracée que pour un navire de surface (V1).");
+  }
+  for (const segment of segments) {
+    if (segment.speedKnots < 0 || segment.speedKnots > unit.unitClass.maxSpeedKnots) {
+      throw new OrderValidationError(
+        `Vitesse d'étape hors limites (0 à ${unit.unitClass.maxSpeedKnots}nds pour cette classe).`
+      );
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Un ordre manuel dessiné à la main (submitOrderAction) remplace déjà
+    // l'ordre permanent ; ici c'est l'inverse — retracer une route en
+    // remplace une éventuelle précédente encore active, plutôt que de
+    // l'éditer point par point (voir le plan : modifier = redessiner).
+    await tx.standingRoute.updateMany({
+      where: { unitId, status: "ACTIVE" },
+      data: { status: "CANCELLED" },
+    });
+
+    const route = await tx.standingRoute.create({
+      data: {
+        unitId,
+        kind: "ROUTE",
+        waypoints: {
+          create: segments.map((s, i) => ({ sequence: i, lat: s.lat, lng: s.lng, speedKnots: s.speedKnots })),
+        },
+      },
+    });
+
+    await tx.unit.update({
+      where: { id: unitId },
+      data: {
+        standingOrderActive: true,
+        standingOrderKind: "ROUTE",
+        standingSpeedKnots: null,
+        airMissionState: null,
+        airHomeLat: null,
+        airHomeLng: null,
+        airPatrolLat: null,
+        airPatrolLng: null,
+        fuelMinutesRemaining: null,
+      },
+    });
+
+    // Un ordre ponctuel éventuel déjà soumis ce tour-ci pour cette unité est
+    // remplacé par la première jambe de la route, comme pour saveUnitOrder.
+    const existingOrder = await tx.unitOrder.findUnique({ where: { turnId_unitId: { turnId, unitId } } });
+    if (existingOrder) {
+      await tx.waypoint.deleteMany({ where: { orderId: existingOrder.id } });
+      await tx.unitOrder.delete({ where: { id: existingOrder.id } });
+    }
+
+    void submittedById; // pas encore tracé sur StandingRoute (pas de notion d'auteur pour l'instant) — signature alignée sur saveUnitOrder/saveAirPatrolOrder pour cohérence et usage futur.
+    void route;
+  });
+
+  await applyRouteTransitLeg(turnId, turn.durationMinutes, unitId);
+  await checkTurnProgress(turnId);
+}
+
+/**
+ * Ordre permanent « rotation de patrouilles » (bloc 3, refonte 2026-08-14) :
+ * comme saveAirPatrolOrder, mais avec une file de zones successives (chacune
+ * survolée `cyclesCount` fois avant de passer à la suivante) plutôt qu'une
+ * zone unique pour toujours — voir applyAirPatrolLeg, branche "landed".
+ */
+export async function saveAirPatrolRotationOrder(params: {
+  turnId: string;
+  unitId: string;
+  zones: { lat: number; lng: number; cyclesCount: number }[];
+}) {
+  const { turnId, unitId, zones } = params;
+
+  if (zones.length < AIR_PATROL_ROTATION_MIN_ZONES || zones.length > AIR_PATROL_ROTATION_MAX_ZONES) {
+    throw new OrderValidationError(`Une rotation doit compter entre ${AIR_PATROL_ROTATION_MIN_ZONES} et ${AIR_PATROL_ROTATION_MAX_ZONES} zones.`);
+  }
+  for (const zone of zones) {
+    if (!Number.isFinite(zone.cyclesCount) || zone.cyclesCount < 1) {
+      throw new OrderValidationError("Chaque zone doit avoir au moins un cycle avant rotation.");
+    }
+  }
+
+  const [turn, unit] = await Promise.all([
+    prisma.turn.findUniqueOrThrow({ where: { id: turnId } }),
+    prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } }),
+  ]);
+
+  if (turn.status !== "PENDING_ORDERS") throw new OrderValidationError("Ce tour n'accepte plus d'ordres.");
+  if (!turn.weatherId) throw new OrderValidationError("La météo du tour n'a pas encore été définie par l'arbitre.");
+  if (unit.unitClass.category !== "AIRCRAFT") {
+    throw new OrderValidationError("Seul un avion peut recevoir un ordre de patrouille aérienne.");
+  }
+
+  const firstZone = zones[0];
+
+  await prisma.$transaction(async (tx) => {
+    await tx.standingRoute.updateMany({ where: { unitId, status: "ACTIVE" }, data: { status: "CANCELLED" } });
+
+    await tx.standingRoute.create({
+      data: {
+        unitId,
+        kind: "AIR_PATROL",
+        waypoints: {
+          create: zones.map((z, i) => ({ sequence: i, lat: z.lat, lng: z.lng, patrolCycles: z.cyclesCount })),
+        },
+      },
+    });
+
+    const existingOrder = await tx.unitOrder.findUnique({ where: { turnId_unitId: { turnId, unitId } } });
+    if (existingOrder) {
+      await tx.waypoint.deleteMany({ where: { orderId: existingOrder.id } });
+      await tx.unitOrder.delete({ where: { id: existingOrder.id } });
+    }
+
+    await tx.unit.update({
+      where: { id: unitId },
+      data: {
+        standingOrderActive: true,
+        standingOrderKind: "AIR_PATROL",
+        standingSpeedKnots: null,
+        airMissionState: "OUTBOUND",
+        airHomeLat: unit.baseLat ?? unit.currentLat,
+        airHomeLng: unit.baseLng ?? unit.currentLng,
+        airPatrolLat: firstZone.lat,
+        airPatrolLng: firstZone.lng,
+        fuelMinutesRemaining: unit.unitClass.enduranceMinutes ?? DEFAULT_ENDURANCE_MINUTES,
+      },
+    });
+  });
+
+  await applyAirPatrolLeg(turnId, turn.durationMinutes, unitId);
+  await checkTurnProgress(turnId);
+}
+
 /**
  * Annule l'ordre permanent d'une unité (bloc 3). Pour une patrouille
  * aérienne en vol, l'avion termine sa jambe en cours puis rentre se poser
@@ -329,6 +509,12 @@ export async function saveAirPatrolOrder(params: { turnId: string; unitId: strin
  */
 export async function cancelStandingOrder(unitId: string) {
   const unit = await prisma.unit.findUniqueOrThrow({ where: { id: unitId } });
+
+  // ROUTE/rotation AIR_PATROL en base (voir StandingRoute) : toujours
+  // marquées annulées ici, que l'avion atterrisse tout de suite (TRANSIT/
+  // AIR_PATROL simple) ou termine sa jambe en cours (voir ci-dessous).
+  await prisma.standingRoute.updateMany({ where: { unitId, status: "ACTIVE" }, data: { status: "CANCELLED" } });
+
   if (unit.standingOrderKind === "AIR_PATROL" && unit.airMissionState && unit.airMissionState !== "RETURNING") {
     // En l'air, pas encore sur le chemin du retour : on le fait rentrer
     // dès la prochaine reconduction automatique plutôt que de l'arrêter net.
@@ -495,10 +681,98 @@ async function applyStandingOrders(turnId: string) {
   for (const candidate of candidates) {
     if (candidate.standingOrderKind === "AIR_PATROL") {
       await applyAirPatrolLeg(turnId, turn.durationMinutes, candidate.id);
+    } else if (candidate.standingOrderKind === "ROUTE") {
+      await applyRouteTransitLeg(turnId, turn.durationMinutes, candidate.id);
     } else {
       await applyTransitLeg(turnId, turn.durationMinutes, candidate.id);
     }
   }
+}
+
+/**
+ * Reconduit une ROUTE (bloc 3, refonte) : parcourt la trajectoire dessinée à
+ * l'avance à partir de la position courante et du curseur enregistré,
+ * segment par segment, chacun à sa propre vitesse — budget de TEMPS (pas de
+ * distance) puisque la vitesse change d'un segment à l'autre. S'arrête dès
+ * que la manche est épuisée ou que le segment suivant change de vitesse
+ * (un UnitOrder ne porte qu'une seule vitesse scalaire — voir
+ * resolveTurnDetections/buildTimedTrack), et clôt la route quand son dernier
+ * point est atteint : l'unité retombe alors dans l'état "ordre permanent
+ * terminé", déjà géré partout ailleurs (le joueur doit se reconnecter).
+ */
+async function applyRouteTransitLeg(turnId: string, turnDurationMinutes: number, unitId: string) {
+  const unit = await prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } });
+  const route = await prisma.standingRoute.findFirst({
+    where: { unitId, kind: "ROUTE", status: "ACTIVE" },
+    include: { waypoints: { orderBy: { sequence: "asc" } } },
+  });
+  if (!route || route.cursorSequence >= route.waypoints.length) {
+    // Route absente/déjà épuisée (ne devrait pas arriver si standingOrderKind
+    // est resté cohérent) : on n'a rien à reconduire, mieux vaut ne rien
+    // produire que de créer un ordre incohérent.
+    return;
+  }
+
+  const maxSpeed = unit.speedCapKnots ?? unit.unitClass.maxSpeedKnots;
+  let pos: LatLng = { lat: unit.currentLat, lng: unit.currentLng };
+  let cursor = route.cursorSequence;
+  let remainingMinutes = turnDurationMinutes;
+  let legSpeedKnots: number | null = null;
+  const legPoints: LatLng[] = [];
+
+  while (remainingMinutes > 0 && cursor < route.waypoints.length) {
+    const target = route.waypoints[cursor];
+    const speedKnots = Math.min(target.speedKnots ?? maxSpeed, maxSpeed);
+
+    if (legSpeedKnots === null) {
+      legSpeedKnots = speedKnots;
+    } else if (speedKnots !== legSpeedKnots) {
+      // Changement de vitesse au prochain segment : on s'arrête ici pour
+      // cette manche, il reprendra à la vitesse suivante la manche d'après.
+      break;
+    }
+
+    const distanceToTargetNm = distanceNm(pos, target);
+    const timeNeededMinutes = speedKnots > 0 ? (distanceToTargetNm / speedKnots) * 60 : Infinity;
+
+    if (timeNeededMinutes <= remainingMinutes) {
+      pos = { lat: target.lat, lng: target.lng };
+      legPoints.push(pos);
+      remainingMinutes -= timeNeededMinutes;
+      cursor += 1;
+    } else {
+      const partialBudgetNm = speedKnots * (remainingMinutes / 60);
+      pos = destinationPoint(pos, bearingDeg(pos, target), partialBudgetNm);
+      legPoints.push(pos);
+      remainingMinutes = 0;
+    }
+  }
+
+  if (legPoints.length === 0) return; // budget nul ou route déjà épuisée : rien à faire ce tour-ci
+
+  const routeCompleted = cursor >= route.waypoints.length;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.unitOrder.create({
+      data: {
+        turnId,
+        unitId,
+        speedKnots: legSpeedKnots!,
+        isStanding: true,
+        waypoints: { create: legPoints.map((p, i) => ({ sequence: i, lat: p.lat, lng: p.lng })) },
+      },
+    });
+    await tx.standingRoute.update({
+      where: { id: route.id },
+      data: { cursorSequence: cursor, status: routeCompleted ? "COMPLETED" : "ACTIVE" },
+    });
+    if (routeCompleted) {
+      await tx.unit.update({
+        where: { id: unitId },
+        data: { standingOrderActive: false, standingOrderKind: null },
+      });
+    }
+  });
 }
 
 /** Reconduit un ordre TRANSIT : même cap, même vitesse que le dernier ordre. */
@@ -613,21 +887,75 @@ async function applyAirPatrolLeg(turnId: string, turnDurationMinutes: number, un
 
     if (landed) {
       const relaunch = unit.standingOrderActive;
-      await tx.unit.update({
-        where: { id: unitId },
-        data: relaunch
-          ? { airMissionState: "OUTBOUND", fuelMinutesRemaining: enduranceMinutes }
-          : {
-              standingOrderActive: false,
-              standingOrderKind: null,
-              airMissionState: null,
-              airHomeLat: null,
-              airHomeLng: null,
-              airPatrolLat: null,
-              airPatrolLng: null,
-              fuelMinutesRemaining: null,
-            },
-      });
+      if (!relaunch) {
+        await tx.unit.update({
+          where: { id: unitId },
+          data: {
+            standingOrderActive: false,
+            standingOrderKind: null,
+            airMissionState: null,
+            airHomeLat: null,
+            airHomeLng: null,
+            airPatrolLat: null,
+            airPatrolLng: null,
+            fuelMinutesRemaining: null,
+          },
+        });
+      } else {
+        // Rotation de zones (bloc 3, refonte) : si une StandingRoute
+        // AIR_PATROL est active pour cette unité, on décrémente les cycles
+        // restants sur la zone qui vient d'être survolée avant de
+        // redécoller dessus, ou on passe à la suivante de la file une fois
+        // épuisée — sinon (patrouille simple, sans rotation programmée) le
+        // comportement existant est inchangé : redécollage sur la même zone.
+        const route = await tx.standingRoute.findFirst({
+          where: { unitId, kind: "AIR_PATROL", status: "ACTIVE" },
+          include: { waypoints: { orderBy: { sequence: "asc" } } },
+        });
+        const currentZone = route?.waypoints[route.cursorSequence];
+
+        if (!route || !currentZone) {
+          await tx.unit.update({ where: { id: unitId }, data: { airMissionState: "OUTBOUND", fuelMinutesRemaining: enduranceMinutes } });
+        } else {
+          const remainingCycles = (currentZone.patrolCycles ?? 1) - 1;
+          if (remainingCycles > 0) {
+            await tx.routeWaypoint.update({ where: { id: currentZone.id }, data: { patrolCycles: remainingCycles } });
+            await tx.unit.update({
+              where: { id: unitId },
+              data: { airMissionState: "OUTBOUND", fuelMinutesRemaining: enduranceMinutes, airPatrolLat: currentZone.lat, airPatrolLng: currentZone.lng },
+            });
+          } else {
+            const nextIndex = route.cursorSequence + 1;
+            const nextZone = route.waypoints[nextIndex];
+            if (nextZone) {
+              await tx.standingRoute.update({ where: { id: route.id }, data: { cursorSequence: nextIndex } });
+              await tx.unit.update({
+                where: { id: unitId },
+                data: { airMissionState: "OUTBOUND", fuelMinutesRemaining: enduranceMinutes, airPatrolLat: nextZone.lat, airPatrolLng: nextZone.lng },
+              });
+            } else {
+              // Dernière zone de la rotation épuisée : la patrouille
+              // s'arrête là, le joueur doit se reconnecter pour en
+              // programmer une nouvelle (même état que la patrouille
+              // simple annulée manuellement, ci-dessus).
+              await tx.standingRoute.update({ where: { id: route.id }, data: { status: "COMPLETED" } });
+              await tx.unit.update({
+                where: { id: unitId },
+                data: {
+                  standingOrderActive: false,
+                  standingOrderKind: null,
+                  airMissionState: null,
+                  airHomeLat: null,
+                  airHomeLng: null,
+                  airPatrolLat: null,
+                  airPatrolLng: null,
+                  fuelMinutesRemaining: null,
+                },
+              });
+            }
+          }
+        }
+      }
     } else {
       await tx.unit.update({
         where: { id: unitId },
@@ -1059,19 +1387,27 @@ export async function publishTurn(turnId: string, nextTurn?: { weather: WeatherI
 
       // Ordres permanents « jusqu'à détection » (bloc 3) : une détection
       // confirmée ce tour, dans un sens ou dans l'autre, rend la main au
-      // joueur — le cap tenu automatiquement s'arrête là. Ne concerne que
-      // le maintien de cap (TRANSIT) : une patrouille aérienne continue son
-      // cycle malgré une détection, puisque repérer l'adversaire est
-      // justement sa mission.
+      // joueur — le cap tenu automatiquement (TRANSIT) ou la route longue
+      // durée (ROUTE) s'arrêtent là. Ne concerne pas la patrouille aérienne
+      // (simple ou en rotation) : elle continue son cycle malgré une
+      // détection, puisque repérer l'adversaire est justement sa mission.
       const confirmedDetections = await tx.detectionEvent.findMany({
         where: { turnId, arbiterStatus: { in: ["CONFIRMED", "ADDED_MANUALLY"] } },
         select: { observerUnitId: true, targetUnitId: true },
       });
       const detectedUnitIds = new Set(confirmedDetections.flatMap((d) => [d.observerUnitId, d.targetUnitId]));
       if (detectedUnitIds.size > 0) {
+        const detectedUnitIdList = Array.from(detectedUnitIds);
         await tx.unit.updateMany({
-          where: { id: { in: Array.from(detectedUnitIds) }, standingOrderKind: "TRANSIT" },
+          where: { id: { in: detectedUnitIdList }, standingOrderKind: { in: ["TRANSIT", "ROUTE"] } },
           data: { standingOrderActive: false, standingOrderKind: null, standingSpeedKnots: null },
+        });
+        // Pas de reprise du reste du trajet après une interception (voir le
+        // plan) : la route encore active de l'unité détectée est annulée,
+        // pas seulement mise en pause.
+        await tx.standingRoute.updateMany({
+          where: { unitId: { in: detectedUnitIdList }, kind: "ROUTE", status: "ACTIVE" },
+          data: { status: "CANCELLED" },
         });
       }
 
@@ -1122,6 +1458,70 @@ export async function publishTurn(turnId: string, nextTurn?: { weather: WeatherI
     },
     { timeout: 20000 }
   );
+}
+
+/** Sécurité anti-boucle-infinie pour autoAdvanceScenario (ne devrait jamais s'approcher de cette limite en usage normal). */
+const AUTO_ADVANCE_MAX_TURNS_PER_RUN = 20;
+
+/**
+ * Avancement automatique d'un scénario (bloc 3, refonte 2026-08-14) — appelé
+ * par le cron (voir src/app/api/cron/advance-turns/route.ts), jamais
+ * directement par un joueur. Reconduit les ordres permanents du tour ouvert
+ * et, tant que le tour qui en résulte ne propose AUCUNE détection, le
+ * publie tout seul (météo du tour suivant par légère dérive, voir
+ * jitterWeather) et recommence sur le suivant — jusqu'à un tour qui a
+ * besoin d'un humain (au moins une détection proposée, ou des ordres
+ * manuels encore manquants). C'est ce dernier arrêt, combiné à la cadence
+ * du cron lui-même (une fois par jour sur le plan Vercel Hobby), qui donne
+ * le rythme voulu : jamais plus d'une salve de tours résolus tout seuls
+ * entre deux passages du cron.
+ */
+export async function autoAdvanceScenario(scenarioId: string): Promise<{ turnsAdvanced: number; stoppedReason: string }> {
+  let turnsAdvanced = 0;
+
+  for (let i = 0; i < AUTO_ADVANCE_MAX_TURNS_PER_RUN; i++) {
+    const scenario = await prisma.scenario.findUniqueOrThrow({ where: { id: scenarioId } });
+    if (scenario.status !== "ACTIVE") return { turnsAdvanced, stoppedReason: "scénario non actif" };
+
+    let turn = await prisma.turn.findFirst({
+      where: { scenarioId, status: { not: "PUBLISHED" } },
+      orderBy: { number: "desc" },
+      include: { weather: true },
+    });
+    if (!turn) return { turnsAdvanced, stoppedReason: "aucun tour ouvert" };
+
+    if (turn.status === "PENDING_ORDERS") {
+      // Reconduit les ordres permanents (TRANSIT/ROUTE/AIR_PATROL) et
+      // enchaîne jusqu'à resolveTurnDetections si toutes les unités actives
+      // ont désormais un ordre — exactement le même chemin que le
+      // déclenchement par page chargée, juste sans page chargée.
+      await checkTurnProgress(turn.id);
+      turn = await prisma.turn.findUniqueOrThrow({ where: { id: turn.id }, include: { weather: true } });
+      if (turn.status === "PENDING_ORDERS") {
+        return { turnsAdvanced, stoppedReason: "des ordres manuels manquent encore" };
+      }
+    }
+
+    if (turn.status !== "PENDING_ARBITER_REVIEW") {
+      // RESOLVING transitoire (ne devrait pas être observable ici, resolveTurnDetections est awaited) ou déjà publié entretemps.
+      return { turnsAdvanced, stoppedReason: `tour en statut ${turn.status}` };
+    }
+
+    const detectionCount = await prisma.detectionEvent.count({ where: { turnId: turn.id } });
+    if (detectionCount > 0) {
+      return { turnsAdvanced, stoppedReason: "détection proposée, en attente de revue" };
+    }
+    if (!turn.weather) {
+      // Ne devrait pas arriver (resolveTurnDetections exige déjà une météo) — filet de sécurité.
+      return { turnsAdvanced, stoppedReason: "météo manquante" };
+    }
+
+    const jittered = jitterWeather(turn.weather);
+    await publishTurn(turn.id, { weather: jittered, durationMinutes: turn.durationMinutes });
+    turnsAdvanced++;
+  }
+
+  return { turnsAdvanced, stoppedReason: "plafond de sécurité atteint" };
 }
 
 function statusFromHealth(current: number, max: number): "ACTIVE" | "DAMAGED" | "SUNK" {

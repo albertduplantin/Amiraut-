@@ -19,6 +19,8 @@ import {
   requestFleetTransferAction,
   cancelFleetTransferAction,
   submitAirPatrolAction,
+  submitRouteOrderAction,
+  submitAirPatrolRotationAction,
   cancelStandingOrderAction,
 } from "./actions";
 
@@ -65,13 +67,22 @@ type UnitDto = {
   passive: boolean;
   // Bloc 3 — ordres permanents.
   standingOrderActive: boolean;
-  standingOrderKind: "TRANSIT" | "AIR_PATROL" | null;
+  standingOrderKind: "TRANSIT" | "AIR_PATROL" | "ROUTE" | null;
   airMissionState: "OUTBOUND" | "SEARCHING" | "RETURNING" | null;
   airPatrolLat: number | null;
   airPatrolLng: number | null;
   airHomeLat: number | null;
   airHomeLng: number | null;
   fuelMinutesRemaining: number | null;
+  // Route longue durée (ROUTE) ou rotation de patrouilles (AIR_PATROL avec
+  // plusieurs zones programmées) actuellement en cours — voir StandingRoute
+  // côté serveur. `waypoints` couvre tout le trajet/la rotation, y compris
+  // la partie déjà parcourue (avant `cursorSequence`) pour l'affichage.
+  activeRoute: {
+    kind: "ROUTE" | "AIR_PATROL";
+    cursorSequence: number;
+    waypoints: { sequence: number; lat: number; lng: number; speedKnots: number | null; patrolCycles: number | null }[];
+  } | null;
   existingOrder: { speedKnots: number; waypoints: LatLng[]; depthBand: string | null; isStanding: boolean } | null;
 };
 
@@ -105,7 +116,9 @@ const DEPTH_BAND_ORDER = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"] as const;
 type DepthBandKey = (typeof DEPTH_BAND_ORDER)[number];
 
 type UnitDraft = { speedKnots: number; waypoints: LatLng[]; saved: boolean; depthBand: DepthBandKey | null; standing: boolean };
-type UnitOrderTab = "path" | "airPatrol";
+type UnitOrderTab = "path" | "airPatrol" | "route";
+type RouteSegmentDraft = { lat: number; lng: number; speedKnots: number };
+type PatrolZoneDraft = { lat: number; lng: number; cyclesCount: number };
 type FleetDraft = { speedKnots: number; waypoints: LatLng[]; standing: boolean };
 type Mode = "unit" | "fleet";
 type SortMode = "fleet" | "type" | "name";
@@ -201,6 +214,11 @@ export function OrdersClient(props: {
   });
   const [unitOrderTab, setUnitOrderTab] = useState<UnitOrderTab>("path");
   const [airPatrolPoint, setAirPatrolPoint] = useState<LatLng | null>(null);
+  // Bloc 3 (refonte) — route longue durée (navires) et rotation de
+  // patrouilles (avions, en plus de la zone unique existante ci-dessus).
+  const [routeSegments, setRouteSegments] = useState<RouteSegmentDraft[]>([]);
+  const [rotationMode, setRotationMode] = useState(false);
+  const [patrolZones, setPatrolZones] = useState<PatrolZoneDraft[]>([]);
   const [isStandingPending, startStandingTransition] = useTransition();
   const [fleetDrafts, setFleetDrafts] = useState<Record<string, FleetDraft>>(() => {
     const initial: Record<string, FleetDraft> = {};
@@ -249,7 +267,23 @@ export function OrdersClient(props: {
 
   function handleMapClick(pos: LatLng) {
     if (mode === "unit" && selectedUnit?.category === "AIRCRAFT" && unitOrderTab === "airPatrol") {
-      setAirPatrolPoint(pos);
+      if (rotationMode) {
+        setPatrolZones((prev) => [...prev, { lat: pos.lat, lng: pos.lng, cyclesCount: 1 }]);
+      } else {
+        setAirPatrolPoint(pos);
+      }
+      return;
+    }
+
+    if (mode === "unit" && selectedUnit && selectedUnit.category !== "AIRCRAFT" && unitOrderTab === "route") {
+      const lastSpeed = routeSegments[routeSegments.length - 1]?.speedKnots ?? defaultSpeed(selectedUnit.maxSpeedKnots);
+      const previous = routeSegments.length > 0 ? routeSegments[routeSegments.length - 1] : { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
+      if (gameMapRef.current && !gameMapRef.current.isWaterSegment(previous, pos)) {
+        setError("Trajet impossible : il traverserait la terre.");
+        return;
+      }
+      setError(null);
+      setRouteSegments((prev) => [...prev, { lat: pos.lat, lng: pos.lng, speedKnots: lastSpeed }]);
       return;
     }
 
@@ -406,6 +440,9 @@ export function OrdersClient(props: {
     setSelectedUnitId(unitId);
     setUnitOrderTab("path");
     setAirPatrolPoint(null);
+    setRouteSegments([]);
+    setRotationMode(false);
+    setPatrolZones([]);
   }
 
   function inspectUnit(unitId: string) {
@@ -436,6 +473,43 @@ export function OrdersClient(props: {
     startStandingTransition(async () => {
       const result = await cancelStandingOrderAction({ unitId });
       if (!result.ok) setError(result.error);
+    });
+  }
+
+  function saveRouteClick() {
+    if (!selectedUnit || routeSegments.length === 0) return;
+    setError(null);
+    startStandingTransition(async () => {
+      const result = await submitRouteOrderAction({ turnId, unitId: selectedUnit.id, segments: routeSegments });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setRouteSegments([]);
+    });
+  }
+
+  /** Reprend l'édition d'une route active à partir de la portion pas encore parcourue — la modifier = la redessiner. */
+  function editActiveRoute() {
+    if (!selectedUnit?.activeRoute || selectedUnit.activeRoute.kind !== "ROUTE") return;
+    const remaining = selectedUnit.activeRoute.waypoints
+      .filter((w) => w.sequence >= selectedUnit.activeRoute!.cursorSequence)
+      .map((w) => ({ lat: w.lat, lng: w.lng, speedKnots: w.speedKnots ?? defaultSpeed(selectedUnit.maxSpeedKnots) }));
+    setRouteSegments(remaining);
+    setUnitOrderTab("route");
+  }
+
+  function launchAirPatrolRotation() {
+    if (!selectedUnit || patrolZones.length === 0) return;
+    setError(null);
+    startStandingTransition(async () => {
+      const result = await submitAirPatrolRotationAction({ turnId, unitId: selectedUnit.id, zones: patrolZones });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setPatrolZones([]);
+      setRotationMode(false);
     });
   }
 
@@ -525,7 +599,72 @@ export function OrdersClient(props: {
       });
     }
 
-    if (mode === "unit" && selectedUnit?.category === "AIRCRAFT" && unitOrderTab === "airPatrol" && airPatrolPoint) {
+    // Bloc 3 (refonte) — routes longue durée actives : portion pas encore
+    // parcourue (à partir de cursorSequence), affichée pour toute l'équipe.
+    const activeRoutedUnits = units.filter(
+      (u): u is UnitDto & { activeRoute: NonNullable<UnitDto["activeRoute"]> } => u.activeRoute?.kind === "ROUTE"
+    );
+    if (activeRoutedUnits.length > 0) {
+      list.push({
+        id: "active-routes",
+        kind: "line",
+        data: multiLineFeatureCollectionColored(
+          activeRoutedUnits.map((u) => ({
+            points: [
+              { lat: u.currentLat, lng: u.currentLng },
+              ...u.activeRoute.waypoints.filter((w) => w.sequence >= u.activeRoute.cursorSequence).map((w) => ({ lat: w.lat, lng: w.lng })),
+            ],
+            color: colorForId(u.id),
+          }))
+        ),
+        colorByFeature: true,
+        width: 2,
+        dashed: true,
+      });
+    }
+
+    if (mode === "unit" && selectedUnit && selectedUnit.category !== "AIRCRAFT" && unitOrderTab === "route" && routeSegments.length > 0) {
+      const start = { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
+      list.push({
+        id: "route-draft-line",
+        kind: "line",
+        data: lineFeatureCollection([start, ...routeSegments]),
+        color: "#2dd4bf",
+        width: 3,
+      });
+      list.push({
+        id: "route-draft-points",
+        kind: "points",
+        data: pointsFeatureCollection(routeSegments.map((s, i) => ({ lat: s.lat, lng: s.lng, properties: { name: `${i + 1} — ${s.speedKnots}nds` } }))),
+        color: "#2dd4bf",
+        radius: 5,
+        showLabels: true,
+      });
+    }
+
+    if (mode === "unit" && selectedUnit?.category === "AIRCRAFT" && unitOrderTab === "airPatrol" && rotationMode && patrolZones.length > 0) {
+      const start = { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
+      list.push({
+        id: "patrol-rotation-draft-line",
+        kind: "line",
+        data: lineFeatureCollection([start, ...patrolZones]),
+        color: "#facc15",
+        width: 2,
+        dashed: true,
+      });
+      list.push({
+        id: "patrol-rotation-draft-points",
+        kind: "points",
+        data: pointsFeatureCollection(
+          patrolZones.map((z, i) => ({ lat: z.lat, lng: z.lng, properties: { name: `${i + 1} — ${z.cyclesCount} cycle(s)` } }))
+        ),
+        color: "#facc15",
+        radius: 6,
+        showLabels: true,
+      });
+    }
+
+    if (mode === "unit" && selectedUnit?.category === "AIRCRAFT" && unitOrderTab === "airPatrol" && !rotationMode && airPatrolPoint) {
       list.push({
         id: "air-patrol-draft-line",
         kind: "line",
@@ -615,6 +754,9 @@ export function OrdersClient(props: {
     lastContacts,
     unitOrderTab,
     airPatrolPoint,
+    routeSegments,
+    rotationMode,
+    patrolZones,
   ]);
 
   const shipMarkers = useMemo<ShipMarkerConfig[]>(() => {
@@ -827,7 +969,12 @@ export function OrdersClient(props: {
               </div>
 
               {selectedUnit.standingOrderActive && (
-                <StandingOrderStatus unit={selectedUnit} onCancel={() => cancelStanding(selectedUnit.id)} pending={isStandingPending} />
+                <StandingOrderStatus
+                  unit={selectedUnit}
+                  onCancel={() => cancelStanding(selectedUnit.id)}
+                  onEditRoute={editActiveRoute}
+                  pending={isStandingPending}
+                />
               )}
 
               {selectedUnit.category === "AIRCRAFT" && (
@@ -847,12 +994,50 @@ export function OrdersClient(props: {
                 </div>
               )}
 
+              {selectedUnit.category !== "AIRCRAFT" && (
+                <div className="flex rounded-md border border-slate-800 text-xs">
+                  <button
+                    onClick={() => setUnitOrderTab("path")}
+                    className={`flex-1 rounded-l-md px-2 py-1.5 ${unitOrderTab === "path" ? "bg-brass-900/50" : "hover:bg-slate-900"}`}
+                  >
+                    Trajet simple
+                  </button>
+                  <button
+                    onClick={() => setUnitOrderTab("route")}
+                    className={`flex-1 rounded-r-md px-2 py-1.5 ${unitOrderTab === "route" ? "bg-brass-900/50" : "hover:bg-slate-900"}`}
+                    title="Trace le trajet complet sur plusieurs manches d'un coup, vitesse ajustable étape par étape."
+                  >
+                    Route longue durée
+                  </button>
+                </div>
+              )}
+
               {selectedUnit.category === "AIRCRAFT" && unitOrderTab === "airPatrol" ? (
                 <AirPatrolControls
                   unit={selectedUnit}
                   patrolPoint={airPatrolPoint}
                   onLaunch={launchAirPatrol}
                   onClear={() => setAirPatrolPoint(null)}
+                  rotationMode={rotationMode}
+                  onToggleRotationMode={(on) => {
+                    setRotationMode(on);
+                    setAirPatrolPoint(null);
+                    setPatrolZones([]);
+                  }}
+                  zones={patrolZones}
+                  onZonesChange={setPatrolZones}
+                  onLaunchRotation={launchAirPatrolRotation}
+                  pending={isStandingPending}
+                  error={error}
+                />
+              ) : selectedUnit.category !== "AIRCRAFT" && unitOrderTab === "route" ? (
+                <RouteControls
+                  unit={selectedUnit}
+                  segments={routeSegments}
+                  onSegmentsChange={setRouteSegments}
+                  onSave={saveRouteClick}
+                  onEditActive={editActiveRoute}
+                  turnDurationMinutes={turnDurationMinutes}
                   pending={isStandingPending}
                   error={error}
                 />
@@ -1330,23 +1515,43 @@ function ShipDetailPanel({ unit }: { unit: UnitDto }) {
  * Bandeau d'état d'un ordre permanent (bloc 3) : cap tenu ou patrouille
  * aérienne en cours, avec un bouton pour reprendre la main.
  */
-function StandingOrderStatus({ unit, onCancel, pending }: { unit: UnitDto; onCancel: () => void; pending: boolean }) {
+function StandingOrderStatus({
+  unit,
+  onCancel,
+  onEditRoute,
+  pending,
+}: {
+  unit: UnitDto;
+  onCancel: () => void;
+  onEditRoute?: () => void;
+  pending: boolean;
+}) {
+  const routeStepsLeft = unit.activeRoute ? unit.activeRoute.waypoints.length - unit.activeRoute.cursorSequence : 0;
   const label =
-    unit.standingOrderKind === "AIR_PATROL"
-      ? `Patrouille en cours — ${formatAirState(unit.airMissionState)}${
-          unit.fuelMinutesRemaining != null ? ` · carburant ${Math.round(unit.fuelMinutesRemaining)} min` : ""
-        }`
-      : "Ordre permanent — tient son cap et sa vitesse jusqu'à détection";
+    unit.standingOrderKind === "ROUTE"
+      ? `Route en cours — ${routeStepsLeft} étape${routeStepsLeft > 1 ? "s" : ""} restante${routeStepsLeft > 1 ? "s" : ""}`
+      : unit.standingOrderKind === "AIR_PATROL"
+        ? `${unit.activeRoute?.kind === "AIR_PATROL" ? "Rotation de patrouilles" : "Patrouille"} en cours — ${formatAirState(unit.airMissionState)}${
+            unit.fuelMinutesRemaining != null ? ` · carburant ${Math.round(unit.fuelMinutesRemaining)} min` : ""
+          }${unit.activeRoute?.kind === "AIR_PATROL" ? ` · zone ${unit.activeRoute.cursorSequence + 1}/${unit.activeRoute.waypoints.length}` : ""}`
+        : "Ordre permanent — tient son cap et sa vitesse jusqu'à détection";
   return (
     <div className="flex items-center justify-between gap-2 rounded-md border border-sky-800 bg-sky-950/30 px-3 py-2 text-xs text-sky-200">
       <span>⚓ {label}</span>
-      <button
-        onClick={onCancel}
-        disabled={pending}
-        className="shrink-0 rounded border border-sky-700 px-2 py-1 text-[11px] hover:bg-sky-900 disabled:opacity-50"
-      >
-        {unit.standingOrderKind === "AIR_PATROL" ? "Rappeler" : "Annuler"}
-      </button>
+      <div className="flex shrink-0 gap-1">
+        {unit.standingOrderKind === "ROUTE" && onEditRoute && (
+          <button onClick={onEditRoute} className="rounded border border-sky-700 px-2 py-1 text-[11px] hover:bg-sky-900">
+            Modifier
+          </button>
+        )}
+        <button
+          onClick={onCancel}
+          disabled={pending}
+          className="rounded border border-sky-700 px-2 py-1 text-[11px] hover:bg-sky-900 disabled:opacity-50"
+        >
+          {unit.standingOrderKind === "AIR_PATROL" ? "Rappeler" : "Annuler"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1364,12 +1569,22 @@ function formatAirState(state: UnitDto["airMissionState"]) {
   }
 }
 
-/** Réglage d'un ordre de patrouille aérienne (bloc 3) : choix de la zone puis lancement. */
+/**
+ * Réglage d'un ordre de patrouille aérienne (bloc 3) : choix de la zone puis
+ * lancement — soit une zone unique pour toujours (comportement d'origine),
+ * soit (bascule "rotation") une file de plusieurs zones survolées à tour de
+ * rôle, chacune un nombre de cycles donné avant de passer à la suivante.
+ */
 function AirPatrolControls({
   unit,
   patrolPoint,
   onLaunch,
   onClear,
+  rotationMode,
+  onToggleRotationMode,
+  zones,
+  onZonesChange,
+  onLaunchRotation,
   pending,
   error,
 }: {
@@ -1377,37 +1592,187 @@ function AirPatrolControls({
   patrolPoint: LatLng | null;
   onLaunch: () => void;
   onClear: () => void;
+  rotationMode: boolean;
+  onToggleRotationMode: (on: boolean) => void;
+  zones: PatrolZoneDraft[];
+  onZonesChange: (zones: PatrolZoneDraft[]) => void;
+  onLaunchRotation: () => void;
   pending: boolean;
   error: string | null;
 }) {
   const distance = patrolPoint ? distanceNm({ lat: unit.currentLat, lng: unit.currentLng }, patrolPoint) : null;
   return (
     <div className="space-y-2 rounded-md border border-slate-800 bg-slate-900 p-3 text-xs">
-      <p className="text-slate-400">
-        Cliquez sur la carte pour choisir la zone de recherche. L&apos;avion décolle, patrouille en boucle sur zone,
-        puis rentre se poser automatiquement dès que le carburant l&apos;impose — et redécolle aussitôt si l&apos;ordre
-        reste actif.
-      </p>
-      {unit.enduranceMinutes != null && <p className="text-slate-500">Autonomie : {unit.enduranceMinutes} min</p>}
-      {patrolPoint ? (
+      <label className="flex items-center gap-2 text-slate-300">
+        <input type="checkbox" checked={rotationMode} onChange={(e) => onToggleRotationMode(e.target.checked)} className="h-3.5 w-3.5" />
+        Rotation sur plusieurs zones
+      </label>
+
+      {rotationMode ? (
         <>
-          <p className="text-slate-300">Zone choisie, à {distance?.toFixed(0)} nm.</p>
+          <p className="text-slate-400">
+            Cliquez sur la carte pour ajouter des zones : chacune sera survolée le nombre de cycles indiqué avant de
+            passer à la suivante, en boucle décollage → recherche → retour.
+          </p>
+          {unit.enduranceMinutes != null && <p className="text-slate-500">Autonomie : {unit.enduranceMinutes} min</p>}
+          {zones.length > 0 ? (
+            <ul className="space-y-1">
+              {zones.map((z, i) => (
+                <li key={i} className="flex items-center gap-2 rounded border border-slate-800 px-2 py-1">
+                  <span className="flex-1">Zone {i + 1}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={z.cyclesCount}
+                    onChange={(e) =>
+                      onZonesChange(zones.map((zz, ii) => (ii === i ? { ...zz, cyclesCount: Math.max(1, Number(e.target.value)) } : zz)))
+                    }
+                    className="w-14 rounded border border-slate-700 bg-slate-800 px-1 py-0.5 text-right"
+                    title="Cycles décollage/recherche/retour avant de passer à la zone suivante"
+                  />
+                  <span className="text-slate-500">cycle(s)</span>
+                  <button onClick={() => onZonesChange(zones.filter((_, ii) => ii !== i))} className="text-slate-500 hover:text-red-400">
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="italic text-slate-600">Aucune zone ajoutée pour l&apos;instant.</p>
+          )}
           <div className="flex gap-2">
-            <button onClick={onClear} className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
+            <button onClick={() => onZonesChange([])} className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
               Effacer
             </button>
             <button
-              onClick={onLaunch}
-              disabled={pending}
+              onClick={onLaunchRotation}
+              disabled={pending || zones.length === 0}
               className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 font-medium hover:bg-brass-500 disabled:opacity-50"
             >
-              {pending ? "Lancement…" : "Lancer la patrouille"}
+              {pending ? "Lancement…" : "Lancer la rotation"}
             </button>
           </div>
         </>
       ) : (
-        <p className="italic text-slate-600">Aucune zone choisie pour l&apos;instant.</p>
+        <>
+          <p className="text-slate-400">
+            Cliquez sur la carte pour choisir la zone de recherche. L&apos;avion décolle, patrouille en boucle sur
+            zone, puis rentre se poser automatiquement dès que le carburant l&apos;impose — et redécolle aussitôt si
+            l&apos;ordre reste actif.
+          </p>
+          {unit.enduranceMinutes != null && <p className="text-slate-500">Autonomie : {unit.enduranceMinutes} min</p>}
+          {patrolPoint ? (
+            <>
+              <p className="text-slate-300">Zone choisie, à {distance?.toFixed(0)} nm.</p>
+              <div className="flex gap-2">
+                <button onClick={onClear} className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
+                  Effacer
+                </button>
+                <button
+                  onClick={onLaunch}
+                  disabled={pending}
+                  className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 font-medium hover:bg-brass-500 disabled:opacity-50"
+                >
+                  {pending ? "Lancement…" : "Lancer la patrouille"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="italic text-slate-600">Aucune zone choisie pour l&apos;instant.</p>
+          )}
+        </>
       )}
+      {error && <p className="text-red-400">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * Éditeur de route longue durée (bloc 3, refonte) : liste des étapes
+ * dessinées sur la carte, vitesse ajustable par étape, estimation
+ * informative du nombre de manches nécessaires — pas de plafond dur comme
+ * le trajet d'une seule manche, le moteur la parcourt à son rythme.
+ */
+function RouteControls({
+  unit,
+  segments,
+  onSegmentsChange,
+  onSave,
+  onEditActive,
+  turnDurationMinutes,
+  pending,
+  error,
+}: {
+  unit: UnitDto;
+  segments: RouteSegmentDraft[];
+  onSegmentsChange: (segments: RouteSegmentDraft[]) => void;
+  onSave: () => void;
+  onEditActive: () => void;
+  turnDurationMinutes: number;
+  pending: boolean;
+  error: string | null;
+}) {
+  const totalNm = pathLengthNm([{ lat: unit.currentLat, lng: unit.currentLng }, ...segments]);
+  const totalHours = segments.reduce((sum, s, i) => {
+    const from = i === 0 ? { lat: unit.currentLat, lng: unit.currentLng } : segments[i - 1];
+    return sum + distanceNm(from, s) / Math.max(0.1, s.speedKnots);
+  }, 0);
+  const estimatedTurns = turnDurationMinutes > 0 ? Math.ceil((totalHours * 60) / turnDurationMinutes) : null;
+
+  return (
+    <div className="space-y-2 rounded-md border border-slate-800 bg-slate-900 p-3 text-xs">
+      <p className="text-slate-400">
+        Cliquez sur la carte pour ajouter des étapes — vitesse réglable pour chacune. Le trajet se parcourt tout seul
+        manche après manche jusqu&apos;à son terme ou une détection confirmée impliquant ce navire ; vous devrez alors
+        vous reconnecter pour reprendre la main.
+      </p>
+      {unit.activeRoute?.kind === "ROUTE" && (
+        <button onClick={onEditActive} className="w-full rounded-md border border-sky-700 px-3 py-1.5 text-sky-200 hover:bg-sky-900">
+          Reprendre la route active à partir d&apos;ici
+        </button>
+      )}
+      {segments.length > 0 ? (
+        <ul className="space-y-1">
+          {segments.map((s, i) => (
+            <li key={i} className="flex items-center gap-2 rounded border border-slate-800 px-2 py-1">
+              <span className="flex-1">Étape {i + 1}</span>
+              <input
+                type="number"
+                min={0}
+                max={unit.maxSpeedKnots}
+                value={s.speedKnots}
+                onChange={(e) =>
+                  onSegmentsChange(segments.map((ss, ii) => (ii === i ? { ...ss, speedKnots: Math.max(0, Number(e.target.value)) } : ss)))
+                }
+                className="w-14 rounded border border-slate-700 bg-slate-800 px-1 py-0.5 text-right"
+              />
+              <span className="text-slate-500">nds</span>
+              <button onClick={() => onSegmentsChange(segments.filter((_, ii) => ii !== i))} className="text-slate-500 hover:text-red-400">
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="italic text-slate-600">Aucune étape ajoutée pour l&apos;instant.</p>
+      )}
+      {segments.length > 0 && (
+        <div className="rounded-md bg-slate-950 p-2 text-slate-400">
+          {totalNm.toFixed(0)} nm au total {estimatedTurns != null && <>· ≈ {estimatedTurns} manche{estimatedTurns > 1 ? "s" : ""} à ces vitesses</>}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <button onClick={() => onSegmentsChange([])} className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
+          Effacer
+        </button>
+        <button
+          onClick={onSave}
+          disabled={pending || segments.length === 0}
+          className="flex-1 rounded-md bg-brass-600 px-3 py-1.5 font-medium hover:bg-brass-500 disabled:opacity-50"
+        >
+          {pending ? "Enregistrement…" : "Enregistrer la route"}
+        </button>
+      </div>
       {error && <p className="text-red-400">{error}</p>}
     </div>
   );
