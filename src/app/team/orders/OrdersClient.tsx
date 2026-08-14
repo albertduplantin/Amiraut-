@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import {
   budgetCircleFeatureCollection,
@@ -112,6 +113,20 @@ type WreckDto = {
 const LISTENING_SPEED_KNOTS = 4;
 const NM_TO_M = 1852;
 
+/**
+ * Un ordre peut échouer parce que le tour a fini de se résoudre PENDANT que
+ * le joueur regardait encore l'écran de saisie (ex. le dernier ordre requis
+ * vient d'être soumis par un coéquipier, ou par ce joueur lui-même sur une
+ * autre unité juste avant) — la page affichée reste alors périmée (toujours
+ * "Tour N" alors que le serveur est déjà passé au tour suivant ou en revue
+ * arbitre), ce qui donne l'impression trompeuse d'un blocage. Un rafraîchissement
+ * (router.refresh()) suffit à réafficher l'état réel plutôt que de laisser le
+ * joueur face à un écran figé — voir les appelants de ce helper.
+ */
+function isStaleTurnError(message: string) {
+  return message.includes("n'accepte plus d'ordres") || message.includes("partie est terminée");
+}
+
 const DEPTH_BAND_ORDER = ["SURFACE", "SHALLOW", "MEDIUM", "DEEP"] as const;
 type DepthBandKey = (typeof DEPTH_BAND_ORDER)[number];
 
@@ -153,6 +168,7 @@ export function OrdersClient(props: {
   wrecks: WreckDto[];
 }) {
   const { turnId, turnNumber, turnDurationMinutes, weather, units, wrecks, teamFleets, lastContacts, lastReportTurnNumber } = props;
+  const router = useRouter();
 
   const fleets = useMemo(() => {
     const byFleet = new Map<string, UnitDto[]>();
@@ -367,6 +383,7 @@ export function OrdersClient(props: {
       });
       if (!result.ok) {
         setError(result.error);
+        if (isStaleTurnError(result.error)) router.refresh();
         return;
       }
       setUnitDrafts((prev) => ({ ...prev, [selectedUnit.id]: { ...prev[selectedUnit.id], saved: true } }));
@@ -386,6 +403,7 @@ export function OrdersClient(props: {
       });
       if (!result.ok) {
         setError(result.error);
+        if (isStaleTurnError(result.error)) router.refresh();
         return;
       }
       setUnitDrafts((prev) => {
@@ -462,6 +480,7 @@ export function OrdersClient(props: {
       const result = await submitAirPatrolAction({ turnId, unitId: selectedUnit.id, patrolPoint: airPatrolPoint });
       if (!result.ok) {
         setError(result.error);
+        if (isStaleTurnError(result.error)) router.refresh();
         return;
       }
       setAirPatrolPoint(null);
@@ -483,6 +502,7 @@ export function OrdersClient(props: {
       const result = await submitRouteOrderAction({ turnId, unitId: selectedUnit.id, segments: routeSegments });
       if (!result.ok) {
         setError(result.error);
+        if (isStaleTurnError(result.error)) router.refresh();
         return;
       }
       setRouteSegments([]);
@@ -506,6 +526,7 @@ export function OrdersClient(props: {
       const result = await submitAirPatrolRotationAction({ turnId, unitId: selectedUnit.id, zones: patrolZones });
       if (!result.ok) {
         setError(result.error);
+        if (isStaleTurnError(result.error)) router.refresh();
         return;
       }
       setPatrolZones([]);
