@@ -151,6 +151,14 @@ model UnitClass {
   // calibrée sur des cas documentés (chasseur monoplace moderne ~0.8-0.95,
   // hydravion/bombardier lourd ~0.1-0.3) — voir combat.ts, airCombatHitChancePercent.
   agility Float?
+  // Niveau de l'équipage (avions uniquement), A (élite) à F (très mauvais) —
+  // Amirauté 2013 de F. Marlière §4.1.1.2 : la supériorité japonaise de 1942
+  // doit autant à l'excellence des pilotes qu'aux qualités du Zéro, les
+  // déboires italiens tiennent à leurs tactiques plus qu'à l'obsolescence de
+  // leurs appareils. Multiplie la précision en bombardement/mitraillage et
+  // en combat air-air (voir combat.ts, pilotSkillMultiplier) — C (moyen) par
+  // défaut si non renseigné, comportement inchangé pour les classes existantes.
+  pilotSkill String?
 
   units Unit[]
 }
@@ -200,6 +208,7 @@ model LibraryUnitClass {
   turningRadiusM         Float?
   accelerationKnotsPerMin Float?
   agility                Float?
+  pilotSkill              String? // voir le commentaire équivalent sur UnitClass
   resistancePoints        Float // voir UnitClass.healthMax/Current, calculé à l'instanciation à partir de cette valeur
   // Repère libre pour le classement dans /library (ex. "Atlantique/Arctique
   // 1939-45") — pas utilisé par le moteur, juste pour s'y retrouver.

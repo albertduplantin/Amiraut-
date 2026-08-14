@@ -44,6 +44,8 @@ export type ScenarioUnitClass = {
   accelerationKnotsPerMin?: number;
   /** Maniabilité en combat air-air (avions), 0-1 — voir combat.ts, airCombatHitChanceBreakdown. */
   agility?: number;
+  /** Niveau de l'équipage (avions), "A" (élite) à "F" — voir combat.ts, pilotSkillMultiplier. "C" (moyen) par défaut si absent. */
+  pilotSkill?: string;
   sensors: ScenarioSensor[];
   detectability?: number;
   iconKey: string;

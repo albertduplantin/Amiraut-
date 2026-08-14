@@ -17,6 +17,7 @@ import {
   torpedoHitChancePercent,
   bombHitChancePercent,
   airCombatHitChancePercent,
+  strafingHitChancePercent,
   depthChargeHitChancePercent,
   hedgehogHitChancePercent,
   isInGunArc,
@@ -1501,6 +1502,13 @@ function FireDashboard({
         defenderHasDefensiveGuns: false, // repli optimiste côté estimation client : le vrai calcul (serveur) connaît l'armement réel de la cible.
       });
     }
+    if (battery && ship.category === "AIRCRAFT" && !targetIsAircraft) {
+      // Mitraillage/roquettes air → navire : pas de notion de portée/arc à
+      // cette échelle non plus (voir resolveStrafingEngagement, combat.ts) —
+      // très précis, mais capé côté serveur à des dégâts superficiels contre
+      // un bâtiment de tonnage significatif.
+      return strafingHitChancePercent({});
+    }
     if (battery) {
       const inRange = battery.rangeM >= rangeM;
       const inArc = isInGunArc(battery.arc, relativeBearing ?? 0);
@@ -1515,7 +1523,7 @@ function FireDashboard({
       });
     }
     return null;
-  }, [target, rangeM, selectedWeaponSlot, allGuns, torpedoBattery, torpedoTypes, selectedTorpedoTypeId, torpedoInRange, torpedoInArc, relativeBearing, bombLoadout, ship.agility]);
+  }, [target, rangeM, selectedWeaponSlot, allGuns, torpedoBattery, torpedoTypes, selectedTorpedoTypeId, torpedoInRange, torpedoInArc, relativeBearing, bombLoadout, ship.agility, ship.category]);
 
   return (
     <div className="space-y-3">
@@ -1539,8 +1547,9 @@ function FireDashboard({
           {allGuns.map((g, i) => {
             const slot = gunSlot(i);
             const fired = firedBySlot[`${ship.id}|${slot}`];
-            // Combat air-air : pas de portée/arc gradués à cette échelle (voir combat.ts) — toujours utilisable dès que la cible est détectée.
-            const usable = !target || target.category === "AIRCRAFT" || (g.rangeM >= rangeM! && isInGunArc(g.arc, relativeBearing ?? 0));
+            // Combat air-air et mitraillage/roquettes air → navire : pas de portée/arc gradués à cette échelle (voir combat.ts) — toujours utilisable dès que la cible est détectée.
+            const usable =
+              !target || target.category === "AIRCRAFT" || ship.category === "AIRCRAFT" || (g.rangeM >= rangeM! && isInGunArc(g.arc, relativeBearing ?? 0));
             if (ship.disabledWeaponSlots.includes(slot)) {
               return (
                 <li key={i} className="rounded-md border border-slate-800 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-600">
@@ -1650,7 +1659,7 @@ function FireDashboard({
           {bombLoadout && ship.disabledWeaponSlots.includes(BOMB_SLOT) && (
             <li className="rounded-md border border-slate-800 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-600">
               <div className="flex items-center justify-between">
-                <span>Bombes ×{bombLoadout.count} ({bombLoadout.method === "DIVE" ? "piqué" : "horizontal"})</span>
+                <span>Bombes ×{bombLoadout.count} ({formatBombMethod(bombLoadout.method)})</span>
                 <span className="text-red-500">✗ hors service</span>
               </div>
             </li>
@@ -1658,7 +1667,7 @@ function FireDashboard({
           {bombLoadout && !ship.disabledWeaponSlots.includes(BOMB_SLOT) && bombFired && (
             <li className={`rounded-md border px-2 py-1.5 text-xs ${firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.hit ? "border-red-800 bg-red-950/30" : "border-slate-700 bg-slate-900"}`}>
               <div className="flex items-center justify-between text-slate-400">
-                <span>Bombes ×{bombLoadout.count} ({bombLoadout.method === "DIVE" ? "piqué" : "horizontal"})</span>
+                <span>Bombes ×{bombLoadout.count} ({formatBombMethod(bombLoadout.method)})</span>
                 <span className="text-emerald-400">✓ larguées</span>
               </div>
               {firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.hitRoll !== null && firedBySlot[`${ship.id}|${BOMB_SLOT}`]?.hitChancePercent !== null && (
@@ -1687,7 +1696,7 @@ function FireDashboard({
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span>Bombes ×{bombLoadout.count} ({bombLoadout.method === "DIVE" ? "piqué" : "horizontal"})</span>
+                  <span>Bombes ×{bombLoadout.count} ({formatBombMethod(bombLoadout.method)})</span>
                 </div>
                 {target && target.category !== "SURFACE_SHIP" && <div className="text-[11px] text-amber-400">ne vise qu&apos;un navire de surface</div>}
               </button>
@@ -1919,6 +1928,18 @@ function formatArc(arc: string) {
       return "travers";
     default:
       return arc;
+  }
+}
+
+/** Libellé de la méthode de largage — voir combat.ts, BombLoadout.method. */
+function formatBombMethod(method: string) {
+  switch (method) {
+    case "DIVE":
+      return "piqué";
+    case "SKIP":
+      return "basse altitude/ricochet";
+    default:
+      return "horizontal";
   }
 }
 

@@ -16,6 +16,7 @@ export type LibraryClassData = {
   turningRadiusM: number | null;
   accelerationKnotsPerMin: number | null;
   agility: number | null;
+  pilotSkill: string | null;
   sensors: unknown;
   detectability: number;
   iconKey: string;
@@ -63,6 +64,7 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
   const [turningRadiusM, setTurningRadiusM] = useState(String(initial?.turningRadiusM ?? ""));
   const [accelerationKnotsPerMin, setAccelerationKnotsPerMin] = useState(String(initial?.accelerationKnotsPerMin ?? ""));
   const [agility, setAgility] = useState(String(initial?.agility ?? ""));
+  const [pilotSkill, setPilotSkill] = useState(initial?.pilotSkill ?? "");
   const [detectability, setDetectability] = useState(String(initial?.detectability ?? "1"));
   const [iconKey, setIconKey] = useState(initial?.iconKey ?? "cruiser");
   const [profileImageUrl, setProfileImageUrl] = useState(initial?.profileImageUrl ?? "");
@@ -135,6 +137,7 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
       turningRadiusM: numOrUndefined(turningRadiusM),
       accelerationKnotsPerMin: numOrUndefined(accelerationKnotsPerMin),
       agility: numOrUndefined(agility),
+      pilotSkill: pilotSkill.trim() || undefined,
       sensors,
       detectability: numOrUndefined(detectability),
       iconKey,
@@ -249,6 +252,10 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
                   Maniabilité air-air (0-1)
                   <input value={agility} onChange={(e) => setAgility(e.target.value)} className={fieldClass} />
                 </label>
+                <label className={labelClass} title="A (élite) à F (très mauvais) — moyen (C) si laissé vide, voir combat.ts pilotSkillMultiplier">
+                  Niveau équipage (A-F)
+                  <input value={pilotSkill} onChange={(e) => setPilotSkill(e.target.value.toUpperCase().slice(0, 1))} className={fieldClass} />
+                </label>
                 <label className={labelClass}>
                   Autonomie de vol (min)
                   <input value={enduranceMinutes} onChange={(e) => setEnduranceMinutes(e.target.value)} className={fieldClass} />
@@ -314,8 +321,12 @@ export function LibraryForm({ initial }: { initial?: LibraryClassData }) {
             {combatProfileError && <p className="mt-1 text-xs text-red-400">{combatProfileError}</p>}
             <p className="mt-1 text-[11px] text-slate-600">
               Avion torpilleur : <code>{`{"torpedoTubes":{"count":1,"rangeM":900,"speedKnots":40}}`}</code>. Bombardier :{" "}
-              <code>{`{"bombs":{"count":1,"weightKg":250,"method":"DIVE"}}`}</code>. Chasseur :{" "}
-              <code>{`{"guns":[{"calibreMm":20,"count":2,"rangeM":500,"roundsPerMinute":600,"arc":"FORWARD"}]}`}</code>.
+              <code>{`{"bombs":{"count":1,"weightKg":250,"method":"DIVE"}}`}</code> (<code>method</code> : <code>DIVE</code>,{" "}
+              <code>LEVEL</code> ou <code>SKIP</code> — basse altitude/ricochet). Chasseur :{" "}
+              <code>{`{"guns":[{"calibreMm":20,"count":2,"rangeM":500,"roundsPerMinute":600,"arc":"FORWARD"}]}`}</code>. Un même canon
+              d&apos;avion sert aussi bien au combat air-air qu&apos;au mitraillage d&apos;un navire, selon la cible visée en jeu.
+              Navire équipé de DCA : ajouter <code>{`"antiAircraft":{"gunCount":4}`}</code> au même objet (chances d&apos;abattre
+              l&apos;avion attaquant, voir combat.ts).
             </p>
           </section>
 

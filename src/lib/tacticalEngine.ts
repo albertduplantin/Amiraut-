@@ -10,6 +10,9 @@ import {
   resolveBombingEngagement,
   resolveAirCombatEngagement,
   resolveTorpedoSalvoIntercept,
+  resolveStrafingEngagement,
+  resolveDcaAttack,
+  pilotSkillMultiplier,
   torpedoDangerZoneWidthM,
   DEFAULT_TORPEDO_RELIABILITY,
   rollLocalizedDamage,
@@ -719,6 +722,51 @@ export async function submitTacticalFireShot(params: {
   // mai 1941) : pénalise toute solution de tir au canon ou à la torpille,
   // pas les grenades ASM (résolues à l'oreille, pas à l'optique).
   const accuracyMultiplier = attacker.fireControlDamaged ? FIRE_CONTROL_DAMAGED_ACCURACY_MULTIPLIER : 1;
+  // Niveau de l'équipage (avions uniquement, voir UnitClass.pilotSkill) —
+  // composé avec accuracyMultiplier ci-dessus pour les seuls tirs air-air/
+  // bombardement/mitraillage, jamais pour l'artillerie ou les torpilles de
+  // navire/sous-marin (recherche 2026-08-14, Amirauté 2013 §4.6.3.1).
+  const pilotSkillFactor = attacker.unitClass.category === "AIRCRAFT" ? pilotSkillMultiplier(attacker.unitClass.pilotSkill) : 1;
+  const airAttackAccuracyMultiplier = accuracyMultiplier * pilotSkillFactor;
+
+  // ── DCA : riposte automatique d'un navire ciblé par un avion ──────────
+  // (bombardement, torpille aérienne, mitraillage — voir resolveDcaAttack
+  // dans combat.ts) — résolue AVANT l'attaque elle-même : un avion abattu
+  // avant d'avoir largué/tiré ne fait en principe pas de dégâts, sauf le
+  // tirage à ~50% qui le laisse quand même achever sa passe (Amirauté 2013
+  // §4.6.2.4). Ne concerne que les attaques avion → navire, jamais l'inverse.
+  let dcaNarrative: string | null = null;
+  let dcaAbortsAttack = false;
+  if (attacker.unitClass.category === "AIRCRAFT" && target.unitClass.category === "SURFACE_SHIP") {
+    const targetProfile = target.unitClass.combatProfile as CombatProfile | null;
+    const aaBattery = targetProfile?.antiAircraft;
+    if (aaBattery) {
+      const dca = resolveDcaAttack({
+        battery: aaBattery,
+        targetAgility: attacker.unitClass.agility,
+        targetLengthM: attacker.unitClass.lengthMeters,
+      });
+      if (dca.hit) {
+        const attackerHealthAfter = Math.max(0, attackerHealthCurrent - dca.damagePoints);
+        const destroyed = attackerHealthAfter <= 0;
+        await prisma.unit.update({
+          where: { id: attacker.id },
+          data: {
+            healthCurrent: attackerHealthAfter,
+            status: destroyed ? "SUNK" : attackerHealthAfter < attackerHealthMax * 0.6 ? "DAMAGED" : "ACTIVE",
+          },
+        });
+        if (destroyed) {
+          dcaAbortsAttack = Math.random() >= 0.5;
+          dcaNarrative = dcaAbortsAttack
+            ? `La DCA de ${target.name} abat ${attacker.name} avant qu'il ait pu achever son attaque.`
+            : `La DCA de ${target.name} touche ${attacker.name} à mort, mais l'appareil a le temps d'achever sa passe avant de s'écraser.`;
+        } else {
+          dcaNarrative = `La DCA de ${target.name} touche ${attacker.name} au passage — l'appareil encaisse mais poursuit son attaque.`;
+        }
+      }
+    }
+  }
 
   if (params.weaponType === "DEPTH_CHARGE") {
     if (!targetSubmerged) throw new OrderValidationError("Les grenades ASM ne visent qu'un sous-marin immergé.");
@@ -775,19 +823,43 @@ export async function submitTacticalFireShot(params: {
       attackerAgility: attacker.unitClass.agility,
       defenderAgility: target.unitClass.agility,
       defenderHasDefensiveGuns: (targetProfile?.guns?.length ?? 0) > 0,
-      accuracyMultiplier,
+      // Niveau d'équipage des deux côtés : celui de l'attaquant multiplie sa
+      // précision, celui du défenseur la divise (un pilote d'élite en
+      // défense encaisse moins qu'un débutant, voir combat.ts).
+      accuracyMultiplier: airAttackAccuracyMultiplier / pilotSkillMultiplier(target.unitClass.pilotSkill),
     });
+  } else if (params.weaponType === "GUN" && attacker.unitClass.category === "AIRCRAFT" && target.unitClass.category === "SURFACE_SHIP") {
+    // Mitraillage/roquettes : un avion qui attaque un navire de surface au
+    // canon/à la roquette plutôt qu'à la bombe ou à la torpille — très
+    // précis mais presque sans effet contre un bâtiment de tonnage
+    // significatif (voir resolveStrafingEngagement, combat.ts). Recherche
+    // 2026-08-14, Amirauté 2013 §4.6.3.6.
+    const gunIndex = parseGunSlotIndex(params.weaponSlot);
+    const battery = gunIndex !== null ? (profile?.guns?.[gunIndex] ?? null) : null;
+    if (!battery) throw new OrderValidationError("Cette pièce est introuvable sur cet avion.");
+    calibreMm = battery.calibreMm;
+    if (dcaAbortsAttack) {
+      outcome = { hitChancePercent: 0, hitRoll: 100, hit: false, hits: 0, damagePoints: 0 };
+    } else {
+      const strafe = resolveStrafingEngagement({
+        targetLengthM: target.unitClass.lengthMeters ?? 100,
+        accuracyMultiplier: airAttackAccuracyMultiplier,
+      });
+      outcome = { ...strafe, hits: strafe.hit ? 1 : 0 };
+    }
   } else if (params.weaponType === "BOMB") {
     if (target.unitClass.category !== "SURFACE_SHIP") throw new OrderValidationError("Une bombe ne vise qu'un navire de surface.");
-    outcome = resolveBombingEngagement({
-      attackerProfile: profile,
-      attackerHealthCurrent,
-      attackerHealthMax,
-      targetLengthM: target.unitClass.lengthMeters ?? 100,
-      targetBeamM: target.unitClass.beamMeters ?? 12,
-      targetSpeedKnots: 0,
-      accuracyMultiplier,
-    });
+    outcome = dcaAbortsAttack
+      ? { hitChancePercent: 0, hitRoll: 100, hit: false, hits: 0, damagePoints: 0 }
+      : resolveBombingEngagement({
+          attackerProfile: profile,
+          attackerHealthCurrent,
+          attackerHealthMax,
+          targetLengthM: target.unitClass.lengthMeters ?? 100,
+          targetBeamM: target.unitClass.beamMeters ?? 12,
+          targetSpeedKnots: 0,
+          accuracyMultiplier: airAttackAccuracyMultiplier,
+        });
   } else if (params.weaponType === "GUN") {
     if (targetSubmerged) throw new OrderValidationError("Un sous-marin immergé n'est pas canonnable.");
     const gunIndex = parseGunSlotIndex(params.weaponSlot);
@@ -846,18 +918,22 @@ export async function submitTacticalFireShot(params: {
       { lat: target.currentLat, lng: target.currentLng },
       { lat: attacker.currentLat, lng: attacker.currentLng }
     );
-    outcome = resolveTorpedoEngagement({
-      attackerProfile: { ...profile, torpedoTubes: battery },
-      attackerHealthCurrent,
-      attackerHealthMax,
-      targetLengthM: target.unitClass.lengthMeters ?? 100,
-      targetBeamM: target.unitClass.beamMeters ?? 12,
-      targetSpeedKnots: 0,
-      angleOfAttackDeg: lineOfFire - (target.currentHeadingDeg ?? 0),
-      rangeM,
-      accuracyMultiplier,
-    });
-    if (outcome && attacker.torpedoesRemaining != null) {
+    // Un appareil abattu par la DCA avant d'avoir largué (voir plus haut) ne
+    // consomme pas sa torpille — elle n'a jamais quitté les soutes.
+    outcome = dcaAbortsAttack
+      ? { hitChancePercent: 0, hitRoll: 100, hit: false, hits: 0, damagePoints: 0 }
+      : resolveTorpedoEngagement({
+          attackerProfile: { ...profile, torpedoTubes: battery },
+          attackerHealthCurrent,
+          attackerHealthMax,
+          targetLengthM: target.unitClass.lengthMeters ?? 100,
+          targetBeamM: target.unitClass.beamMeters ?? 12,
+          targetSpeedKnots: 0,
+          angleOfAttackDeg: lineOfFire - (target.currentHeadingDeg ?? 0),
+          rangeM,
+          accuracyMultiplier: airAttackAccuracyMultiplier,
+        });
+    if (!dcaAbortsAttack && outcome && attacker.torpedoesRemaining != null) {
       await prisma.unit.update({
         where: { id: attacker.id },
         data: { torpedoesRemaining: Math.max(0, attacker.torpedoesRemaining - 1) },
@@ -878,11 +954,18 @@ export async function submitTacticalFireShot(params: {
 
   // Dégâts localisés (voir Unit.disabledWeaponSlots &c.) : seulement les
   // coups au but "solides", et seulement sur un bâtiment de surface (une
-  // tourelle ou un gouvernail n'a pas de sens pour un sous-marin ici).
+  // tourelle ou un gouvernail n'a pas de sens pour un sous-marin ici). Le
+  // mitraillage/roquettes d'un avion sur un navire est explicitement exclu :
+  // Marlière est clair sur le fait que ces attaques ne causent jamais que des
+  // dégâts superficiels à un bâtiment de tonnage significatif (déjà traduit
+  // par le plafond de resolveStrafingEngagement) — elles ne doivent donc
+  // jamais pouvoir, en plus, désactiver une tourelle ou bloquer un gouvernail.
+  const isAircraftStrafingShip = params.weaponType === "GUN" && attacker.unitClass.category === "AIRCRAFT" && target.unitClass.category === "SURFACE_SHIP";
   let localizedEffect: LocalizedEffectStored | null = null;
   let localizedDebugLine: string | null = null;
   if (
     outcome.hit &&
+    !isAircraftStrafingShip &&
     (params.weaponType === "GUN" || params.weaponType === "TORPEDO" || params.weaponType === "BOMB") &&
     target.unitClass.category === "SURFACE_SHIP"
   ) {
@@ -929,21 +1012,28 @@ export async function submitTacticalFireShot(params: {
   if (localizedDebugLine) debugLines.push(localizedDebugLine);
   const debugInfo = debugLines.length > 0 ? debugLines.join(" ") : null;
 
+  // Un appareil abattu avant d'avoir pu larguer/tirer (voir la DCA plus
+  // haut) n'a JAMAIS atteint sa cible : le récit habituel (qui parle d'un
+  // coup raté "normal") n'a plus de sens et est entièrement remplacé par le
+  // récit de la DCA plutôt que d'y être juxtaposé.
   const narrative =
-    localizedEffect?.type === "MAGAZINE"
-      ? describeMagazineHit(attacker.name, target.name)
-      : describeShot({
-          attackerName: attacker.name,
-          targetName: target.name,
-          weaponType: params.weaponType,
-          hit: outcome.hit,
-          hits: outcome.hits,
-          damagePoints: finalDamagePoints,
-          damageRatio,
-          targetSunk: provisionalSunk,
-          rangeNm: rangeM / NM_TO_M,
-          targetIsAircraft: target.unitClass.category === "AIRCRAFT",
-        }) + (localizedEffect ? " " + describeLocalizedEffect(localizedEffect, target.name) : "");
+    dcaAbortsAttack && dcaNarrative
+      ? dcaNarrative
+      : (dcaNarrative ? dcaNarrative + " " : "") +
+        (localizedEffect?.type === "MAGAZINE"
+          ? describeMagazineHit(attacker.name, target.name)
+          : describeShot({
+              attackerName: attacker.name,
+              targetName: target.name,
+              weaponType: params.weaponType,
+              hit: outcome.hit,
+              hits: outcome.hits,
+              damagePoints: finalDamagePoints,
+              damageRatio,
+              targetSunk: provisionalSunk,
+              rangeNm: rangeM / NM_TO_M,
+              targetIsAircraft: target.unitClass.category === "AIRCRAFT",
+            }) + (localizedEffect ? " " + describeLocalizedEffect(localizedEffect, target.name) : ""));
 
   try {
     await prisma.tacticalAction.create({

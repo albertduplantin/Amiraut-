@@ -140,6 +140,7 @@ export async function instantiateScenario(
         turningRadiusM: lib.turningRadiusM ?? undefined,
         accelerationKnotsPerMin: lib.accelerationKnotsPerMin ?? undefined,
         agility: lib.agility ?? undefined,
+        pilotSkill: lib.pilotSkill ?? undefined,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         sensors: lib.sensors as any,
         detectability: lib.detectability,
@@ -175,6 +176,7 @@ export async function instantiateScenario(
         turningRadiusM: uc.turningRadiusM,
         accelerationKnotsPerMin: uc.accelerationKnotsPerMin,
         agility: uc.agility,
+        pilotSkill: uc.pilotSkill,
         sensors: uc.sensors,
         detectability: uc.detectability ?? 1,
         iconKey: uc.iconKey,

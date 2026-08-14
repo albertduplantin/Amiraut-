@@ -92,14 +92,49 @@ export type TorpedoTypeSpec = { id: string; label: string; speedKnots: number; r
  * jusqu'au largage : nettement plus précis que le bombardement horizontal
  * (He 111, Ju 88 haute altitude), qui doit figer sa solution de tir bien
  * avant l'impact — une cible manoeuvrière esquive alors presque toujours
- * (constat récurrent de la guerre du Pacifique comme de Méditerranée).
+ * (constat récurrent de la guerre du Pacifique comme de Méditerranée). Le
+ * bombardement à basse altitude/par ricochet (SKIP — B-25 du Vème Air Force
+ * dès 1943, Ju 87 de la Regia Aeronautica dès 1941, recherche 2026-08-14,
+ * Amirauté 2013 §4.6.3.5) vole au ras des flots et laisse la bombe rebondir
+ * sur l'eau avant l'impact : relativement précis, mais expose l'appareil de
+ * plein fouet à la DCA légère.
  */
 export type BombLoadout = {
   count: number;
   /** Poids unitaire en kg — sert à calibrer les dégâts (voir bombDamagePerHit). */
   weightKg: number;
-  method: "DIVE" | "LEVEL";
+  method: "DIVE" | "LEVEL" | "SKIP";
 };
+
+/**
+ * Niveau de l'équipage (avions uniquement), A (élite) à F (très mauvais) —
+ * voir UnitClass.pilotSkill. "C" (moyen) si non renseigné : comportement
+ * inchangé pour toute classe déjà en base.
+ */
+export type PilotSkillLevel = "A" | "B" | "C" | "D" | "E" | "F";
+
+/**
+ * Multiplicateur de précision selon le niveau de l'équipage — Amirauté 2013
+ * §4.6.3.1 (table donnée pour les attaques aériennes : A=2, B=1.5, C=1,
+ * D=0.5, E=0.25). F n'y figure pas (échelle A-E dans cette table précise) ;
+ * extrapolé ici en poursuivant la même progression géométrique. Appliqué à
+ * l'attaquant en bombardement/mitraillage, et des deux côtés (attaquant ÷
+ * défenseur) en combat air-air — voir tacticalEngine.ts, qui le compose avec
+ * les autres multiplicateurs existants (télépointage endommagé, etc.) dans
+ * le même paramètre `accuracyMultiplier` déjà présent sur ces fonctions.
+ */
+const PILOT_SKILL_MULTIPLIER: Record<PilotSkillLevel, number> = {
+  A: 2,
+  B: 1.5,
+  C: 1,
+  D: 0.5,
+  E: 0.25,
+  F: 0.15,
+};
+
+export function pilotSkillMultiplier(level: string | null | undefined): number {
+  return PILOT_SKILL_MULTIPLIER[(level as PilotSkillLevel) ?? "C"] ?? 1;
+}
 
 export type CombatProfile = {
   guns?: GunBattery[];
@@ -107,6 +142,8 @@ export type CombatProfile = {
   /** Types de torpilles au choix (sous-marins) ; absent = type unique de `torpedoTubes`. */
   torpedoTypes?: TorpedoTypeSpec[];
   bombs?: BombLoadout;
+  /** DCA (navires) — voir resolveDcaAttack. Absent = pas de riposte DCA contre les avions attaquants. */
+  antiAircraft?: AntiAircraftBattery;
 };
 
 /** Batterie de torpilles effective pour un tir : type choisi si fourni et disponible, sinon le tube par défaut. */
@@ -540,6 +577,8 @@ export function resolveTorpedoSalvoIntercept(params: {
 
 const DIVE_BOMB_BASE_ACCURACY = 0.28;
 const LEVEL_BOMB_BASE_ACCURACY = 0.04;
+/** ~40% par ricochet contre un navire de guerre isolé (Amirauté 2013 §4.6.3.5) — entre le piqué et l'horizontal. */
+const SKIP_BOMB_BASE_ACCURACY = 0.36;
 
 /**
  * Dégâts d'une bombe : à poids égal, une bombe explose au contact ou juste
@@ -556,7 +595,7 @@ function bombDamagePerHit(weightKg: number, rng: () => number): number {
 }
 
 export function bombHitChanceBreakdown(params: {
-  method: "DIVE" | "LEVEL";
+  method: "DIVE" | "LEVEL" | "SKIP";
   targetLengthM: number;
   targetBeamM: number;
   targetSpeedKnots: number;
@@ -566,9 +605,17 @@ export function bombHitChanceBreakdown(params: {
   const sizeFactor = clamp(targetArea / 1800, 0.15, 2.2);
   // Cible évasive : redoutable en horizontal (elle a le temps de virer
   // avant l'impact), gênante mais surmontable en piqué (le pilote corrige
-  // jusqu'au dernier instant).
-  const speedFactor = params.method === "DIVE" ? 1 / (1 + params.targetSpeedKnots / 30) : 1 / (1 + params.targetSpeedKnots / 10);
-  const baseAccuracy = params.method === "DIVE" ? DIVE_BOMB_BASE_ACCURACY : LEVEL_BOMB_BASE_ACCURACY;
+  // jusqu'au dernier instant) ; le ricochet, lancé de près et à grande
+  // vitesse, laisse un peu moins de marge de correction que le piqué mais
+  // bien moins qu'un horizontal figé longtemps à l'avance.
+  const speedFactor =
+    params.method === "DIVE"
+      ? 1 / (1 + params.targetSpeedKnots / 30)
+      : params.method === "SKIP"
+        ? 1 / (1 + params.targetSpeedKnots / 20)
+        : 1 / (1 + params.targetSpeedKnots / 10);
+  const baseAccuracy =
+    params.method === "DIVE" ? DIVE_BOMB_BASE_ACCURACY : params.method === "SKIP" ? SKIP_BOMB_BASE_ACCURACY : LEVEL_BOMB_BASE_ACCURACY;
   const accuracyMultiplier = params.accuracyMultiplier ?? 1;
   const finalPercent = clamp(baseAccuracy * sizeFactor * speedFactor * accuracyMultiplier * 100, 0, 70);
   // rangeRatio/rangeFactor n'ont pas de sens pour une bombe (pas de portée
@@ -634,6 +681,122 @@ export function resolveBombingEngagement(params: {
   for (let i = 0; i < hits; i++) damagePoints += bombDamagePerHit(loadout.weightKg, rng);
 
   return { loadout, hitChancePercent, hitChanceBreakdown, hitRoll, hit: true, hits, damagePoints };
+}
+
+// ── Mitraillage / roquettes (avion → navire, courte distance) ──
+//
+// Recherche 2026-08-14 (Amirauté 2013 §4.6.3.6) : très précis (90% au canon,
+// 80% à la roquette — pas distingués séparément ici) mais presque sans
+// effet contre un bâtiment de tonnage significatif. Efficace en revanche
+// contre les petits bâtiments (patrouilleurs, dragueurs, vedettes) qui
+// peuvent être réellement mis hors de combat. Expose l'appareil de plein
+// fouet à la DCA (vol au ras des flots, faible distance).
+
+const STRAFING_BASE_ACCURACY = 0.85;
+/** Un navire de tonnage significatif n'encaisse jamais plus que des dégâts superficiels (postes de conduite de tir, projecteurs, personnel exposé) d'une passe de mitraillage/roquettes. */
+const MAX_STRAFING_DAMAGE = 0.6;
+
+export function strafingHitChancePercent(params: { accuracyMultiplier?: number }): number {
+  return clamp(STRAFING_BASE_ACCURACY * (params.accuracyMultiplier ?? 1) * 100, 10, 95);
+}
+
+function strafingDamagePerHit(targetLengthM: number, rng: () => number): number {
+  // <40m (vedette/dragueur) : effet plein. Au-delà, l'effet devient vite cosmétique.
+  const smallShipFactor = targetLengthM < 40 ? 1 : targetLengthM < 80 ? 0.4 : 0.15;
+  const variability = 0.5 + rng() * 1.0; // 0.5x à 1.5x
+  return Math.min(MAX_STRAFING_DAMAGE, 0.3 * smallShipFactor * variability);
+}
+
+export type StrafingEngagementResult = {
+  hitChancePercent: number;
+  hitRoll: number;
+  hit: boolean;
+  damagePoints: number;
+};
+
+/** Résout une passe de mitraillage/roquettes avion → navire. */
+export function resolveStrafingEngagement(params: {
+  targetLengthM: number;
+  accuracyMultiplier?: number;
+  rng?: () => number;
+}): StrafingEngagementResult {
+  const rng = params.rng ?? Math.random;
+  const hitChancePercent = strafingHitChancePercent(params);
+  const hitRoll = rng() * 100;
+  const hit = hitRoll < hitChancePercent;
+  return { hitChancePercent, hitRoll, hit, damagePoints: hit ? strafingDamagePerHit(params.targetLengthM, rng) : 0 };
+}
+
+// ── DCA (artillerie antiaérienne) ───────────────────────────
+//
+// Recherche 2026-08-14 (Amirauté 2013 §4.6.2, qui reprend et développe le
+// taux de base du livret original de Paul Bois : 5% de chances d'abattre
+// l'appareil par pièce). Jusqu'ici aucune riposte défensive n'abattait
+// jamais un avion attaquant — les tourelles défensives d'un bombardier/
+// hydravion réduisaient seulement la précision de L'ATTAQUANT en combat
+// air-air (voir airCombatHitChanceBreakdown), rien ne protégeait un navire
+// visé par une bombe/torpille/mitraillage. Se déclenche automatiquement à
+// chaque attaque aérienne contre un navire équipé — pas une action à part
+// que le défenseur déclenche, voir resolveDcaAttack dans tacticalEngine.ts.
+
+export type AntiAircraftBattery = {
+  /** Nombre de pièces DCA du bord — voir CombatProfile.antiAircraft. */
+  gunCount: number;
+};
+
+/** Paul Bois, repris et affiné par Amirauté 2013 §4.6.2.1. */
+const DCA_BASE_HIT_CHANCE_PER_GUN = 0.05;
+/** Un coup de DCA qui porte est presque toujours décisif pour un avion de cette période (potentiel souvent à un chiffre, voir UnitClass.resistancePoints) — légèrement en-dessous d'airCombatDamagePerHit pour laisser une vraie chance de survie à un premier coup. */
+const REFERENCE_DCA_DAMAGE = 3;
+
+export type DcaAttackResult = {
+  hitChancePercent: number;
+  hitRoll: number;
+  hit: boolean;
+  damagePoints: number;
+};
+
+/**
+ * Chance qu'AU MOINS une pièce DCA touche l'avion attaquant ce tour-ci.
+ * Rendement décroissant plafonné par pièce (`clamp` sur `perGun`) : une
+ * grosse batterie ne garantit jamais un abattage à 100%.
+ */
+export function dcaHitChancePercent(params: {
+  battery: AntiAircraftBattery;
+  /** Manœuvres évasives de l'avion (voir UnitClass.agility) — un chasseur agile encaisse moins la DCA qu'un bombardier lourd et lent. */
+  targetAgility: number | null | undefined;
+  targetLengthM: number | null | undefined;
+}): number {
+  const sizeFactor = clamp((params.targetLengthM ?? 15) / 20, 0.5, 1.8);
+  const evasionFactor = 1 - (params.targetAgility ?? 0.5) * 0.5;
+  const perGun = clamp(DCA_BASE_HIT_CHANCE_PER_GUN * sizeFactor * evasionFactor, 0, 0.3);
+  const combined = 1 - Math.pow(1 - perGun, Math.max(1, params.battery.gunCount));
+  return clamp(combined * 100, 0, 75);
+}
+
+function dcaDamage(rng: () => number): number {
+  const variability = 0.6 + rng() * 0.9; // 0.6x à 1.5x
+  return REFERENCE_DCA_DAMAGE * variability;
+}
+
+/**
+ * Résout la riposte DCA d'un navire contre l'avion qui l'attaque. Environ la
+ * moitié des avions abattus ont quand même le temps de terminer leur
+ * attaque avant de tomber (Amirauté 2013 §4.6.2.4) — tiré séparément par
+ * l'appelant (tacticalEngine.ts) une fois `hit` connu, pas ici : cette
+ * fonction se contente de dire si la DCA porte et pour combien de dégâts.
+ */
+export function resolveDcaAttack(params: {
+  battery: AntiAircraftBattery;
+  targetAgility: number | null | undefined;
+  targetLengthM: number | null | undefined;
+  rng?: () => number;
+}): DcaAttackResult {
+  const rng = params.rng ?? Math.random;
+  const hitChancePercent = dcaHitChancePercent(params);
+  const hitRoll = rng() * 100;
+  const hit = hitRoll < hitChancePercent;
+  return { hitChancePercent, hitRoll, hit, damagePoints: hit ? dcaDamage(rng) : 0 };
 }
 
 // ── Combat air-air (chasse/interception) ────────────────────

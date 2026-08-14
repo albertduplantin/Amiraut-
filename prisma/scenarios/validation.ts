@@ -58,6 +58,7 @@ export const UnitClassSchema = z.object({
   accelerationKnotsPerMin: z.number().positive().optional(),
   // Combat air-air (avions) — voir combat.ts, airCombatHitChanceBreakdown.
   agility: z.number().min(0).max(1).optional(),
+  pilotSkill: z.enum(["A", "B", "C", "D", "E", "F"]).optional(),
   sensors: z.array(SensorSchema).min(1, "au moins un capteur"),
   detectability: z.number().positive().optional(),
   iconKey: z.string().min(1),
