@@ -1,7 +1,9 @@
 "use client";
 
-import type { BuilderUnit, BuilderAirbase, BuilderSquadron, BaseRef } from "./types";
-import { setDragPayload } from "./dragDrop";
+import { useState } from "react";
+import type { BuilderUnit, BuilderAirbase, BuilderSquadron, BaseRef, LibraryClassOption } from "./types";
+import { resolveClassInfo } from "./types";
+import { setDragPayload, readDragPayload, allowDrop } from "./dragDrop";
 
 const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs";
 
@@ -27,6 +29,14 @@ function baseRefToOptionValue(ref: BaseRef): string {
  * le clic-carte en Phase 5), et pour un avion, la source de base
  * (aucune/base aérienne/escadrille/porte-avions), retour utilisateur
  * 2026-08-14.
+ *
+ * Porte-avions (Phase 4, retour utilisateur 2026-08-15, troisième chantier
+ * — "en cliquant sur le porte-avions ou en glissant déposant dessus lui
+ * ajouter des avions") : une ligne dont la classe est un porte-avions
+ * (iconKey "carrier") accepte le glisser-déposer d'une classe AVION de la
+ * bibliothèque — crée l'avion à la volée, rattaché tout de suite. Le
+ * bouton "+ Avion" équivalent au "+ Bâtiment" des task forces arrive en
+ * Phase 5, une fois l'affichage dépliant construit (voir le plan).
  */
 export function UnitRosterRow({
   unit,
@@ -35,27 +45,35 @@ export function UnitRosterRow({
   airbases,
   squadrons,
   carrierCandidates,
+  libraryClasses,
   onChange,
   onRemove,
+  onAddAircraftToCarrier,
   removeDisabledReason,
   isSelectedForPlacement,
   onSelectForPlacement,
 }: {
   unit: BuilderUnit;
-  /** Nécessaires uniquement pour le glisser-déposer d'un avion vers une base/escadrille (Phase 6). */
+  /** Nécessaires uniquement pour le glisser-déposer d'un avion vers une base/escadrille/porte-avions. */
   teamClientId: string;
   fleetClientId: string;
   airbases: BuilderAirbase[];
   squadrons: BuilderSquadron[];
   /** Unités de surface posées, pour le rattachement porte-avions direct — jamais l'unité elle-même. */
   carrierCandidates: BuilderUnit[];
+  /** Pour détecter si CETTE unité est un porte-avions (iconKey "carrier") — voir resolveClassInfo, types.ts. */
+  libraryClasses: LibraryClassOption[];
   onChange: (patch: Partial<BuilderUnit>) => void;
   onRemove: () => void;
+  /** Avion créé à la volée sur ce porte-avions (Phase 4, retour utilisateur 2026-08-15). */
+  onAddAircraftToCarrier: (libClass: LibraryClassOption, teamClientId: string, carrierUnitName: string) => void;
   removeDisabledReason: string | null;
   /** Placement interactif sur la carte (Phase 5, retour utilisateur 2026-08-14) — voir ScenarioEditorForm.handleMapClick. */
   isSelectedForPlacement: boolean;
   onSelectForPlacement: () => void;
 }) {
+  const [dropError, setDropError] = useState<string | null>(null);
+
   function handleBaseRefSelect(optionValue: string) {
     if (optionValue === "none") return onChange({ baseRef: { kind: "none" } });
     if (optionValue === "literal" && unit.baseRef.kind === "literal") return onChange({ baseRef: unit.baseRef });
@@ -68,7 +86,22 @@ export function UnitRosterRow({
   }
 
   const isAircraft = unit.classRef.category === "AIRCRAFT";
+  const isCarrier = unit.classRef.category === "SURFACE_SHIP" && resolveClassInfo(unit.classRef, libraryClasses)?.iconKey === "carrier";
   const positioned = unit.lat.trim() !== "" && unit.lng.trim() !== "";
+
+  function handleDropOnCarrier(e: React.DragEvent) {
+    e.preventDefault();
+    const payload = readDragPayload(e);
+    if (!payload || payload.kind !== "libraryClass") return;
+    const libClass = libraryClasses.find((c) => c.id === payload.libraryClassId);
+    if (!libClass) return;
+    if (libClass.category !== "AIRCRAFT") {
+      setDropError("Seul un avion peut être rattaché à un porte-avions.");
+      setTimeout(() => setDropError(null), 3000);
+      return;
+    }
+    onAddAircraftToCarrier(libClass, teamClientId, unit.name);
+  }
 
   return (
     <li
@@ -78,8 +111,10 @@ export function UnitRosterRow({
           ? (e) => setDragPayload(e, { kind: "rosterUnit", teamClientId, fleetClientId, unitClientId: unit.clientId, category: unit.classRef.category })
           : undefined
       }
-      title={isAircraft ? "Glisser vers une base aérienne ou une escadrille pour l'y rattacher" : undefined}
-      className={`rounded-md border p-2 ${isAircraft ? "cursor-grab active:cursor-grabbing" : ""} ${isSelectedForPlacement ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}
+      onDragOver={isCarrier ? allowDrop : undefined}
+      onDrop={isCarrier ? handleDropOnCarrier : undefined}
+      title={isAircraft ? "Glisser vers une base aérienne ou une escadrille pour l'y rattacher" : isCarrier ? "Glisser un avion de la bibliothèque ici pour l'y rattacher" : undefined}
+      className={`rounded-md border p-2 transition-colors ${isAircraft ? "cursor-grab active:cursor-grabbing" : ""} ${isSelectedForPlacement ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}
     >
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -91,6 +126,7 @@ export function UnitRosterRow({
         <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400" title={unit.classRef.kind === "inline" ? "Classe héritée du scénario dupliqué, non modifiable ici" : "Classe de bibliothèque"}>
           {unit.classRef.name}
           {unit.classRef.kind === "inline" && " (héritée)"}
+          {isCarrier && " 🛫"}
         </span>
         <label className="flex items-center gap-1 text-[11px] text-slate-500">
           Lat
@@ -119,6 +155,8 @@ export function UnitRosterRow({
           Retirer
         </button>
       </div>
+
+      {dropError && <p className="mt-1 text-[11px] text-red-400">{dropError}</p>}
 
       {isAircraft && (
         <div className="mt-1.5 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-1.5">

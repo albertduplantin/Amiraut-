@@ -85,14 +85,20 @@ export type BuilderFleet = {
   name: string;
   units: BuilderUnit[];
   /**
-   * "normal" (task force navale, par défaut) ou "station" (station
-   * d'écoute — 3e chantier, Phase 3, retour utilisateur 2026-08-15) : une
-   * task force `kind:"station"` contient exactement une unité passive, pas
-   * de nouveau concept de schéma (voir le plan) — juste un marqueur
-   * d'affichage/de garde-fou côté builder. `undefined` = "normal", pour ne
-   * pas casser les scénarios dupliqués écrits avant ce champ.
+   * "normal" (task force navale, par défaut), "station" (station d'écoute
+   * — Phase 3, une seule unité passive) ou "aviation" (Phase 4, retour
+   * utilisateur 2026-08-15 : "les avions ne peuvent être ajoutés que dans
+   * les bases aériennes ou un porte-avions") — task force TECHNIQUE cachée
+   * de la liste visible, une par équipe, créée à la volée (voir
+   * `ensureAviationFleet`, ScenarioEditorForm.tsx) pour porter les avions
+   * rattachés à une base/un porte-avions : le schéma exige qu'une unité
+   * appartienne à une flotte, mais l'utilisateur ne pense jamais "quelle
+   * task force" pour un avion — seulement "quelle base". Pas de nouveau
+   * concept de schéma (voir le plan) — juste un marqueur d'affichage/de
+   * garde-fou côté builder. `undefined` = "normal", pour ne pas casser les
+   * scénarios dupliqués écrits avant ce champ.
    */
-  kind?: "normal" | "station";
+  kind?: "normal" | "station" | "aviation";
 };
 /** `nation` (retour utilisateur 2026-08-15, troisième chantier) — voir nations.ts ; `colorHex` en est dérivé automatiquement, plus de choix manuel. */
 export type BuilderTeam = { clientId: string; name: string; colorHex: string; nation: string; fleets: BuilderFleet[] };
@@ -113,4 +119,16 @@ export function allUnits(teams: BuilderTeam[]): BuilderUnit[] {
 /** Unités de surface posées (candidates porte-avions pour un rattachement d'avion). */
 export function surfaceShipUnits(teams: BuilderTeam[]): BuilderUnit[] {
   return allUnits(teams).filter((u) => u.classRef.category === "SURFACE_SHIP");
+}
+
+/** Nation/type/passivité d'une classe posée — via sa classe de bibliothèque, ou sa définition en ligne héritée (voir ClassRef). Fusionne ce que plusieurs panneaux résolvaient chacun séparément (nation, iconKey). */
+export function resolveClassInfo(ref: ClassRef, libraryClasses: LibraryClassOption[]): { nation: string; iconKey: string; passive: boolean } | undefined {
+  if (ref.kind === "inline") return { nation: ref.def.nation, iconKey: ref.def.iconKey, passive: ref.def.passive ?? false };
+  const lib = libraryClasses.find((c) => c.id === ref.libraryClassId);
+  return lib ? { nation: lib.nation, iconKey: lib.iconKey, passive: lib.passive } : undefined;
+}
+
+/** Navires porte-avions posés (iconKey "carrier") — Phase 4, retour utilisateur 2026-08-15 : cible valide pour rattacher un avion, au même titre qu'une base aérienne. */
+export function carrierUnits(teams: BuilderTeam[], libraryClasses: LibraryClassOption[]): BuilderUnit[] {
+  return surfaceShipUnits(teams).filter((u) => resolveClassInfo(u.classRef, libraryClasses)?.iconKey === "carrier");
 }

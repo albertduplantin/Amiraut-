@@ -29,6 +29,7 @@ import { allowDrop, readDragPayload } from "./builder/dragDrop";
 import { applyFormationAtCenter } from "./builder/formation";
 import { AddContainerModal } from "./builder/AddContainerModal";
 import { AddUnitWizardModal } from "./builder/AddUnitWizardModal";
+import { AddAircraftWizardModal } from "./builder/AddAircraftWizardModal";
 import { ScenarioMetaModal, type ScenarioMetaTab } from "./builder/ScenarioMetaModal";
 import { NATIONS } from "./builder/nations";
 
@@ -253,6 +254,7 @@ export function ScenarioEditorForm({
   // — coexistent avec les boutons/glisser-déposer déjà en place.
   const [addContainerModalOpen, setAddContainerModalOpen] = useState(false);
   const [unitWizardFor, setUnitWizardFor] = useState<{ teamClientId: string; fleetClientId: string } | null>(null);
+  const [aircraftWizardFor, setAircraftWizardFor] = useState<{ teamClientId: string; airbaseKey: string } | null>(null);
 
   // Mise en page 3 colonnes façon arbitre (Phase 4, retour utilisateur
   // 2026-08-15) — rail gauche collapsible comme ArbiterDashboard.tsx, infos
@@ -403,8 +405,8 @@ export function ScenarioEditorForm({
     if (!keyTouched) setKey(slugify(value));
   }
 
-  function handleAddUnitFromLibrary(libClass: LibraryClassOption, teamClientId: string, fleetClientId: string) {
-    const newUnit: BuilderUnit = {
+  function buildUnitFromLibraryClass(libClass: LibraryClassOption, baseRef: BaseRef): BuilderUnit {
+    return {
       clientId: nextClientId("unit"),
       name: libClass.name,
       pennant: "",
@@ -413,13 +415,60 @@ export function ScenarioEditorForm({
       lat: String(mapCenterLat),
       lng: String(mapCenterLng),
       classRef: { kind: "library", libraryClassId: libClass.id, libraryKey: libClass.key, name: libClass.name, category: libClass.category },
-      baseRef: { kind: "none" },
+      baseRef,
     };
+  }
+
+  function handleAddUnitFromLibrary(libClass: LibraryClassOption, teamClientId: string, fleetClientId: string) {
+    const newUnit = buildUnitFromLibraryClass(libClass, { kind: "none" });
     setTeams((prev) =>
       prev.map((t) =>
         t.clientId === teamClientId
           ? { ...t, fleets: t.fleets.map((f) => (f.clientId === fleetClientId ? { ...f, units: [...f.units, newUnit] } : f)) }
           : t
+      )
+    );
+  }
+
+  /**
+   * Task force technique "Aviation", une par équipe, créée à la volée et
+   * masquée de la liste visible (retour utilisateur 2026-08-15, troisième
+   * chantier, Phase 4 — voir BuilderFleet.kind, types.ts) : porte les
+   * avions rattachés directement à une base aérienne/un porte-avions, sans
+   * demander à l'utilisateur "dans quelle task force ?" — il ne pense
+   * qu'en "quelle base". `teams` (état déjà à jour au moment du clic, pas
+   * de risque de lecture obsolète pour un seul appel synchrone) plutôt que
+   * `setTeams((prev) => …)` pour connaître l'id AVANT de poser l'avion
+   * dedans dans la foulée.
+   */
+  function ensureAviationFleet(teamClientId: string): string {
+    const existing = teams.find((t) => t.clientId === teamClientId)?.fleets.find((f) => f.kind === "aviation");
+    if (existing) return existing.clientId;
+    const clientId = nextClientId("fleet");
+    setTeams((prev) =>
+      prev.map((t) => (t.clientId === teamClientId ? { ...t, fleets: [...t.fleets, { clientId, name: "Aviation", units: [], kind: "aviation" as const }] } : t))
+    );
+    return clientId;
+  }
+
+  /** Avion ajouté directement à une base aérienne (Phase 4, retour utilisateur 2026-08-15) — glisser-déposer ou assistant "+ Avion". */
+  function handleAddAircraftToAirbase(libClass: LibraryClassOption, teamClientId: string, airbaseKey: string) {
+    const fleetClientId = ensureAviationFleet(teamClientId);
+    const newUnit = buildUnitFromLibraryClass(libClass, { kind: "airbase", key: airbaseKey });
+    setTeams((prev) =>
+      prev.map((t) =>
+        t.clientId === teamClientId ? { ...t, fleets: t.fleets.map((f) => (f.clientId === fleetClientId ? { ...f, units: [...f.units, newUnit] } : f)) } : t
+      )
+    );
+  }
+
+  /** Avion ajouté directement à un porte-avions (Phase 4, retour utilisateur 2026-08-15) — glisser-déposer sur le navire. */
+  function handleAddAircraftToCarrier(libClass: LibraryClassOption, teamClientId: string, carrierUnitName: string) {
+    const fleetClientId = ensureAviationFleet(teamClientId);
+    const newUnit = buildUnitFromLibraryClass(libClass, { kind: "carrier", unitName: carrierUnitName });
+    setTeams((prev) =>
+      prev.map((t) =>
+        t.clientId === teamClientId ? { ...t, fleets: t.fleets.map((f) => (f.clientId === fleetClientId ? { ...f, units: [...f.units, newUnit] } : f)) } : t
       )
     );
   }
@@ -849,6 +898,9 @@ export function ScenarioEditorForm({
                 onAssignAircraftToAirbase={(teamClientId, fleetClientId, unitClientId, airbaseKey) =>
                   handleAssignUnitBaseRef(teamClientId, fleetClientId, unitClientId, { kind: "airbase", key: airbaseKey })
                 }
+                onAddAircraftToAirbase={handleAddAircraftToAirbase}
+                onOpenAircraftWizard={(teamClientId, airbaseKey) => setAircraftWizardFor({ teamClientId, airbaseKey })}
+                onAddAircraftToCarrier={handleAddAircraftToCarrier}
               />
               <SquadronsPanel
                 squadrons={squadronsState}
@@ -926,7 +978,14 @@ export function ScenarioEditorForm({
         </main>
 
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-800 p-4">
-          <LibraryBrowserPanel classes={libraryClasses} teams={teams} onAddUnit={handleAddUnitFromLibrary} />
+          <LibraryBrowserPanel
+            classes={libraryClasses}
+            teams={teams}
+            airbases={airbasesState}
+            onAddUnit={handleAddUnitFromLibrary}
+            onAddAircraftToAirbase={handleAddAircraftToAirbase}
+            onAddAircraftToCarrier={handleAddAircraftToCarrier}
+          />
         </aside>
       </div>
 
@@ -1000,6 +1059,22 @@ export function ScenarioEditorForm({
               preferredNation={team.nation}
               onClose={() => setUnitWizardFor(null)}
               onPick={(libClass) => handleAddUnitFromLibrary(libClass, unitWizardFor.teamClientId, unitWizardFor.fleetClientId)}
+            />
+          );
+        })()}
+
+      {aircraftWizardFor &&
+        (() => {
+          const team = teams.find((t) => t.clientId === aircraftWizardFor.teamClientId);
+          const airbase = airbasesState.find((a) => a.key === aircraftWizardFor.airbaseKey && a.teamClientId === aircraftWizardFor.teamClientId);
+          if (!team || !airbase) return null;
+          return (
+            <AddAircraftWizardModal
+              targetLabel={`${team.name} / ${airbase.name || airbase.key}`}
+              libraryClasses={libraryClasses}
+              preferredNation={team.nation}
+              onClose={() => setAircraftWizardFor(null)}
+              onPick={(libClass) => handleAddAircraftToAirbase(libClass, aircraftWizardFor.teamClientId, aircraftWizardFor.airbaseKey)}
             />
           );
         })()}

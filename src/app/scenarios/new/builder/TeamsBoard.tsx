@@ -43,6 +43,9 @@ export function TeamsBoard({
   selectedAirbaseClientId,
   onSelectAirbaseForPlacement,
   onAssignAircraftToAirbase,
+  onAddAircraftToAirbase,
+  onOpenAircraftWizard,
+  onAddAircraftToCarrier,
 }: {
   teams: BuilderTeam[];
   setTeams: Dispatch<SetStateAction<BuilderTeam[]>>;
@@ -70,6 +73,12 @@ export function TeamsBoard({
   selectedAirbaseClientId: string | null;
   onSelectAirbaseForPlacement: (clientId: string) => void;
   onAssignAircraftToAirbase: (teamClientId: string, fleetClientId: string, unitClientId: string, airbaseKey: string) => void;
+  /** Avion créé à la volée sur une base (Phase 4, retour utilisateur 2026-08-15) — glisser-déposer direct d'une classe de bibliothèque. */
+  onAddAircraftToAirbase: (libClass: LibraryClassOption, teamClientId: string, airbaseKey: string) => void;
+  /** Assistant guidé "+ Avion" (Phase 4, retour utilisateur 2026-08-15). */
+  onOpenAircraftWizard: (teamClientId: string, airbaseKey: string) => void;
+  /** Avion créé à la volée sur un porte-avions (Phase 4, retour utilisateur 2026-08-15) — glisser-déposer direct sur la ligne du navire. */
+  onAddAircraftToCarrier: (libClass: LibraryClassOption, teamClientId: string, carrierUnitName: string) => void;
 }) {
   function addTeam() {
     setTeams((prev) => {
@@ -156,6 +165,14 @@ export function TeamsBoard({
     if (!payload || payload.kind !== "libraryClass") return;
     const libClass = libraryClasses.find((c) => c.id === payload.libraryClassId);
     if (!libClass) return;
+    // Un avion ne peut être ajouté qu'à une base aérienne/un porte-avions,
+    // pas directement à une task force (Phase 4, retour utilisateur
+    // 2026-08-15) — même garde que LibraryBrowserPanel.add().
+    if (libClass.category === "AIRCRAFT") {
+      setFleetDropError("Un avion ne peut être ajouté qu'à une base aérienne ou un porte-avions, pas directement à une task force.");
+      setTimeout(() => setFleetDropError(null), 4000);
+      return;
+    }
     onAddUnitFromLibrary(libClass, teamClientId, fleetClientId);
   }
 
@@ -186,6 +203,7 @@ export function TeamsBoard({
 
   const [flagPickerFor, setFlagPickerFor] = useState<string | null>(null);
   const [stationDropError, setStationDropError] = useState<string | null>(null);
+  const [fleetDropError, setFleetDropError] = useState<string | null>(null);
   const [nationError, setNationError] = useState<string | null>(null);
 
   function handleSelectNation(teamClientId: string, nation: string) {
@@ -229,6 +247,7 @@ export function TeamsBoard({
         </div>
       </div>
       {nationError && <p className="rounded-md border border-red-800 bg-red-950/30 px-3 py-2 text-xs text-red-300">{nationError}</p>}
+      {fleetDropError && <p className="rounded-md border border-red-800 bg-red-950/30 px-3 py-2 text-xs text-red-300">{fleetDropError}</p>}
       <div className="grid grid-cols-1 gap-3">
         {teams.map((team) => {
           const allSurfaceUnits = allUnits(teams).filter((u) => u.classRef.category === "SURFACE_SHIP");
@@ -275,7 +294,7 @@ export function TeamsBoard({
               </div>
 
               <div className="space-y-2">
-                {team.fleets.filter((f) => f.kind !== "station").map((fleet) => (
+                {team.fleets.filter((f) => f.kind !== "station" && f.kind !== "aviation").map((fleet) => (
                   <div
                     key={fleet.clientId}
                     onDragOver={allowDrop}
@@ -327,8 +346,10 @@ export function TeamsBoard({
                             airbases={airbases}
                             squadrons={squadrons}
                             carrierCandidates={allSurfaceUnits.filter((u) => u.clientId !== unit.clientId)}
+                            libraryClasses={libraryClasses}
                             onChange={(patch) => updateUnit(team.clientId, fleet.clientId, unit.clientId, patch)}
                             onRemove={() => removeUnit(team.clientId, fleet.clientId, unit.clientId)}
+                            onAddAircraftToCarrier={onAddAircraftToCarrier}
                             removeDisabledReason={fleet.units.length <= 1 ? "Il faut au moins une unité par task force" : null}
                             isSelectedForPlacement={selectedUnitClientId === unit.clientId}
                             onSelectForPlacement={() => onSelectUnitForPlacement(team.clientId, fleet.clientId, unit.clientId)}
@@ -346,12 +367,15 @@ export function TeamsBoard({
 
               <AirbasesPanel
                 airbases={airbases.filter((a) => a.teamClientId === team.clientId)}
+                libraryClasses={libraryClasses}
                 onAdd={() => onAddAirbaseForTeam(team.clientId)}
                 onUpdate={onUpdateAirbase}
                 onRemove={onRemoveAirbase}
                 selectedAirbaseClientId={selectedAirbaseClientId}
                 onSelectForPlacement={onSelectAirbaseForPlacement}
                 onAssignAircraft={onAssignAircraftToAirbase}
+                onAddAircraftFromLibrary={onAddAircraftToAirbase}
+                onOpenAircraftWizard={onOpenAircraftWizard}
               />
 
               <div className="space-y-2 border-t border-slate-800 pt-2">
@@ -402,8 +426,10 @@ export function TeamsBoard({
                                 airbases={airbases}
                                 squadrons={squadrons}
                                 carrierCandidates={[]}
+                                libraryClasses={libraryClasses}
                                 onChange={(patch) => updateUnit(team.clientId, station.clientId, unit.clientId, patch)}
                                 onRemove={() => removeUnit(team.clientId, station.clientId, unit.clientId)}
+                                onAddAircraftToCarrier={onAddAircraftToCarrier}
                                 removeDisabledReason={null}
                                 isSelectedForPlacement={selectedUnitClientId === unit.clientId}
                                 onSelectForPlacement={() => onSelectUnitForPlacement(team.clientId, station.clientId, unit.clientId)}
