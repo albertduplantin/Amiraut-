@@ -36,11 +36,19 @@ import { ScenarioMetaModal, type ScenarioMetaTab } from "./builder/ScenarioMetaM
  * Constructeur de scénarios (module séparé de la feuille de route) —
  * entièrement visuel depuis le 2026-08-14 (retour utilisateur) : task
  * forces, escadrilles, bases aériennes et unités se composent par
- * boutons/sélecteurs plutôt qu'en JSON (voir builder/), en référençant
- * toujours des classes EXISTANTES de la bibliothèque partagée (`/library`)
- * — pas d'auteur de classe inline ici (la modal de création rapide, Phase
- * 6, comble "à la volée" sans quitter le flux). Les champs simples (nom,
- * dates, météo…) restent chacun leur propre contrôle, inchangés.
+ * boutons/glisser-déposer/assistants guidés plutôt qu'en JSON (voir
+ * builder/), en référençant toujours des classes EXISTANTES de la
+ * bibliothèque partagée (`/library`) — pas d'auteur de classe inline ici
+ * (la modal de création rapide, `QuickCreateClassModal`, comble "à la
+ * volée" sans quitter le flux). Les infos de scénario (nom, dates,
+ * météo, objectifs) se règlent dans `ScenarioMetaModal`, ouverte depuis
+ * le header.
+ *
+ * Mise en page (retour utilisateur 2026-08-15, deuxième chantier) : 3
+ * colonnes façon `ArbiterDashboard.tsx` — rail gauche collapsible (task
+ * forces/bases/escadrilles), carte plein cadre au centre, bibliothèque à
+ * droite. Voir `.claude/plans/robust-mapping-summit.md` pour le détail des
+ * 5 phases.
  *
  * `duplicateFrom` (bouton « Dupliquer et modifier » sur /create) :
  * pré-remplit tout, y compris les task forces/bases/escadrilles, avec le
@@ -64,9 +72,27 @@ function slugify(name: string) {
     .slice(0, 64);
 }
 
-/** Clé dérivée d'un scénario dupliqué, distincte de l'original (voir duplicateFrom) — un court suffixe aléatoire suffit, pas besoin d'unicité garantie ici, juste de collision peu probable ; le serveur revalide de toute façon à l'enregistrement. */
+/**
+ * Clé dérivée d'un scénario dupliqué, distincte de l'original (voir
+ * duplicateFrom) — pas besoin d'unicité garantie ici, juste de collision
+ * peu probable en pratique (deux duplications successives de la même
+ * source, jamais renommées) ; le serveur revalide de toute façon à
+ * l'enregistrement.
+ *
+ * Volontairement SANS `Date.now()` (bug trouvé le 2026-08-15, Phase 5) :
+ * cette fonction alimente la lazy init de `useState`, qui s'exécute aussi
+ * bien côté SSR que côté hydratation client — un suffixe basé sur l'heure
+ * diffère forcément entre les deux passes. Tant que `key` ne servait qu'à
+ * la valeur d'un `<input>` contrôlé, React masquait silencieusement le
+ * décalage (protection anti-écrasement de saisie utilisateur, même classe
+ * de bug que `createClientIdGenerator`, voir builder/types.ts) ; depuis la
+ * Phase 4 (mise en page 3 colonnes), `key` s'affiche aussi en texte brut
+ * dans le sous-titre du header — un texte, contrairement à un `<input>`,
+ * ne bénéficie pas de cette tolérance et déclenchait une vraie erreur
+ * d'hydratation React (#418).
+ */
 function duplicateKey(originalKey: string) {
-  return `${originalKey}-variante-${Date.now().toString(36).slice(-4)}`;
+  return `${originalKey}-variante`;
 }
 
 function classKeyFor(ref: ClassRef): string {
