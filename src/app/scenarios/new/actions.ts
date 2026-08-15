@@ -38,6 +38,29 @@ export async function createCustomScenarioAction(definitionJson: unknown): Promi
   return { ok: true, key: definition.key };
 }
 
+export type DeleteScenarioResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Supprime un scénario custom (retour utilisateur 2026-08-15 — "il faut
+ * aussi qu'on puisse supprimer les scénarios"). Ne touche jamais une
+ * partie déjà instanciée : `instantiateScenario` COPIE la définition dans
+ * `Scenario`/`Team`/`Unit`... au moment de la création, sans référence
+ * arrière vers `CustomScenario` — supprimer le gabarit n'affecte donc
+ * jamais une partie en cours ou terminée. Depuis la migration du
+ * 2026-08-15 (les 5 scénarios intégrés vivent maintenant aussi en
+ * `CustomScenario`, voir amiraute-roadmap), cette action s'applique
+ * potentiellement à N'IMPORTE QUEL scénario listé sur /create.
+ */
+export async function deleteCustomScenarioAction(id: string): Promise<DeleteScenarioResult> {
+  const existing = await prisma.customScenario.findUnique({ where: { id } });
+  if (!existing) return { ok: false, error: "Ce scénario n'existe plus — il a peut-être déjà été supprimé." };
+
+  await prisma.customScenario.delete({ where: { id } });
+
+  revalidatePath("/create");
+  return { ok: true };
+}
+
 /**
  * Édite EN PLACE un scénario créé par un joueur (retour utilisateur
  * 2026-08-15 — "il faut qu'on puisse modifier un scénario sans

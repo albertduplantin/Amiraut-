@@ -2,7 +2,9 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createGameAction, type CreateGameResult } from "./actions";
+import { deleteCustomScenarioAction } from "../scenarios/new/actions";
 
 type ScenarioSummary = {
   key: string;
@@ -33,6 +35,7 @@ function defaultTeamState(): TeamMultiplayerState {
 }
 
 export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) {
+  const router = useRouter();
   const [scenarioKey, setScenarioKey] = useState(scenarios[0]?.key ?? "");
   const [withArbiter, setWithArbiter] = useState(true);
   const selected = scenarios.find((s) => s.key === scenarioKey) ?? scenarios[0];
@@ -42,6 +45,28 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
   const [result, setResult] = useState<Extract<CreateGameResult, { ok: true }> | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [teamStates, setTeamStates] = useState<Record<string, TeamMultiplayerState>>({});
+  // Suppression d'un scénario (retour utilisateur 2026-08-15 — "il faut
+  // aussi qu'on puisse supprimer les scénarios") : id du scénario en cours
+  // de confirmation (double clic, même convention que DeleteButton en
+  // bibliothèque/EndGameButton — jamais de boîte de dialogue navigateur),
+  // et une transition SÉPARÉE de celle de "Créer la partie" pour ne pas
+  // désactiver l'un pendant l'autre.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, startDeleteTransition] = useTransition();
+
+  function confirmDelete(id: string) {
+    setDeleteError(null);
+    startDeleteTransition(async () => {
+      const res = await deleteCustomScenarioAction(id);
+      if (!res.ok) {
+        setDeleteError(res.error);
+        return;
+      }
+      setDeletingId(null);
+      router.refresh();
+    });
+  }
   // Répartition des forces (bloc 2) : clé "équipe::flotteOrigine::unité" →
   // nom de la flotte cible (même équipe uniquement). Absente = flotte
   // d'origine du scénario, inchangée.
@@ -219,10 +244,25 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
           {scenarios.length === 0 && <p className="text-sm text-slate-500">Aucun scénario disponible pour l&apos;instant.</p>}
           <div className="space-y-2">
             {scenarios.map((s) => (
-              <button
+              // `<div role="button">`, pas un vrai `<button>` (retour utilisateur
+              // 2026-08-15 — bouton "Supprimer" ajouté à l'intérieur) : un
+              // <button> ne peut pas contenir un autre <button> (HTML invalide,
+              // fermeture prématurée par le parseur) — déjà limite avec les
+              // <Link> imbriqués, plus tenable avec un vrai <button> de
+              // suppression en plus. `tabIndex`/`onKeyDown` gardent la carte
+              // sélectionnable au clavier (Entrée/Espace), comme un vrai bouton.
+              <div
                 key={s.key}
+                role="button"
+                tabIndex={0}
                 onClick={() => selectScenario(s.key)}
-                className={`w-full rounded-md border p-4 text-left transition ${
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    selectScenario(s.key);
+                  }
+                }}
+                className={`w-full cursor-pointer rounded-md border p-4 text-left transition ${
                   s.key === scenarioKey ? "border-brass-500 bg-brass-900/20" : "border-slate-800 bg-slate-900 hover:bg-slate-850"
                 }`}
               >
@@ -261,9 +301,47 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
                     >
                       Dupliquer et modifier →
                     </Link>
+                    {/* Supprimer (retour utilisateur 2026-08-15) : icône seule — pas de texte, même convention que les suppressions du constructeur (task force/base/station/unité). */}
+                    {s.id && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteError(null);
+                          setDeletingId(s.id!);
+                        }}
+                        title="Supprimer ce scénario"
+                        aria-label="Supprimer ce scénario"
+                        className="text-red-500 hover:text-red-400"
+                      >
+                        🗑
+                      </button>
+                    )}
                   </span>
                 </div>
-              </button>
+                {deletingId === s.id && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-2 rounded-md border border-red-900 bg-red-950/30 p-2 text-xs"
+                  >
+                    <p className="text-red-300">Supprimer « {s.name} » ? Irréversible — les parties déjà créées avec ne sont pas affectées.</p>
+                    <div className="mt-1.5 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => confirmDelete(s.id!)}
+                        disabled={isDeleting}
+                        className="rounded-md bg-red-700 px-2.5 py-1 text-red-100 hover:bg-red-600 disabled:opacity-50"
+                      >
+                        {isDeleting ? "…" : "Confirmer la suppression"}
+                      </button>
+                      <button type="button" onClick={() => setDeletingId(null)} disabled={isDeleting} className="rounded-md border border-slate-700 px-2.5 py-1 hover:bg-slate-900">
+                        Annuler
+                      </button>
+                    </div>
+                    {deleteError && <p className="mt-1.5 text-red-400">{deleteError}</p>}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </div>
