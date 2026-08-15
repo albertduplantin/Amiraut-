@@ -25,6 +25,8 @@ export function TeamsBoard({
   onSelectUnitForPlacement,
   libraryClasses,
   onAddUnitFromLibrary,
+  onOpenAddContainer,
+  onOpenUnitWizard,
 }: {
   teams: BuilderTeam[];
   setTeams: Dispatch<SetStateAction<BuilderTeam[]>>;
@@ -37,6 +39,9 @@ export function TeamsBoard({
   /** Glisser-déposer (Phase 6, retour utilisateur 2026-08-14) — dépose d'une classe de bibliothèque sur une task force. */
   libraryClasses: LibraryClassOption[];
   onAddUnitFromLibrary: (libClass: LibraryClassOption, teamClientId: string, fleetClientId: string) => void;
+  /** Assistants guidés (Phase 3, retour utilisateur 2026-08-15) — coexistent avec les boutons/glisser-déposer ci-dessus. */
+  onOpenAddContainer: () => void;
+  onOpenUnitWizard: (teamClientId: string, fleetClientId: string) => void;
 }) {
   function addTeam() {
     setTeams((prev) => [
@@ -118,9 +123,14 @@ export function TeamsBoard({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="font-display text-sm text-brass-300">Task forces</h3>
-        <button type="button" onClick={addTeam} className="text-xs text-brass-400 hover:text-brass-300">
-          + Nouvelle équipe
-        </button>
+        <div className="flex gap-3">
+          <button type="button" onClick={onOpenAddContainer} className="text-xs text-brass-400 hover:text-brass-300" title="Assistant guidé : équipe → type de conteneur">
+            + Task force / Base
+          </button>
+          <button type="button" onClick={addTeam} className="text-xs text-brass-400 hover:text-brass-300">
+            + Nouvelle équipe
+          </button>
+        </div>
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {teams.map((team) => {
@@ -167,6 +177,14 @@ export function TeamsBoard({
                         onChange={(e) => updateFleetName(team.clientId, fleet.clientId, e.target.value)}
                         className={`${fieldClass} flex-1 text-xs`}
                       />
+                      <button
+                        type="button"
+                        onClick={() => onOpenUnitWizard(team.clientId, fleet.clientId)}
+                        className="text-xs text-brass-400 hover:text-brass-300"
+                        title="Choisir un type de bâtiment, puis la classe précise"
+                      >
+                        + Bâtiment
+                      </button>
                       <button
                         type="button"
                         onClick={() => removeFleet(team.clientId, fleet.clientId)}

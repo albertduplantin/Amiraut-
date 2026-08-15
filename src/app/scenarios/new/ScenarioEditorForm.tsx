@@ -29,6 +29,8 @@ import { SquadronsPanel } from "./builder/SquadronsPanel";
 import { ObjectivesEditor } from "./builder/ObjectivesEditor";
 import { allowDrop, readDragPayload } from "./builder/dragDrop";
 import { applyFormationAtCenter } from "./builder/formation";
+import { AddContainerModal } from "./builder/AddContainerModal";
+import { AddUnitWizardModal } from "./builder/AddUnitWizardModal";
 
 /**
  * Constructeur de scénarios (module séparé de la feuille de route) —
@@ -187,6 +189,11 @@ export function ScenarioEditorForm({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedKey, setSavedKey] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  // Assistants de création guidée (Phase 3, retour utilisateur 2026-08-15)
+  // — coexistent avec les boutons/glisser-déposer déjà en place.
+  const [addContainerModalOpen, setAddContainerModalOpen] = useState(false);
+  const [unitWizardFor, setUnitWizardFor] = useState<{ teamClientId: string; fleetClientId: string } | null>(null);
 
   // Placement interactif sur carte (Phase 5, retour utilisateur
   // 2026-08-14) : même pattern que la repositionnement côté arbitre
@@ -349,6 +356,35 @@ export function ScenarioEditorForm({
           : t
       )
     );
+  }
+
+  /**
+   * Assistant "+" (Phase 3, retour utilisateur 2026-08-15) — variante
+   * d'`addTeam`/`addFleet` (normalement internes à TeamsBoard.tsx) exposée
+   * ici pour être appelable depuis AddContainerModal, avec en plus le
+   * `preferredNation` optionnel sur la nouvelle task force.
+   */
+  function handleCreateFleetContainer(target: { teamClientId: string } | { newTeamName: string }, preferredNation: string) {
+    const nation = preferredNation || undefined;
+    if ("teamClientId" in target) {
+      setTeams((prev) =>
+        prev.map((t) =>
+          t.clientId === target.teamClientId
+            ? { ...t, fleets: [...t.fleets, { clientId: nextClientId("fleet"), name: `Task Force ${t.fleets.length + 1}`, units: [], preferredNation: nation }] }
+            : t
+        )
+      );
+      return;
+    }
+    setTeams((prev) => [
+      ...prev,
+      {
+        clientId: nextClientId("team"),
+        name: target.newTeamName,
+        colorHex: prev.length % 2 === 0 ? "#3388ff" : "#dc2626",
+        fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [], preferredNation: nation }],
+      },
+    ]);
   }
 
   function handleAddAirbase() {
@@ -933,6 +969,8 @@ export function ScenarioEditorForm({
                   onSelectUnitForPlacement={selectUnitForPlacement}
                   libraryClasses={libraryClasses}
                   onAddUnitFromLibrary={handleAddUnitFromLibrary}
+                  onOpenAddContainer={() => setAddContainerModalOpen(true)}
+                  onOpenUnitWizard={(teamClientId, fleetClientId) => setUnitWizardFor({ teamClientId, fleetClientId })}
                 />
               </div>
             </div>
@@ -971,6 +1009,31 @@ export function ScenarioEditorForm({
           </div>
         </div>
       </div>
+
+      {addContainerModalOpen && (
+        <AddContainerModal
+          teams={teams}
+          onClose={() => setAddContainerModalOpen(false)}
+          onCreateFleet={handleCreateFleetContainer}
+          onCreateAirbase={handleAddAirbase}
+        />
+      )}
+
+      {unitWizardFor &&
+        (() => {
+          const team = teams.find((t) => t.clientId === unitWizardFor.teamClientId);
+          const fleet = team?.fleets.find((f) => f.clientId === unitWizardFor.fleetClientId);
+          if (!team || !fleet) return null;
+          return (
+            <AddUnitWizardModal
+              fleetName={`${team.name} / ${fleet.name}`}
+              libraryClasses={libraryClasses}
+              preferredNation={fleet.preferredNation}
+              onClose={() => setUnitWizardFor(null)}
+              onPick={(libClass) => handleAddUnitFromLibrary(libClass, unitWizardFor.teamClientId, unitWizardFor.fleetClientId)}
+            />
+          );
+        })()}
     </div>
   );
 }

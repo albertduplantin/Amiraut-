@@ -78,7 +78,19 @@ export type BuilderUnit = {
   baseRef: BaseRef;
 };
 
-export type BuilderFleet = { clientId: string; name: string; units: BuilderUnit[] };
+export type BuilderFleet = {
+  clientId: string;
+  name: string;
+  units: BuilderUnit[];
+  /**
+   * Filtre nation mémorisé (Phase 3, retour utilisateur 2026-08-15) —
+   * jamais sérialisé dans ScenarioDefinition, préremplit seulement le
+   * filtre de l'assistant "Ajouter un bâtiment" (AddUnitWizardModal) pour
+   * cette task force. Une task force multi-nations reste possible : ce
+   * n'est qu'une commodité, pas une contrainte.
+   */
+  preferredNation?: string;
+};
 export type BuilderTeam = { clientId: string; name: string; colorHex: string; fleets: BuilderFleet[] };
 export type BuilderAirbase = { clientId: string; key: string; name: string; lat: string; lng: string };
 export type BuilderSquadron = {
