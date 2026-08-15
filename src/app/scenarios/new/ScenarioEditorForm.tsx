@@ -629,7 +629,7 @@ export function ScenarioEditorForm({
     }));
   }
 
-  /** Glisser-déposer d'un avion déjà en flotte vers une base aérienne/escadrille (Phase 6, retour utilisateur 2026-08-14) — voir AirbasesPanel/SquadronsPanel, dragDrop.ts. */
+  /** Glisser-déposer d'un avion déjà en flotte vers une base aérienne (Phase 6, retour utilisateur 2026-08-14) — voir AirbasesPanel.tsx, dragDrop.ts. */
   function handleAssignUnitBaseRef(teamClientId: string, fleetClientId: string, unitClientId: string, baseRef: BaseRef) {
     setTeams((prev) =>
       prev.map((t) =>
