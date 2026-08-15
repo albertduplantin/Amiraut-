@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition, type DragEvent } from "react";
 import Link from "next/link";
 import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
 import { pointsFeatureCollection } from "@/lib/mapData";
@@ -27,6 +27,8 @@ import { TeamsBoard } from "./builder/TeamsBoard";
 import { AirbasesPanel } from "./builder/AirbasesPanel";
 import { SquadronsPanel } from "./builder/SquadronsPanel";
 import { ObjectivesEditor } from "./builder/ObjectivesEditor";
+import { allowDrop, readDragPayload } from "./builder/dragDrop";
+import { applyFormationAtCenter } from "./builder/formation";
 
 /**
  * Constructeur de scénarios (module séparé de la feuille de route) —
@@ -225,6 +227,77 @@ export function ScenarioEditorForm({
     }
     setPosError(null);
     setDraftPosition(pos);
+  }
+
+  /**
+   * Glisser-déposer une task force/base entière sur la carte (Phase 2,
+   * retour utilisateur 2026-08-15) — accélérateur de masse au-dessus du
+   * mécanisme 🎯 par-unité existant (`applyDraftPosition` ci-dessous),
+   * conservé pour l'ajustement fin après coup. Ne valide que le point
+   * central via `isWaterPoint` (pas chaque unité de la formation
+   * individuellement) — limite assumée du placeholder générique, voir
+   * formation.ts.
+   */
+  function handleMapDrop(e: DragEvent) {
+    e.preventDefault();
+    const payload = readDragPayload(e);
+    if (!payload) return;
+    const drop = gameMapRef.current?.pixelToLatLng(e.clientX, e.clientY);
+    if (!drop) return;
+    if (gameMapRef.current && !gameMapRef.current.isWaterPoint(drop)) {
+      setPosError("Position impossible : elle tombe sur la terre.");
+      return;
+    }
+    setPosError(null);
+
+    if (payload.kind === "airbase") {
+      setAirbasesState((prev) => prev.map((a) => (a.clientId === payload.airbaseClientId ? { ...a, lat: String(drop.lat), lng: String(drop.lng) } : a)));
+      return;
+    }
+    if (payload.kind === "fleet") {
+      setTeams((prev) =>
+        prev.map((t) => {
+          if (t.clientId !== payload.teamClientId) return t;
+          return {
+            ...t,
+            fleets: t.fleets.map((f) => {
+              if (f.clientId !== payload.fleetClientId) return f;
+              const positioned = f.units.filter((u) => u.lat.trim() && u.lng.trim());
+              // Une unité fraîchement ajoutée depuis la bibliothèque hérite
+              // du centre carte par défaut (voir handleAddUnitFromLibrary) —
+              // elle a donc toujours une position "non vide" sans jamais
+              // avoir été réellement placée. Si toutes les unités déjà
+              // "positionnées" partagent EXACTEMENT le même point, ce n'est
+              // jamais une vraie formation à préserver par translation
+              // (elle resterait empilée au même endroit) : mieux vaut générer
+              // une formation neuve, comme si aucune n'était positionnée.
+              const distinctPositions = new Set(positioned.map((u) => `${u.lat},${u.lng}`));
+              if (positioned.length > 0 && distinctPositions.size > 1) {
+                // Au moins une unité déjà positionnée : translation par
+                // offset centroïde→dépose, formation relative conservée —
+                // même calcul que la reposition de flotte de l'arbitre
+                // (ArbiterDashboard.tsx, selectFleet/fleetDraftOffset).
+                const centroid = {
+                  lat: positioned.reduce((s, u) => s + Number(u.lat), 0) / positioned.length,
+                  lng: positioned.reduce((s, u) => s + Number(u.lng), 0) / positioned.length,
+                };
+                const dLat = drop.lat - centroid.lat;
+                const dLng = drop.lng - centroid.lng;
+                return {
+                  ...f,
+                  units: f.units.map((u) =>
+                    u.lat.trim() && u.lng.trim() ? { ...u, lat: String(Number(u.lat) + dLat), lng: String(Number(u.lng) + dLng) } : u
+                  ),
+                };
+              }
+              // Aucune unité positionnée : formation générique de départ.
+              const positions = applyFormationAtCenter(drop, f.units.length);
+              return { ...f, units: f.units.map((u, i) => ({ ...u, lat: String(positions[i].lat), lng: String(positions[i].lng) })) };
+            }),
+          };
+        })
+      );
+    }
   }
 
   function applyDraftPosition() {
@@ -767,8 +840,10 @@ export function ScenarioEditorForm({
             </fieldset>
 
             <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Positions</h3>
-              <div className="h-64 overflow-hidden rounded-md">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Positions — glissez ⚓/✈ une task force/base ici pour la positionner
+              </h3>
+              <div className="h-64 overflow-hidden rounded-md" onDragOver={allowDrop} onDrop={handleMapDrop}>
                 <GameMap
                   ref={gameMapRef}
                   center={{ lat: mapCenterLat, lng: mapCenterLng }}

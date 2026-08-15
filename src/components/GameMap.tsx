@@ -43,6 +43,14 @@ export type GameMapHandle = {
   isWaterPoint: (p: LatLng) => boolean;
   /** Échantillonne le segment [a,b] ; faux si un point échantillonné est sur terre. */
   isWaterSegment: (a: LatLng, b: LatLng, steps?: number) => boolean;
+  /**
+   * Convertit des coordonnées écran (`clientX`/`clientY`, ex. d'un événement
+   * `drop`) en coordonnées carte — symétrique d'`isWaterPoint` qui fait déjà
+   * `map.project`. Utilisé par le constructeur de scénario pour le
+   * glisser-déposer d'une task force/base sur la carte (retour utilisateur
+   * 2026-08-15) ; retourne `null` tant que la carte n'est pas montée.
+   */
+  pixelToLatLng: (clientX: number, clientY: number) => LatLng | null;
 };
 
 export type ShipMarkerConfig = {
@@ -279,6 +287,13 @@ export const GameMap = forwardRef<GameMapHandle, GameMapProps>(function GameMap(
           if (land.length > 0) return false;
         }
         return true;
+      },
+      pixelToLatLng: (clientX: number, clientY: number) => {
+        const map = mapRef.current;
+        if (!map) return null;
+        const rect = map.getContainer().getBoundingClientRect();
+        const lngLat = map.unproject([clientX - rect.left, clientY - rect.top]);
+        return { lat: lngLat.lat, lng: lngLat.lng };
       },
     }),
     []

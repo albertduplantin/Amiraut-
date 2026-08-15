@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { BuilderAirbase } from "./types";
-import { allowDrop, readDragPayload } from "./dragDrop";
+import { allowDrop, readDragPayload, setDragPayload } from "./dragDrop";
 
 const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs";
 
@@ -68,6 +68,14 @@ export function AirbasesPanel({
             className={`rounded-md border p-2 transition-colors ${selectedAirbaseClientId === a.clientId ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}
           >
             <div className="flex flex-wrap items-center gap-2">
+              <span
+                draggable
+                onDragStart={(e) => setDragPayload(e, { kind: "airbase", airbaseClientId: a.clientId })}
+                title="Glisser sur la carte pour positionner la base"
+                className="cursor-grab text-brass-500 active:cursor-grabbing"
+              >
+                ✈
+              </span>
               <input value={a.name} onChange={(e) => onUpdate(a.clientId, { name: e.target.value })} placeholder="Nom (ex: Reykjavik)" className={`${fieldClass} min-w-[8rem] flex-1`} />
               <input value={a.key} onChange={(e) => onUpdate(a.clientId, { key: e.target.value })} placeholder="clé" className={`${fieldClass} w-24`} title="Clé stable, référencée par les unités/escadrilles" />
               <label className="flex items-center gap-1 text-[11px] text-slate-500">

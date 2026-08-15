@@ -12,7 +12,13 @@ const DRAG_MIME = "application/x-amiraute-drag";
 
 export type DragPayload =
   | { kind: "libraryClass"; libraryClassId: string }
-  | { kind: "rosterUnit"; teamClientId: string; fleetClientId: string; unitClientId: string; category: UnitCategory };
+  | { kind: "rosterUnit"; teamClientId: string; fleetClientId: string; unitClientId: string; category: UnitCategory }
+  // Dépose sur la carte (Phase 2, retour utilisateur 2026-08-15) — task
+  // force ou base entière glissée depuis le rail gauche pour la positionner
+  // en un geste (formation générique, voir formation.ts), plutôt que de
+  // positionner chaque unité une par une via le mécanisme 🎯 existant.
+  | { kind: "fleet"; teamClientId: string; fleetClientId: string }
+  | { kind: "airbase"; airbaseClientId: string };
 
 export function setDragPayload(e: DragEvent, payload: DragPayload) {
   e.dataTransfer.setData(DRAG_MIME, JSON.stringify(payload));

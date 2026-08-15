@@ -4,7 +4,7 @@ import type { Dispatch, DragEvent, SetStateAction } from "react";
 import type { BuilderTeam, BuilderAirbase, BuilderSquadron, ClientIdGenerator, LibraryClassOption } from "./types";
 import { allUnits } from "./types";
 import { UnitRosterRow } from "./UnitRosterRow";
-import { allowDrop, readDragPayload } from "./dragDrop";
+import { allowDrop, readDragPayload, setDragPayload } from "./dragDrop";
 
 const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm";
 
@@ -154,6 +154,14 @@ export function TeamsBoard({
                     className="rounded-md border border-slate-800 bg-slate-950/40 p-2 transition-colors"
                   >
                     <div className="flex items-center gap-2">
+                      <span
+                        draggable
+                        onDragStart={(e) => setDragPayload(e, { kind: "fleet", teamClientId: team.clientId, fleetClientId: fleet.clientId })}
+                        title="Glisser sur la carte pour positionner toute la task force (formation générique)"
+                        className="cursor-grab text-brass-500 active:cursor-grabbing"
+                      >
+                        ⚓
+                      </span>
                       <input
                         value={fleet.name}
                         onChange={(e) => updateFleetName(team.clientId, fleet.clientId, e.target.value)}
