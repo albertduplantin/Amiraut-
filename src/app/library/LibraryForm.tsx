@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createLibraryClassAction, updateLibraryClassAction } from "./actions";
 import { LibraryClassFields, type LibraryClassFieldsValues } from "./LibraryClassFields";
+import { SHIP_TYPES } from "../scenarios/new/builder/unitTypeTaxonomy";
 import { SensorsEditor } from "./ArmamentEditor/SensorsEditor";
 import { CombatProfileEditor } from "./ArmamentEditor/CombatProfileEditor";
 import { WeaponSystemsEditor } from "./ArmamentEditor/WeaponSystemsEditor";
@@ -65,7 +66,7 @@ function initialFieldValues(initial?: LibraryClassData): LibraryClassFieldsValue
     agility: String(initial?.agility ?? ""),
     pilotSkill: initial?.pilotSkill ?? "",
     detectability: String(initial?.detectability ?? "1"),
-    iconKey: initial?.iconKey ?? "cruiser",
+    iconKey: initial?.iconKey ?? SHIP_TYPES[0].key,
     profileImageUrl: initial?.profileImageUrl ?? "",
     resistancePoints: String(initial?.resistancePoints ?? ""),
     historicalNote: initial?.historicalNote ?? "",

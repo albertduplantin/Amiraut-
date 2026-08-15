@@ -41,6 +41,8 @@ export type LibraryClassOption = {
   nation: string;
   category: UnitCategory;
   theater: string | null;
+  /** Type fin (voir unitTypeTaxonomy.ts) — filtre l'assistant guidé (Phase 3) et l'aperçu carte (Phase 4). */
+  iconKey: string;
 };
 
 /**

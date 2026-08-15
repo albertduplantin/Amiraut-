@@ -302,6 +302,24 @@ export function ScenarioEditorForm({
     setSelection((prev) => (prev?.kind === "airbase" && prev.clientId === clientId ? null : prev));
   }
 
+  /** Glisser-déposer d'un avion déjà en flotte vers une base aérienne/escadrille (Phase 6, retour utilisateur 2026-08-14) — voir AirbasesPanel/SquadronsPanel, dragDrop.ts. */
+  function handleAssignUnitBaseRef(teamClientId: string, fleetClientId: string, unitClientId: string, baseRef: BaseRef) {
+    setTeams((prev) =>
+      prev.map((t) =>
+        t.clientId === teamClientId
+          ? {
+              ...t,
+              fleets: t.fleets.map((f) =>
+                f.clientId === fleetClientId
+                  ? { ...f, units: f.units.map((u) => (u.clientId === unitClientId ? { ...u, baseRef } : u)) }
+                  : f
+              ),
+            }
+          : t
+      )
+    );
+  }
+
   function handleAddSquadron() {
     setSquadronsState((prev) => [...prev, { clientId: nextClientId("squadron"), key: `escadrille-${prev.length + 1}`, name: "", baseRef: { kind: "none" } }]);
   }
@@ -838,6 +856,8 @@ export function ScenarioEditorForm({
                   nextClientId={nextClientId}
                   selectedUnitClientId={selection?.kind === "unit" ? selection.unitClientId : null}
                   onSelectUnitForPlacement={selectUnitForPlacement}
+                  libraryClasses={libraryClasses}
+                  onAddUnitFromLibrary={handleAddUnitFromLibrary}
                 />
               </div>
             </div>
@@ -850,6 +870,9 @@ export function ScenarioEditorForm({
                 onRemove={handleRemoveAirbase}
                 selectedAirbaseClientId={selection?.kind === "airbase" ? selection.clientId : null}
                 onSelectForPlacement={selectAirbaseForPlacement}
+                onAssignAircraft={(teamClientId, fleetClientId, unitClientId, airbaseKey) =>
+                  handleAssignUnitBaseRef(teamClientId, fleetClientId, unitClientId, { kind: "airbase", key: airbaseKey })
+                }
               />
               <SquadronsPanel
                 squadrons={squadronsState}
@@ -859,6 +882,9 @@ export function ScenarioEditorForm({
                 onAdd={handleAddSquadron}
                 onUpdate={handleUpdateSquadron}
                 onRemove={handleRemoveSquadron}
+                onAssignAircraft={(teamClientId, fleetClientId, unitClientId, squadronKey) =>
+                  handleAssignUnitBaseRef(teamClientId, fleetClientId, unitClientId, { kind: "squadron", key: squadronKey })
+                }
               />
             </div>
 

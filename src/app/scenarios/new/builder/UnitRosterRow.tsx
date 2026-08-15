@@ -1,6 +1,7 @@
 "use client";
 
 import type { BuilderUnit, BuilderAirbase, BuilderSquadron, BaseRef } from "./types";
+import { setDragPayload } from "./dragDrop";
 
 const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs";
 
@@ -29,6 +30,8 @@ function baseRefToOptionValue(ref: BaseRef): string {
  */
 export function UnitRosterRow({
   unit,
+  teamClientId,
+  fleetClientId,
   airbases,
   squadrons,
   carrierCandidates,
@@ -39,6 +42,9 @@ export function UnitRosterRow({
   onSelectForPlacement,
 }: {
   unit: BuilderUnit;
+  /** Nécessaires uniquement pour le glisser-déposer d'un avion vers une base/escadrille (Phase 6). */
+  teamClientId: string;
+  fleetClientId: string;
   airbases: BuilderAirbase[];
   squadrons: BuilderSquadron[];
   /** Unités de surface posées, pour le rattachement porte-avions direct — jamais l'unité elle-même. */
@@ -65,7 +71,16 @@ export function UnitRosterRow({
   const positioned = unit.lat.trim() !== "" && unit.lng.trim() !== "";
 
   return (
-    <li className={`rounded-md border p-2 ${isSelectedForPlacement ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}>
+    <li
+      draggable={isAircraft}
+      onDragStart={
+        isAircraft
+          ? (e) => setDragPayload(e, { kind: "rosterUnit", teamClientId, fleetClientId, unitClientId: unit.clientId, category: unit.classRef.category })
+          : undefined
+      }
+      title={isAircraft ? "Glisser vers une base aérienne ou une escadrille pour l'y rattacher" : undefined}
+      className={`rounded-md border p-2 ${isAircraft ? "cursor-grab active:cursor-grabbing" : ""} ${isSelectedForPlacement ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <input
           value={unit.name}

@@ -1,6 +1,6 @@
 "use client";
 
-const ICON_OPTIONS = ["battleship", "cruiser", "destroyer", "submarine", "aircraft", "cargo"];
+import { SHIP_TYPES, AIRCRAFT_TYPES } from "../scenarios/new/builder/unitTypeTaxonomy";
 
 /**
  * Champs scalaires généraux d'une classe de bibliothèque (identité,
@@ -60,7 +60,15 @@ export function LibraryClassFields({
           Catégorie
           <select
             value={values.category}
-            onChange={(e) => onChange({ category: e.target.value as LibraryClassFieldsValues["category"] })}
+            onChange={(e) => {
+              const category = e.target.value as LibraryClassFieldsValues["category"];
+              // Le sélecteur de type (juste en-dessous) n'affiche que les
+              // options de la nouvelle catégorie — resynchronise iconKey pour
+              // qu'il ne garde pas une valeur invalide dans cette liste (ex:
+              // "cruiser" après un passage Navire → Sous-marin → Avion).
+              const iconKey = category === "SUBMARINE" ? "submarine" : category === "AIRCRAFT" ? AIRCRAFT_TYPES[0].key : SHIP_TYPES[0].key;
+              onChange({ category, iconKey });
+            }}
             className={fieldClass}
           >
             <option value="SURFACE_SHIP">Navire de surface</option>
@@ -80,16 +88,23 @@ export function LibraryClassFields({
           Théâtre (repère libre)
           <input value={values.theater} onChange={(e) => onChange({ theater: e.target.value })} className={fieldClass} />
         </label>
-        <label className={labelClass}>
-          Icône carte
-          <select value={values.iconKey} onChange={(e) => onChange({ iconKey: e.target.value })} className={fieldClass}>
-            {ICON_OPTIONS.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
-          </select>
-        </label>
+        {values.category === "SUBMARINE" ? (
+          <p className={labelClass}>
+            Type
+            <span className="mt-1 block rounded-md border border-slate-800 bg-slate-950/50 px-2 py-1.5 text-sm text-slate-500">Sous-marin</span>
+          </p>
+        ) : (
+          <label className={labelClass}>
+            Type
+            <select value={values.iconKey} onChange={(e) => onChange({ iconKey: e.target.value })} className={fieldClass}>
+              {(values.category === "AIRCRAFT" ? AIRCRAFT_TYPES : SHIP_TYPES).map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </section>
 
       <section className="grid grid-cols-3 gap-3">

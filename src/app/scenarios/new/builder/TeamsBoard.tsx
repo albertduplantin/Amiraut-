@@ -1,9 +1,10 @@
 "use client";
 
-import type { Dispatch, SetStateAction } from "react";
-import type { BuilderTeam, BuilderAirbase, BuilderSquadron, ClientIdGenerator } from "./types";
+import type { Dispatch, DragEvent, SetStateAction } from "react";
+import type { BuilderTeam, BuilderAirbase, BuilderSquadron, ClientIdGenerator, LibraryClassOption } from "./types";
 import { allUnits } from "./types";
 import { UnitRosterRow } from "./UnitRosterRow";
+import { allowDrop, readDragPayload } from "./dragDrop";
 
 const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm";
 
@@ -22,6 +23,8 @@ export function TeamsBoard({
   nextClientId,
   selectedUnitClientId,
   onSelectUnitForPlacement,
+  libraryClasses,
+  onAddUnitFromLibrary,
 }: {
   teams: BuilderTeam[];
   setTeams: Dispatch<SetStateAction<BuilderTeam[]>>;
@@ -31,6 +34,9 @@ export function TeamsBoard({
   /** Placement interactif sur la carte (Phase 5, retour utilisateur 2026-08-14). */
   selectedUnitClientId: string | null;
   onSelectUnitForPlacement: (teamClientId: string, fleetClientId: string, unitClientId: string) => void;
+  /** Glisser-déposer (Phase 6, retour utilisateur 2026-08-14) — dépose d'une classe de bibliothèque sur une task force. */
+  libraryClasses: LibraryClassOption[];
+  onAddUnitFromLibrary: (libClass: LibraryClassOption, teamClientId: string, fleetClientId: string) => void;
 }) {
   function addTeam() {
     setTeams((prev) => [
@@ -82,6 +88,15 @@ export function TeamsBoard({
       )
     );
   }
+  function handleDropOnFleet(e: DragEvent, teamClientId: string, fleetClientId: string) {
+    e.preventDefault();
+    const payload = readDragPayload(e);
+    if (!payload || payload.kind !== "libraryClass") return;
+    const libClass = libraryClasses.find((c) => c.id === payload.libraryClassId);
+    if (!libClass) return;
+    onAddUnitFromLibrary(libClass, teamClientId, fleetClientId);
+  }
+
   function updateUnit(teamClientId: string, fleetClientId: string, unitClientId: string, patch: Partial<BuilderTeam["fleets"][number]["units"][number]>) {
     setTeams((prev) =>
       prev.map((t) =>
@@ -132,7 +147,12 @@ export function TeamsBoard({
 
               <div className="space-y-2">
                 {team.fleets.map((fleet) => (
-                  <div key={fleet.clientId} className="rounded-md border border-slate-800 bg-slate-950/40 p-2">
+                  <div
+                    key={fleet.clientId}
+                    onDragOver={allowDrop}
+                    onDrop={(e) => handleDropOnFleet(e, team.clientId, fleet.clientId)}
+                    className="rounded-md border border-slate-800 bg-slate-950/40 p-2 transition-colors"
+                  >
                     <div className="flex items-center gap-2">
                       <input
                         value={fleet.name}
@@ -157,6 +177,8 @@ export function TeamsBoard({
                           <UnitRosterRow
                             key={unit.clientId}
                             unit={unit}
+                            teamClientId={team.clientId}
+                            fleetClientId={fleet.clientId}
                             airbases={airbases}
                             squadrons={squadrons}
                             carrierCandidates={allSurfaceUnits.filter((u) => u.clientId !== unit.clientId)}

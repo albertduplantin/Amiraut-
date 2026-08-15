@@ -10,9 +10,16 @@
  * qui permet de passer directement `currentHeadingDeg` en rotation CSS.
  */
 
-export type SilhouetteKey = "cargo" | "destroyer" | "cruiser" | "battleship" | "submarine" | "aircraft";
+export type SilhouetteKey = "cargo" | "destroyer" | "cruiser" | "battleship" | "carrier" | "submarine" | "aircraft";
 
+// Le porte-avions est vérifié AVANT cuirassé/croiseur (un nom du genre
+// "Porte-avions classe Illustrious" contiendrait sinon aucun des deux mais
+// pourrait un jour croiser un mot ambigu) — voir aussi le paramètre
+// `explicitTypeHint` de classifySilhouette ci-dessous, prioritaire sur ces
+// règles par mots-clés quand la classe porte un type explicite (constructeur
+// de scénario, retour utilisateur 2026-08-15).
 const KEYWORD_RULES: [RegExp, SilhouetteKey][] = [
+  [/porte-avions|porte avions|aircraft carrier|\bcarrier\b/i, "carrier"],
   [/cuirass|battleship|battlecruiser/i, "battleship"],
   [/croiseur|cruiser/i, "cruiser"],
   [/destroyer|torpilleur/i, "destroyer"],
@@ -27,6 +34,7 @@ export const DEFAULT_LENGTH_METERS: Record<SilhouetteKey, number> = {
   destroyer: 110,
   cruiser: 180,
   battleship: 230,
+  carrier: 250, // ordre de grandeur HMS Illustrious (224m)/USS Essex (266m)
   submarine: 67,
   aircraft: 12,
 };
@@ -53,6 +61,7 @@ export const DEFAULT_TURNING_RADIUS_M: Record<SilhouetteKey, number> = {
   destroyer: 300,
   cruiser: 310,
   battleship: 290,
+  carrier: 350, // coque proche d'un cuirassé, plus longue — diamètre tactique un peu plus large
   submarine: 180,
   aircraft: 120,
 };
@@ -61,11 +70,24 @@ export const DEFAULT_ACCELERATION_KNOTS_PER_MIN: Record<SilhouetteKey, number> =
   destroyer: 4.5,
   cruiser: 3.75,
   battleship: 2.5,
+  carrier: 2.75, // turbines comparables à un cuirassé de la même génération
   submarine: 3,
   aircraft: 8,
 };
 
-export function classifySilhouette(category: string, className: string): SilhouetteKey {
+/**
+ * `explicitTypeHint` — clé de la taxonomie fine du constructeur de scénario
+ * (voir builder/unitTypeTaxonomy.ts, retour utilisateur 2026-08-15) : quand
+ * fournie et reconnue, prime sur la déduction par mots-clés ci-dessous
+ * (utile pour une classe dont le nom ne trahit pas le type, ex. un
+ * porte-avions baptisé d'un simple nom propre). Absente ou non reconnue :
+ * comportement inchangé, déduction par catégorie + mots-clés du nom.
+ */
+export function classifySilhouette(category: string, className: string, explicitTypeHint?: string): SilhouetteKey {
+  if (explicitTypeHint) {
+    const hinted = SHIP_TYPE_HINT_TO_SILHOUETTE[explicitTypeHint];
+    if (hinted) return hinted;
+  }
   if (category === "SUBMARINE") return "submarine";
   if (category === "AIRCRAFT") return "aircraft";
   for (const [pattern, key] of KEYWORD_RULES) {
@@ -73,6 +95,25 @@ export function classifySilhouette(category: string, className: string): Silhoue
   }
   return "cargo";
 }
+
+/**
+ * Correspondance taxonomie fine → silhouette de rendu — dupliquée ici
+ * (plutôt qu'importée de builder/unitTypeTaxonomy.ts) pour que ce module bas
+ * niveau, consommé par l'arbitre/les ordres/les rapports, n'ait aucune
+ * dépendance vers le constructeur de scénario. Les avions n'ont qu'une seule
+ * silhouette quel que soit leur rôle (chasseur/bombardier/patrouille/
+ * torpilleur), inutile de les lister ici.
+ */
+const SHIP_TYPE_HINT_TO_SILHOUETTE: Record<string, SilhouetteKey> = {
+  battleship: "battleship",
+  "heavy-cruiser": "cruiser",
+  "light-cruiser": "cruiser",
+  carrier: "carrier",
+  destroyer: "destroyer",
+  escort: "destroyer",
+  cargo: "cargo",
+  submarine: "submarine",
+};
 
 // Un seul rectangle "passerelle" par silhouette (plutôt que plusieurs petits
 // éléments type tourelles/hublots) : au rendu sur la carte ces navires font
@@ -95,6 +136,14 @@ export const SILHOUETTE_PATHS: Record<SilhouetteKey, string> = {
   battleship: `
     <path d="M12 0 L21 12 L21 37 L12 48 L3 37 L3 12 Z" />
     <rect x="6" y="16" width="12" height="15" />
+  `,
+  // Pont d'envol : coque presque rectangulaire (bords à peine effilés, pas de
+  // tourelles) — la petite île de commandement (décalée à tribord dans la
+  // réalité, ici centrée pour rester lisible en silhouette vue de dessus)
+  // est le seul élément vertical, signal distinctif face à un cuirassé.
+  carrier: `
+    <path d="M12 1 L20 9 L20 40 L12 47 L4 40 L4 9 Z" />
+    <rect x="14" y="14" width="3.5" height="12" />
   `,
   submarine: `
     <ellipse cx="12" cy="24" rx="5" ry="23" />

@@ -29,6 +29,7 @@ export default async function NewScenarioPage({ searchParams }: { searchParams: 
     nation: c.nation,
     category: c.category,
     theater: c.theater,
+    iconKey: c.iconKey,
   }));
   return <ScenarioEditorForm duplicateFrom={duplicateFrom ?? null} libraryClasses={libraryClasses} />;
 }
