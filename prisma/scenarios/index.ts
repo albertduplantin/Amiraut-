@@ -1,20 +1,22 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import type { ScenarioDefinition, ScenarioUnitClass } from "./types";
 import { validateScenarioDefinition } from "./validation";
-import { denmarkStrait } from "./denmark-strait";
-import { northCape } from "./north-cape";
-import { pq18 } from "./pq18";
-import { hg53 } from "./hg53";
-import { biscay1943 } from "./biscay-1943";
 
 /**
- * Bibliothèque de scénarios intégrés. Ajouter un scénario = ajouter une
- * définition ici ; les scénarios créés par les joueurs (module éditeur,
- * voir src/app/scenarios/new) suivent exactement le même format, stockés en
- * base dans `CustomScenario` — voir findScenarioAsync/listAllScenarioSummaries
- * ci-dessous pour les deux confondus.
+ * Bibliothèque de scénarios intégrés (code source) — VIDE depuis le
+ * 2026-08-15 (retour utilisateur : "transformer les scénario en ligne de
+ * code en vrai scénario comme ceux que l'utilisateur construit"). Les 5
+ * scénarios qui vivaient ici (Détroit du Danemark, Cap Nord, PQ-18, HG 53,
+ * Golfe de Gascogne) ont été migrés tels quels vers `CustomScenario` (script
+ * jetable `tmp-migrate-integrated-to-custom.ts`, supprimé après exécution) —
+ * même contenu, y compris `source` (citations historiques), rien perdu. Ils
+ * sont donc désormais éditables EN PLACE comme n'importe quel scénario créé
+ * par un joueur (bouton "Modifier" sur /create), plutôt que figés en TS et
+ * réservés à "Dupliquer et modifier". L'infrastructure reste en place pour
+ * un futur scénario réintégré directement en code si besoin — juste vide
+ * pour l'instant.
  */
-export const SCENARIO_LIBRARY: ScenarioDefinition[] = [denmarkStrait, northCape, pq18, hg53, biscay1943];
+export const SCENARIO_LIBRARY: ScenarioDefinition[] = [];
 
 export function findScenario(key: string): ScenarioDefinition | undefined {
   return SCENARIO_LIBRARY.find((s) => s.key === key);
