@@ -8,7 +8,7 @@ import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes
 import type { LatLng } from "@/lib/geo";
 import { ScenarioDefinitionSchema } from "../../../../prisma/scenarios/validation";
 import type { ScenarioDefinition, ScenarioTeam, ScenarioUnit, ScenarioUnitClass } from "../../../../prisma/scenarios/types";
-import { createCustomScenarioAction } from "./actions";
+import { createCustomScenarioAction, updateCustomScenarioAction } from "./actions";
 import {
   type BuilderTeam,
   type BuilderAirbase,
@@ -57,6 +57,15 @@ import { NATIONS } from "./builder/nations";
  * contenu COMPLET d'un scénario existant — clé et nom légèrement modifiés
  * pour éviter toute collision. L'original n'est jamais modifié,
  * "Enregistrer" crée toujours une entrée séparée dans CustomScenario.
+ *
+ * `editingId` (bouton « Modifier » sur /create, retour utilisateur
+ * 2026-08-15 — "il faut qu'on puisse modifier un scénario sans
+ * nécessairement le dupliquer") : même pré-remplissage que `duplicateFrom`
+ * (les deux sont toujours fournis ensemble par la page), mais clé/nom
+ * gardés IDENTIQUES à l'original et "Enregistrer" écrase la même ligne
+ * `CustomScenario` (voir `updateCustomScenarioAction`) au lieu d'en créer
+ * une nouvelle. Réservé aux scénarios custom — un scénario intégré (code
+ * source) n'a pas de ligne en base à écraser.
  */
 
 // Marques diacritiques combinantes (U+0300 à U+036F) laissées par la
@@ -211,13 +220,26 @@ function buildInitialObjectives(duplicateFrom: ScenarioDefinition | null): Recor
 
 export function ScenarioEditorForm({
   duplicateFrom = null,
+  editingId = null,
   libraryClasses,
 }: {
   duplicateFrom?: ScenarioDefinition | null;
+  /**
+   * `id` du `CustomScenario` à éditer EN PLACE (retour utilisateur
+   * 2026-08-15 — "il faut qu'on puisse modifier un scénario sans
+   * nécessairement le dupliquer") : réutilise `duplicateFrom` pour le
+   * PRÉ-REMPLISSAGE (même format, mêmes fonctions `buildInitial*`), mais
+   * change le nom/la clé initiaux (pas de suffixe "(variante)"/"-variante"
+   * — on garde l'identité du scénario), le titre, et surtout `save()` :
+   * `updateCustomScenarioAction(editingId, …)` écrase la même ligne au lieu
+   * d'en créer une nouvelle. `null` = comportement "Dupliquer et modifier"
+   * inchangé (ou création vierge si `duplicateFrom` est aussi `null`).
+   */
+  editingId?: string | null;
   libraryClasses: LibraryClassOption[];
 }) {
-  const [name, setName] = useState(() => (duplicateFrom ? `${duplicateFrom.name} (variante)` : ""));
-  const [key, setKey] = useState(() => (duplicateFrom ? duplicateKey(duplicateFrom.key) : ""));
+  const [name, setName] = useState(() => (duplicateFrom ? (editingId ? duplicateFrom.name : `${duplicateFrom.name} (variante)`) : ""));
+  const [key, setKey] = useState(() => (duplicateFrom ? (editingId ? duplicateFrom.key : duplicateKey(duplicateFrom.key)) : ""));
   const [keyTouched, setKeyTouched] = useState(() => duplicateFrom !== null);
   const [description, setDescription] = useState(() => duplicateFrom?.description ?? "");
   const [briefing, setBriefing] = useState(() => duplicateFrom?.briefing ?? "");
@@ -912,7 +934,7 @@ export function ScenarioEditorForm({
     if (!definition) return;
     setSaveError(null);
     startTransition(async () => {
-      const result = await createCustomScenarioAction(definition);
+      const result = editingId ? await updateCustomScenarioAction(editingId, definition) : await createCustomScenarioAction(definition);
       if (!result.ok) {
         setSaveError(result.error);
         return;
@@ -925,9 +947,9 @@ export function ScenarioEditorForm({
     return (
       <div className="chart-room-bg min-h-screen text-slate-100">
         <div className="mx-auto max-w-2xl px-6 py-12 text-center">
-          <h1 className="font-display text-2xl text-brass-300">Scénario enregistré</h1>
+          <h1 className="font-display text-2xl text-brass-300">{editingId ? "Modifications enregistrées" : "Scénario enregistré"}</h1>
           <p className="mt-3 text-slate-400">
-            « {name} » est maintenant disponible dans la bibliothèque, sous la clé <code className="text-slate-300">{savedKey}</code>.
+            « {name} » est {editingId ? "à jour" : "maintenant disponible"} dans la bibliothèque, sous la clé <code className="text-slate-300">{savedKey}</code>.
           </p>
           <div className="mt-6 flex justify-center gap-3">
             <Link href="/create" className="rounded-md bg-brass-600 px-4 py-2 text-sm font-medium hover:bg-brass-500">
@@ -949,7 +971,9 @@ export function ScenarioEditorForm({
     <div className="chart-room-bg flex h-screen w-full flex-col text-slate-100">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
         <div>
-          <h1 className="font-display text-lg tracking-wide text-brass-300">{duplicateFrom ? `Dupliquer « ${duplicateFrom.name} »` : "Créer un scénario"}</h1>
+          <h1 className="font-display text-lg tracking-wide text-brass-300">
+            {editingId ? `Modifier « ${duplicateFrom?.name} »` : duplicateFrom ? `Dupliquer « ${duplicateFrom.name} »` : "Créer un scénario"}
+          </h1>
           <p className="text-xs text-slate-500">{name || "Sans nom"}{key && ` — ${key}`}</p>
         </div>
         <nav className="flex flex-wrap items-center gap-1 text-xs">
@@ -982,7 +1006,7 @@ export function ScenarioEditorForm({
             disabled={!definition || isPending}
             className="ml-1 rounded-md bg-brass-600 px-4 py-1.5 font-medium hover:bg-brass-500 disabled:opacity-50"
           >
-            {isPending ? "Enregistrement…" : "Enregistrer"}
+            {isPending ? "Enregistrement…" : editingId ? "Enregistrer les modifications" : "Enregistrer"}
           </button>
         </nav>
       </header>

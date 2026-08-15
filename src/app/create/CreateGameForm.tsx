@@ -13,6 +13,8 @@ type ScenarioSummary = {
   teamNames: string[];
   teams: { name: string; fleets: { name: string; unitNames: string[] }[] }[];
   custom: boolean;
+  /** Présent uniquement pour un scénario custom — active le lien "Modifier" (édition en place, retour utilisateur 2026-08-15). */
+  id?: string;
 };
 
 /** Palette pour les codes couleur des joueurs partageant une équipe (bloc 2) — lisible sur fond sombre, sans redite avec le rouge/bleu déjà utilisés pour les deux camps. */
@@ -239,13 +241,27 @@ export function CreateGameForm({ scenarios }: { scenarios: ScenarioSummary[] }) 
                 <div className="mt-1 flex items-center justify-between">
                   <p className="text-xs text-slate-600">Camps : {s.teamNames.join(" contre ")}</p>
                   {/* stopPropagation : dans le <button> de sélection du scénario, ne doit pas le choisir pour la partie en cours de création. */}
-                  <Link
-                    href={`/scenarios/new?duplicate=${encodeURIComponent(s.key)}`}
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-xs text-brass-400 hover:text-brass-300"
-                  >
-                    Dupliquer et modifier →
-                  </Link>
+                  <span className="flex items-center gap-2">
+                    {/* "Modifier" (retour utilisateur 2026-08-15 — "modifier un scénario sans nécessairement le dupliquer") : uniquement pour un scénario custom (id présent) — un scénario intégré est du code source, aucune ligne en base à écraser. */}
+                    {s.id && (
+                      <Link
+                        href={`/scenarios/new?edit=${encodeURIComponent(s.id)}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-xs text-brass-400 hover:text-brass-300"
+                        title="Édite ce scénario en place — écrase l'original à l'enregistrement"
+                      >
+                        Modifier →
+                      </Link>
+                    )}
+                    <Link
+                      href={`/scenarios/new?duplicate=${encodeURIComponent(s.key)}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-xs text-brass-400 hover:text-brass-300"
+                      title="Crée une copie à part — l'original n'est jamais modifié"
+                    >
+                      Dupliquer et modifier →
+                    </Link>
+                  </span>
                 </div>
               </button>
             ))}

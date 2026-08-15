@@ -34,9 +34,11 @@ export type ScenarioSummary = {
   // répartition des forces modifiable).
   teams: { name: string; fleets: { name: string; unitNames: string[] }[] }[];
   custom: boolean;
+  /** `id` de la ligne `CustomScenario` — présent uniquement pour un scénario custom (retour utilisateur 2026-08-15) : permet à /create de proposer "Modifier" (édition en place, identifiée par id) en plus de "Dupliquer et modifier". Absent pour un scénario intégré, qui n'a pas de ligne en base. */
+  id?: string;
 };
 
-function toSummary(def: ScenarioDefinition, custom: boolean): ScenarioSummary {
+function toSummary(def: ScenarioDefinition, custom: boolean, id?: string): ScenarioSummary {
   return {
     key: def.key,
     name: def.name,
@@ -49,6 +51,7 @@ function toSummary(def: ScenarioDefinition, custom: boolean): ScenarioSummary {
       fleets: t.fleets.map((f) => ({ name: f.name, unitNames: f.units.map((u) => u.name) })),
     })),
     custom,
+    id,
   };
 }
 
@@ -58,7 +61,7 @@ export async function listAllScenarioSummaries(prisma: PrismaClient): Promise<Sc
   const customSummaries: ScenarioSummary[] = [];
   for (const c of custom) {
     try {
-      customSummaries.push(toSummary(validateScenarioDefinition(c.definition), true));
+      customSummaries.push(toSummary(validateScenarioDefinition(c.definition), true, c.id));
     } catch {
       // Un scénario custom invalide (schéma changé depuis) n'empêche pas
       // d'afficher le reste de la bibliothèque — juste ignoré ici.
@@ -72,6 +75,20 @@ export async function findScenarioAsync(prisma: PrismaClient, key: string): Prom
   const builtin = findScenario(key);
   if (builtin) return builtin;
   const custom = await prisma.customScenario.findUnique({ where: { key } });
+  if (!custom) return undefined;
+  return validateScenarioDefinition(custom.definition);
+}
+
+/**
+ * Cherche un scénario CUSTOM par `id` (retour utilisateur 2026-08-15 —
+ * "modifier un scénario sans nécessairement le dupliquer") : `id`, pas
+ * `key`, car la clé reste éditable dans le formulaire — l'identifier par sa
+ * clé casserait la ré-identification si l'utilisateur la modifie avant
+ * d'enregistrer. Volontairement absent de la bibliothèque intégrée : ces
+ * scénarios sont du code source, aucune ligne en base à retrouver/écraser.
+ */
+export async function findCustomScenarioById(prisma: PrismaClient, id: string): Promise<ScenarioDefinition | undefined> {
+  const custom = await prisma.customScenario.findUnique({ where: { id } });
   if (!custom) return undefined;
   return validateScenarioDefinition(custom.definition);
 }
