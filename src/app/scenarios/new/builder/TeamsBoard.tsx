@@ -121,18 +121,18 @@ export function TeamsBoard({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <h3 className="font-display text-sm text-brass-300">Task forces</h3>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-x-2 gap-y-1">
           <button type="button" onClick={onOpenAddContainer} className="text-xs text-brass-400 hover:text-brass-300" title="Assistant guidé : équipe → type de conteneur">
             + Task force / Base
           </button>
           <button type="button" onClick={addTeam} className="text-xs text-brass-400 hover:text-brass-300">
-            + Nouvelle équipe
+            + Équipe
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3">
         {teams.map((team) => {
           const allSurfaceUnits = allUnits(teams).filter((u) => u.classRef.category === "SURFACE_SHIP");
           return (
@@ -148,10 +148,10 @@ export function TeamsBoard({
                   type="button"
                   onClick={() => removeTeam(team.clientId)}
                   disabled={teams.length <= 2}
-                  title={teams.length <= 2 ? "Il faut au moins deux équipes" : undefined}
-                  className="text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
+                  title={teams.length <= 2 ? "Il faut au moins deux équipes" : "Supprimer l'équipe"}
+                  className="shrink-0 text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
                 >
-                  Supprimer l&apos;équipe
+                  ✕
                 </button>
               </div>
 
@@ -179,22 +179,22 @@ export function TeamsBoard({
                       />
                       <button
                         type="button"
-                        onClick={() => onOpenUnitWizard(team.clientId, fleet.clientId)}
-                        className="text-xs text-brass-400 hover:text-brass-300"
-                        title="Choisir un type de bâtiment, puis la classe précise"
-                      >
-                        + Bâtiment
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => removeFleet(team.clientId, fleet.clientId)}
                         disabled={team.fleets.length <= 1}
-                        title={team.fleets.length <= 1 ? "Il faut au moins une task force par équipe" : undefined}
-                        className="text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
+                        title={team.fleets.length <= 1 ? "Il faut au moins une task force par équipe" : "Supprimer la task force"}
+                        className="shrink-0 text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
                       >
-                        Supprimer
+                        ✕
                       </button>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => onOpenUnitWizard(team.clientId, fleet.clientId)}
+                      className="mt-1 text-[11px] text-brass-400 hover:text-brass-300"
+                      title="Choisir un type de bâtiment, puis la classe précise"
+                    >
+                      + Bâtiment
+                    </button>
                     {fleet.units.length === 0 ? (
                       <p className="mt-2 text-xs text-slate-600">Aucune unité — ajoutez-en depuis la bibliothèque.</p>
                     ) : (

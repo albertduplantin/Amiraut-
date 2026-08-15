@@ -26,11 +26,11 @@ import { LibraryBrowserPanel } from "./builder/LibraryBrowserPanel";
 import { TeamsBoard } from "./builder/TeamsBoard";
 import { AirbasesPanel } from "./builder/AirbasesPanel";
 import { SquadronsPanel } from "./builder/SquadronsPanel";
-import { ObjectivesEditor } from "./builder/ObjectivesEditor";
 import { allowDrop, readDragPayload } from "./builder/dragDrop";
 import { applyFormationAtCenter } from "./builder/formation";
 import { AddContainerModal } from "./builder/AddContainerModal";
 import { AddUnitWizardModal } from "./builder/AddUnitWizardModal";
+import { ScenarioMetaModal, type ScenarioMetaTab } from "./builder/ScenarioMetaModal";
 
 /**
  * Constructeur de scénarios (module séparé de la feuille de route) —
@@ -194,6 +194,13 @@ export function ScenarioEditorForm({
   // — coexistent avec les boutons/glisser-déposer déjà en place.
   const [addContainerModalOpen, setAddContainerModalOpen] = useState(false);
   const [unitWizardFor, setUnitWizardFor] = useState<{ teamClientId: string; fleetClientId: string } | null>(null);
+
+  // Mise en page 3 colonnes façon arbitre (Phase 4, retour utilisateur
+  // 2026-08-15) — rail gauche collapsible comme ArbiterDashboard.tsx, infos
+  // de scénario déportées dans une modal à onglets plutôt qu'une colonne
+  // toujours visible (voir ScenarioMetaModal.tsx).
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [metaTab, setMetaTab] = useState<ScenarioMetaTab | null>(null);
 
   // Placement interactif sur carte (Phase 5, retour utilisateur
   // 2026-08-14) : même pattern que la repositionnement côté arbitre
@@ -675,307 +682,76 @@ export function ScenarioEditorForm({
   }
 
   return (
-    <div className="chart-room-bg min-h-screen text-slate-100">
-      <div className="mx-auto max-w-7xl px-6 py-10">
-        <div className="flex items-center justify-between gap-2">
-          <h1 className="font-display text-2xl text-brass-300">{duplicateFrom ? `Dupliquer « ${duplicateFrom.name} »` : "Créer un scénario"}</h1>
-          <Link href="/create" className="rounded-md border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-900">
+    <div className="chart-room-bg flex h-screen w-full flex-col text-slate-100">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+        <div>
+          <h1 className="font-display text-lg tracking-wide text-brass-300">{duplicateFrom ? `Dupliquer « ${duplicateFrom.name} »` : "Créer un scénario"}</h1>
+          <p className="text-xs text-slate-500">{name || "Sans nom"}{key && ` — ${key}`}</p>
+        </div>
+        <nav className="flex flex-wrap items-center gap-1 text-xs">
+          <button
+            type="button"
+            onClick={() => setMetaTab("info")}
+            className="rounded-md px-3 py-1.5 text-slate-300 hover:bg-slate-900"
+          >
+            Infos générales
+          </button>
+          <button
+            type="button"
+            onClick={() => setMetaTab("weather")}
+            className="rounded-md px-3 py-1.5 text-slate-300 hover:bg-slate-900"
+          >
+            Météo
+          </button>
+          <button
+            type="button"
+            onClick={() => setMetaTab("objectives")}
+            className="rounded-md px-3 py-1.5 text-slate-300 hover:bg-slate-900"
+          >
+            Objectifs
+          </button>
+          <Link href="/create" className="ml-1 flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-slate-300 hover:bg-slate-900">
             ← Retour
           </Link>
+          <button
+            onClick={save}
+            disabled={!definition || isPending}
+            className="ml-1 rounded-md bg-brass-600 px-4 py-1.5 font-medium hover:bg-brass-500 disabled:opacity-50"
+          >
+            {isPending ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </nav>
+      </header>
+
+      {(validationIssues.length > 0 || saveError) && (
+        <div className="border-b border-red-900 bg-red-950/40 px-4 py-1.5 text-xs text-red-300">
+          {saveError ?? `${validationIssues.length} problème(s) avant enregistrement — ${validationIssues[0]}${validationIssues.length > 1 ? ` (+${validationIssues.length - 1} autre(s), voir Infos générales/Météo/Objectifs)` : ""}`}
         </div>
-        {duplicateFrom ? (
-          <p className="mt-2 max-w-3xl text-sm text-slate-400">
-            Tout ci-dessous, y compris les task forces et bases, est pré-rempli avec le contenu de « {duplicateFrom.name} » —
-            modifiez ce que vous voulez (ajouter une flotte, une base aérienne, des unités…) puis enregistrez : l&apos;original
-            n&apos;est jamais modifié, ceci crée un nouveau scénario séparé.
-          </p>
-        ) : (
-          <p className="mt-2 max-w-3xl text-sm text-slate-400">
-            Les champs simples ci-dessous, puis l&apos;ordre de bataille — task forces, escadrilles, bases aériennes, unités —
-            se composent visuellement à droite, en piochant dans la bibliothèque partagée.
-          </p>
-        )}
+      )}
 
-        <div className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="space-y-4 xl:col-span-1">
-            <fieldset className="space-y-3 rounded-md border border-slate-800 bg-slate-900 p-4">
-              <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Informations générales</legend>
-              <label className="block text-sm">
-                Nom
-                <input
-                  value={name}
-                  onChange={(e) => updateName(e.target.value)}
-                  className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block text-sm">
-                Clé (identifiant unique, généré depuis le nom)
-                <input
-                  value={key}
-                  onChange={(e) => {
-                    setKey(slugify(e.target.value));
-                    setKeyTouched(true);
-                  }}
-                  className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm font-mono"
-                />
-              </label>
-              <label className="block text-sm">
-                Description courte
-                <input
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block text-sm">
-                Briefing (affiché aux joueurs)
-                <textarea
-                  value={briefing}
-                  onChange={(e) => setBriefing(e.target.value)}
-                  rows={3}
-                  className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block text-sm">
-                Date affichée (ex : 24 mai 1941, 05h52)
-                <input
-                  value={dateLabel}
-                  onChange={(e) => setDateLabel(e.target.value)}
-                  className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block text-sm">
-                Sources
-                <input
-                  value={source}
-                  onChange={(e) => setSource(e.target.value)}
-                  className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                <label className="block text-sm">
-                  Centre lat.
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={mapCenterLat}
-                    onChange={(e) => setMapCenterLat(Number(e.target.value))}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-sm">
-                  Centre lng.
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={mapCenterLng}
-                    onChange={(e) => setMapCenterLng(Number(e.target.value))}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-sm">
-                  Zoom
-                  <input
-                    type="number"
-                    value={mapDefaultZoom}
-                    onChange={(e) => setMapDefaultZoom(Number(e.target.value))}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  />
-                </label>
+      <div className="flex flex-1 overflow-hidden">
+        <aside className={`shrink-0 overflow-y-auto border-r border-slate-800 transition-all ${leftOpen ? "w-80 space-y-4 p-3" : "w-0 p-0"}`}>
+          {leftOpen && (
+            <>
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Task forces &amp; bases</h2>
+                <button onClick={() => setLeftOpen(false)} className="text-slate-600 hover:text-slate-400" title="Replier">
+                  ◂
+                </button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block text-sm">
-                  Durée du 1er tour (min)
-                  <input
-                    type="number"
-                    value={defaultTurnMinutes}
-                    onChange={(e) => setDefaultTurnMinutes(Number(e.target.value))}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-sm">
-                  Durée d&apos;une manche tactique (min)
-                  <input
-                    type="number"
-                    value={tacticalRoundMinutes}
-                    onChange={(e) => setTacticalRoundMinutes(Number(e.target.value))}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  />
-                </label>
-              </div>
-            </fieldset>
-
-            <fieldset className="space-y-3 rounded-md border border-slate-800 bg-slate-900 p-4">
-              <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Météo de départ</legend>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block text-sm">
-                  Visibilité (nm)
-                  <input
-                    type="number"
-                    value={visibilityNm}
-                    onChange={(e) => setVisibilityNm(Number(e.target.value))}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-sm">
-                  État de mer (0-9)
-                  <input
-                    type="number"
-                    min={0}
-                    max={9}
-                    value={seaState}
-                    onChange={(e) => setSeaState(Number(e.target.value))}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-sm">
-                  Luminosité
-                  <select
-                    value={daylight}
-                    onChange={(e) => setDaylight(e.target.value)}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  >
-                    <option value="DAY">Jour</option>
-                    <option value="TWILIGHT">Crépuscule</option>
-                    <option value="NIGHT">Nuit</option>
-                    <option value="POLAR_NIGHT">Nuit polaire</option>
-                    <option value="POLAR_DAY">Jour polaire</option>
-                  </select>
-                </label>
-                <label className="block text-sm">
-                  Précipitations
-                  <select
-                    value={precipitation}
-                    onChange={(e) => setPrecipitation(e.target.value)}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  >
-                    <option value="NONE">Aucune</option>
-                    <option value="RAIN">Pluie</option>
-                    <option value="SNOW">Neige</option>
-                    <option value="FOG">Brouillard</option>
-                  </select>
-                </label>
-                <label className="block text-sm">
-                  Vent (nds)
-                  <input
-                    type="number"
-                    value={windKnots}
-                    onChange={(e) => setWindKnots(Number(e.target.value))}
-                    className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                  />
-                </label>
-              </div>
-              <label className="block text-sm">
-                Notes météo (optionnel)
-                <input
-                  value={weatherNotes}
-                  onChange={(e) => setWeatherNotes(e.target.value)}
-                  className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-                />
-              </label>
-            </fieldset>
-
-            <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Positions — glissez ⚓/✈ une task force/base ici pour la positionner
-              </h3>
-              <div className="h-64 overflow-hidden rounded-md" onDragOver={allowDrop} onDrop={handleMapDrop}>
-                <GameMap
-                  ref={gameMapRef}
-                  center={{ lat: mapCenterLat, lng: mapCenterLng }}
-                  zoom={mapDefaultZoom}
-                  sources={previewSources}
-                  fitToPoints={previewPoints}
-                  shipMarkers={shipMarkers}
-                  shipMarkersMinZoom={0}
-                  onClick={handleMapClick}
-                />
-              </div>
-              {selection ? (
-                <div className="mt-2 rounded-md border border-brass-700 bg-brass-950/20 p-2 text-xs">
-                  <p className="text-brass-300">
-                    {selectedUnit ? `Unité sélectionnée : ${selectedUnit.name}` : selectedAirbase ? `Base sélectionnée : ${selectedAirbase.name || selectedAirbase.key}` : null}
-                    {" — cliquez la carte pour choisir sa position."}
-                  </p>
-                  {draftPosition && (
-                    <p className="mt-1 text-slate-400">
-                      Nouvelle position : {draftPosition.lat.toFixed(4)}, {draftPosition.lng.toFixed(4)}
-                    </p>
-                  )}
-                  {posError && <p className="mt-1 text-red-400">{posError}</p>}
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelection(null);
-                        setDraftPosition(null);
-                        setPosError(null);
-                      }}
-                      className="rounded border border-slate-700 px-2 py-1 hover:bg-slate-900"
-                    >
-                      Fermer
-                    </button>
-                    <button
-                      type="button"
-                      onClick={applyDraftPosition}
-                      disabled={!draftPosition}
-                      className="flex-1 rounded bg-brass-600 px-2 py-1 font-medium hover:bg-brass-500 disabled:opacity-50"
-                    >
-                      Appliquer
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-2 text-xs text-slate-600">
-                  Cliquez le 🎯 d&apos;une unité ou d&apos;une base ci-contre pour la positionner en cliquant la carte.
-                </p>
-              )}
-            </div>
-
-            {validationIssues.length > 0 && (
-              <div className="rounded-md border border-red-800 bg-red-950/30 px-3 py-2 text-xs text-red-300">
-                <p className="mb-1 font-semibold">{validationIssues.length} problème(s) :</p>
-                <ul className="list-inside list-disc space-y-0.5">
-                  {validationIssues.map((issue, i) => (
-                    <li key={i}>{issue}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {saveError && <p className="rounded-md border border-red-800 bg-red-950/30 px-3 py-2 text-xs text-red-300">{saveError}</p>}
-
-            <button
-              onClick={save}
-              disabled={!definition || isPending}
-              className="w-full rounded-md bg-brass-600 px-4 py-2 text-sm font-medium hover:bg-brass-500 disabled:opacity-50"
-            >
-              {isPending ? "Enregistrement…" : "Enregistrer le scénario"}
-            </button>
-          </div>
-
-          <div className="space-y-4 xl:col-span-2">
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <div className="lg:col-span-1">
-                <LibraryBrowserPanel classes={libraryClasses} teams={teams} onAddUnit={handleAddUnitFromLibrary} />
-              </div>
-              <div className="lg:col-span-2">
-                <TeamsBoard
-                  teams={teams}
-                  setTeams={setTeams}
-                  airbases={airbasesState}
-                  squadrons={squadronsState}
-                  nextClientId={nextClientId}
-                  selectedUnitClientId={selection?.kind === "unit" ? selection.unitClientId : null}
-                  onSelectUnitForPlacement={selectUnitForPlacement}
-                  libraryClasses={libraryClasses}
-                  onAddUnitFromLibrary={handleAddUnitFromLibrary}
-                  onOpenAddContainer={() => setAddContainerModalOpen(true)}
-                  onOpenUnitWizard={(teamClientId, fleetClientId) => setUnitWizardFor({ teamClientId, fleetClientId })}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <TeamsBoard
+                teams={teams}
+                setTeams={setTeams}
+                airbases={airbasesState}
+                squadrons={squadronsState}
+                nextClientId={nextClientId}
+                selectedUnitClientId={selection?.kind === "unit" ? selection.unitClientId : null}
+                onSelectUnitForPlacement={selectUnitForPlacement}
+                libraryClasses={libraryClasses}
+                onAddUnitFromLibrary={handleAddUnitFromLibrary}
+                onOpenAddContainer={() => setAddContainerModalOpen(true)}
+                onOpenUnitWizard={(teamClientId, fleetClientId) => setUnitWizardFor({ teamClientId, fleetClientId })}
+              />
               <AirbasesPanel
                 airbases={airbasesState}
                 onAdd={handleAddAirbase}
@@ -999,16 +775,121 @@ export function ScenarioEditorForm({
                   handleAssignUnitBaseRef(teamClientId, fleetClientId, unitClientId, { kind: "squadron", key: squadronKey })
                 }
               />
-            </div>
+            </>
+          )}
+        </aside>
+        {!leftOpen && (
+          <button onClick={() => setLeftOpen(true)} className="w-5 shrink-0 border-r border-slate-800 text-slate-600 hover:bg-slate-900 hover:text-slate-400" title="Déplier les task forces">
+            ▸
+          </button>
+        )}
 
-            <ObjectivesEditor
-              teams={teams}
-              textByTeamName={new Map(Object.entries(objectivesByTeamName))}
-              onChangeText={(teamName, text) => setObjectivesByTeamName((prev) => ({ ...prev, [teamName]: text }))}
-            />
+        <main className="relative flex-1" onDragOver={allowDrop} onDrop={handleMapDrop}>
+          <GameMap
+            ref={gameMapRef}
+            center={{ lat: mapCenterLat, lng: mapCenterLng }}
+            zoom={mapDefaultZoom}
+            sources={previewSources}
+            fitToPoints={previewPoints}
+            shipMarkers={shipMarkers}
+            shipMarkersMinZoom={0}
+            onClick={handleMapClick}
+            className="h-full w-full"
+          />
+
+          <div className="pointer-events-none absolute left-4 top-4 max-w-xs rounded-md border border-slate-700 bg-slate-950/80 px-3 py-1.5 text-[11px] text-slate-400">
+            Glissez ⚓/✈ une task force/base depuis le rail pour la positionner — ou 🎯 une unité, puis cliquez la carte.
           </div>
-        </div>
+
+          {(selectedUnit || selectedAirbase) && (
+            <div className="absolute bottom-4 left-4 max-w-xs rounded-md border border-slate-700 bg-slate-950/90 p-3 text-xs shadow-lg">
+              <p className="font-medium text-brass-300">
+                {selectedUnit ? `Unité : ${selectedUnit.name}` : selectedAirbase ? `Base : ${selectedAirbase.name || selectedAirbase.key}` : null}
+              </p>
+              <p className="mt-1 text-slate-500">Cliquez la carte pour choisir sa position.</p>
+              {draftPosition && (
+                <p className="mt-1 text-orange-400">
+                  → {draftPosition.lat.toFixed(4)}, {draftPosition.lng.toFixed(4)}
+                </p>
+              )}
+              {posError && <p className="mt-1 text-red-400">{posError}</p>}
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelection(null);
+                    setDraftPosition(null);
+                    setPosError(null);
+                  }}
+                  className="rounded border border-slate-700 px-2 py-1 hover:bg-slate-900"
+                >
+                  Fermer
+                </button>
+                <button
+                  type="button"
+                  onClick={applyDraftPosition}
+                  disabled={!draftPosition}
+                  className="flex-1 rounded bg-brass-600 px-2 py-1 font-medium hover:bg-brass-500 disabled:opacity-50"
+                >
+                  Appliquer
+                </button>
+              </div>
+            </div>
+          )}
+        </main>
+
+        <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-800 p-4">
+          <LibraryBrowserPanel classes={libraryClasses} teams={teams} onAddUnit={handleAddUnitFromLibrary} />
+        </aside>
       </div>
+
+      {metaTab && (
+        <ScenarioMetaModal
+          initialTab={metaTab}
+          onClose={() => setMetaTab(null)}
+          validationIssues={validationIssues}
+          name={name}
+          updateName={updateName}
+          keyValue={key}
+          onKeyChange={(v) => {
+            setKey(slugify(v));
+            setKeyTouched(true);
+          }}
+          description={description}
+          setDescription={setDescription}
+          briefing={briefing}
+          setBriefing={setBriefing}
+          dateLabel={dateLabel}
+          setDateLabel={setDateLabel}
+          source={source}
+          setSource={setSource}
+          mapCenterLat={mapCenterLat}
+          setMapCenterLat={setMapCenterLat}
+          mapCenterLng={mapCenterLng}
+          setMapCenterLng={setMapCenterLng}
+          mapDefaultZoom={mapDefaultZoom}
+          setMapDefaultZoom={setMapDefaultZoom}
+          defaultTurnMinutes={defaultTurnMinutes}
+          setDefaultTurnMinutes={setDefaultTurnMinutes}
+          tacticalRoundMinutes={tacticalRoundMinutes}
+          setTacticalRoundMinutes={setTacticalRoundMinutes}
+          visibilityNm={visibilityNm}
+          setVisibilityNm={setVisibilityNm}
+          seaState={seaState}
+          setSeaState={setSeaState}
+          daylight={daylight}
+          setDaylight={setDaylight}
+          precipitation={precipitation}
+          setPrecipitation={setPrecipitation}
+          windKnots={windKnots}
+          setWindKnots={setWindKnots}
+          weatherNotes={weatherNotes}
+          setWeatherNotes={setWeatherNotes}
+          teams={teams}
+          objectivesByTeamName={objectivesByTeamName}
+          onChangeObjectiveText={(teamName, text) => setObjectivesByTeamName((prev) => ({ ...prev, [teamName]: text }))}
+        />
+      )}
 
       {addContainerModalOpen && (
         <AddContainerModal
