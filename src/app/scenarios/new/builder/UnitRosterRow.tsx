@@ -138,12 +138,13 @@ export function UnitRosterRow({
           onChange={(e) => onChange({ name: e.target.value })}
           className={`${fieldClass} min-w-[8rem] flex-1`}
           placeholder="Nom de l'unité"
+          title={`Classe : ${unit.classRef.name}${unit.classRef.kind === "inline" ? " (héritée du scénario dupliqué, non modifiable ici)" : ""}`}
         />
-        <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400" title={unit.classRef.kind === "inline" ? "Classe héritée du scénario dupliqué, non modifiable ici" : "Classe de bibliothèque"}>
-          {unit.classRef.name}
-          {unit.classRef.kind === "inline" && " (héritée)"}
-          {isCarrier && " 🛫"}
-        </span>
+        {isCarrier && (
+          <span title="Porte-avions" className="shrink-0 text-sm">
+            🛫
+          </span>
+        )}
         <button
           type="button"
           onClick={onSelectForPlacement}

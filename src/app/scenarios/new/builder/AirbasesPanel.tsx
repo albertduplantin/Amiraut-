@@ -138,8 +138,8 @@ export function AirbasesPanel({
                 >
                   🎯
                 </button>
-                <button type="button" onClick={() => onRemove(a.clientId)} className="ml-auto shrink-0 text-xs text-red-500 hover:text-red-400">
-                  Supprimer
+                <button type="button" onClick={() => onRemove(a.clientId)} className="ml-auto shrink-0 text-xs text-red-500 hover:text-red-400" title="Supprimer la base">
+                  ✕
                 </button>
               </div>
               {isExpanded && (

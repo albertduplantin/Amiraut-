@@ -21,6 +21,8 @@ import {
   createClientIdGenerator,
   allUnits,
   aircraftForAirbase,
+  aircraftForCarrier,
+  resolveClassInfo,
 } from "./builder/types";
 import { LibraryBrowserPanel } from "./builder/LibraryBrowserPanel";
 import { TeamsBoard } from "./builder/TeamsBoard";
@@ -396,7 +398,7 @@ export function ScenarioEditorForm({
       return;
     }
     if (payload.kind === "fleet") {
-      setTeams((prev) => applyGroupPositionToFleet(prev, payload.teamClientId, payload.fleetClientId, drop));
+      setTeams((prev) => applyGroupPositionToFleetWithCarriers(prev, payload.teamClientId, payload.fleetClientId, drop));
     }
   }
 
@@ -425,12 +427,59 @@ export function ScenarioEditorForm({
     );
   }
 
+  /**
+   * "un porte-avions [...] référence mobile, la position suit le navire"
+   * (Constats du plan, Phase 4) — même principe que
+   * `repositionAirbaseAircraft`, mais un porte-avions se déplace comme
+   * n'importe quel navire (seul via 🎯, ou en groupe avec toute sa task
+   * force) : contrairement à une base aérienne, il n'a pas son propre
+   * déclencheur de repositionnement dédié, ce correctif le rattache aux
+   * DEUX chemins de déplacement de navire existants (voir
+   * `applyGroupPositionToFleetWithCarriers`/`applyDraftPosition`). Version
+   * PURE (prend et rend `teams`) pour pouvoir s'enchaîner après un
+   * déplacement de groupe déjà calculé.
+   */
+  function applyCarrierAircraftFollow(teamsIn: BuilderTeam[], carrierUnitName: string, newPos: LatLng): BuilderTeam[] {
+    const attached = aircraftForCarrier(teamsIn, carrierUnitName);
+    if (attached.length === 0) return teamsIn;
+    const positions = applyFormationAtCenter(newPos, attached.length);
+    return attached.reduce(
+      (acc, lu, i) =>
+        acc.map((t) =>
+          t.clientId === lu.teamClientId
+            ? {
+                ...t,
+                fleets: t.fleets.map((f) =>
+                  f.clientId === lu.fleetClientId
+                    ? { ...f, units: f.units.map((u) => (u.clientId === lu.unit.clientId ? { ...u, lat: String(positions[i].lat), lng: String(positions[i].lng) } : u)) }
+                    : f
+                ),
+              }
+            : t
+        ),
+      teamsIn
+    );
+  }
+
+  /** `applyGroupPositionToFleet` puis fait suivre l'escadrille de chaque porte-avions de la flotte à sa position finale — sinon un porte-avions déplacé en groupe (drag ⚓ ou 🎯 de task force) laisse ses avions sur place. */
+  function applyGroupPositionToFleetWithCarriers(prev: BuilderTeam[], teamClientId: string, fleetClientId: string, drop: LatLng): BuilderTeam[] {
+    const next = applyGroupPositionToFleet(prev, teamClientId, fleetClientId, drop);
+    const fleet = next.find((t) => t.clientId === teamClientId)?.fleets.find((f) => f.clientId === fleetClientId);
+    if (!fleet) return next;
+    return fleet.units.reduce((acc, u) => {
+      if (!u.lat.trim() || !u.lng.trim()) return acc;
+      const info = resolveClassInfo(u.classRef, libraryClasses);
+      if (info?.iconKey !== "carrier") return acc;
+      return applyCarrierAircraftFollow(acc, u.name, { lat: Number(u.lat), lng: Number(u.lng) });
+    }, next);
+  }
+
   function applyDraftPosition() {
     if (!draftPosition || !selection) return;
     if (selection.kind === "unit") {
       const { teamClientId, fleetClientId, unitClientId } = selection;
-      setTeams((prev) =>
-        prev.map((t) =>
+      setTeams((prev) => {
+        const next = prev.map((t) =>
           t.clientId === teamClientId
             ? {
                 ...t,
@@ -441,8 +490,14 @@ export function ScenarioEditorForm({
                 ),
               }
             : t
-        )
-      );
+        );
+        // Un porte-avions déplacé seul (pas en groupe) fait aussi suivre son escadrille — même principe qu'une base aérienne.
+        const movedUnit = next.find((t) => t.clientId === teamClientId)?.fleets.find((f) => f.clientId === fleetClientId)?.units.find((u) => u.clientId === unitClientId);
+        if (movedUnit && resolveClassInfo(movedUnit.classRef, libraryClasses)?.iconKey === "carrier") {
+          return applyCarrierAircraftFollow(next, movedUnit.name, draftPosition);
+        }
+        return next;
+      });
     } else if (selection.kind === "airbase") {
       const { clientId } = selection;
       const base = airbasesState.find((a) => a.clientId === clientId);
@@ -450,9 +505,9 @@ export function ScenarioEditorForm({
       // "une base aérienne avec tous ses avions" (retour utilisateur 2026-08-15, Phase 5).
       if (base) repositionAirbaseAircraft(base.key, draftPosition);
     } else {
-      // "fleet" — bouton 🎯 de groupe (Phase 5, retour utilisateur 2026-08-15), même calcul que le glisser-déposer.
+      // "fleet" — bouton 🎯 de groupe (Phase 5, retour utilisateur 2026-08-15), même calcul que le glisser-déposer + suivi des porte-avions.
       const { teamClientId, fleetClientId } = selection;
-      setTeams((prev) => applyGroupPositionToFleet(prev, teamClientId, fleetClientId, draftPosition));
+      setTeams((prev) => applyGroupPositionToFleetWithCarriers(prev, teamClientId, fleetClientId, draftPosition));
     }
     setDraftPosition(null);
   }
