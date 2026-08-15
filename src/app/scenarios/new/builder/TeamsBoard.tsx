@@ -20,12 +20,17 @@ export function TeamsBoard({
   airbases,
   squadrons,
   nextClientId,
+  selectedUnitClientId,
+  onSelectUnitForPlacement,
 }: {
   teams: BuilderTeam[];
   setTeams: Dispatch<SetStateAction<BuilderTeam[]>>;
   airbases: BuilderAirbase[];
   squadrons: BuilderSquadron[];
   nextClientId: ClientIdGenerator;
+  /** Placement interactif sur la carte (Phase 5, retour utilisateur 2026-08-14). */
+  selectedUnitClientId: string | null;
+  onSelectUnitForPlacement: (teamClientId: string, fleetClientId: string, unitClientId: string) => void;
 }) {
   function addTeam() {
     setTeams((prev) => [
@@ -158,6 +163,8 @@ export function TeamsBoard({
                             onChange={(patch) => updateUnit(team.clientId, fleet.clientId, unit.clientId, patch)}
                             onRemove={() => removeUnit(team.clientId, fleet.clientId, unit.clientId)}
                             removeDisabledReason={fleet.units.length <= 1 ? "Il faut au moins une unité par task force" : null}
+                            isSelectedForPlacement={selectedUnitClientId === unit.clientId}
+                            onSelectForPlacement={() => onSelectUnitForPlacement(team.clientId, fleet.clientId, unit.clientId)}
                           />
                         ))}
                       </ul>

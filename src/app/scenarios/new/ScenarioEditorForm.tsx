@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { GameMap, type MapSourceConfig } from "@/components/GameMap";
-import { pointsFeatureCollection, colorForId } from "@/lib/mapData";
+import { GameMap, type GameMapHandle, type MapSourceConfig, type ShipMarkerConfig } from "@/components/GameMap";
+import { pointsFeatureCollection } from "@/lib/mapData";
+import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
+import type { LatLng } from "@/lib/geo";
 import { ScenarioDefinitionSchema } from "../../../../prisma/scenarios/validation";
 import type { ScenarioDefinition, ScenarioTeam, ScenarioUnit, ScenarioUnitClass } from "../../../../prisma/scenarios/types";
 import { createCustomScenarioAction } from "./actions";
@@ -184,6 +186,72 @@ export function ScenarioEditorForm({
   const [savedKey, setSavedKey] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  // Placement interactif sur carte (Phase 5, retour utilisateur
+  // 2026-08-14) : même pattern que la repositionnement côté arbitre
+  // (ArbiterDashboard.tsx) — sélection → clic carte → brouillon → clic
+  // "Appliquer" pour committer, mais ici RIEN n'est envoyé au serveur tant
+  // que "Enregistrer le scénario" (plus bas) n'a pas été cliqué : la
+  // position "appliquée" ne fait que mettre à jour l'état local du
+  // formulaire.
+  const [selection, setSelection] = useState<{ kind: "unit"; teamClientId: string; fleetClientId: string; unitClientId: string } | { kind: "airbase"; clientId: string } | null>(null);
+  const [draftPosition, setDraftPosition] = useState<LatLng | null>(null);
+  const [posError, setPosError] = useState<string | null>(null);
+  const gameMapRef = useRef<GameMapHandle>(null);
+
+  const selectedUnit =
+    selection?.kind === "unit"
+      ? (allUnits(teams).find((u) => u.clientId === selection.unitClientId) ?? null)
+      : null;
+  const selectedAirbase = selection?.kind === "airbase" ? (airbasesState.find((a) => a.clientId === selection.clientId) ?? null) : null;
+
+  function selectUnitForPlacement(teamClientId: string, fleetClientId: string, unitClientId: string) {
+    setSelection((prev) =>
+      prev?.kind === "unit" && prev.unitClientId === unitClientId ? null : { kind: "unit", teamClientId, fleetClientId, unitClientId }
+    );
+    setDraftPosition(null);
+    setPosError(null);
+  }
+  function selectAirbaseForPlacement(clientId: string) {
+    setSelection((prev) => (prev?.kind === "airbase" && prev.clientId === clientId ? null : { kind: "airbase", clientId }));
+    setDraftPosition(null);
+    setPosError(null);
+  }
+
+  function handleMapClick(pos: LatLng) {
+    if (!selection) return;
+    if (gameMapRef.current && !gameMapRef.current.isWaterPoint(pos)) {
+      setPosError("Position impossible : elle tombe sur la terre.");
+      return;
+    }
+    setPosError(null);
+    setDraftPosition(pos);
+  }
+
+  function applyDraftPosition() {
+    if (!draftPosition || !selection) return;
+    if (selection.kind === "unit") {
+      const { teamClientId, fleetClientId, unitClientId } = selection;
+      setTeams((prev) =>
+        prev.map((t) =>
+          t.clientId === teamClientId
+            ? {
+                ...t,
+                fleets: t.fleets.map((f) =>
+                  f.clientId === fleetClientId
+                    ? { ...f, units: f.units.map((u) => (u.clientId === unitClientId ? { ...u, lat: String(draftPosition.lat), lng: String(draftPosition.lng) } : u)) }
+                    : f
+                ),
+              }
+            : t
+        )
+      );
+    } else {
+      const { clientId } = selection;
+      setAirbasesState((prev) => prev.map((a) => (a.clientId === clientId ? { ...a, lat: String(draftPosition.lat), lng: String(draftPosition.lng) } : a)));
+    }
+    setDraftPosition(null);
+  }
+
   function updateName(value: string) {
     setName(value);
     if (!keyTouched) setKey(slugify(value));
@@ -231,6 +299,7 @@ export function ScenarioEditorForm({
       }))
     );
     setSquadronsState((prev) => prev.map((s) => (s.baseRef.kind === "airbase" && s.baseRef.key === removed.key ? { ...s, baseRef: { kind: "none" } } : s)));
+    setSelection((prev) => (prev?.kind === "airbase" && prev.clientId === clientId ? null : prev));
   }
 
   function handleAddSquadron() {
@@ -361,29 +430,85 @@ export function ScenarioEditorForm({
     objectivesByTeamName,
   ]);
 
-  const previewSources = useMemo<MapSourceConfig[]>(() => {
-    if (!definition) return [];
-    const points = definition.teams.flatMap((team) =>
-      team.fleets.flatMap((fleet) =>
-        fleet.units.map((u) => ({ lat: u.lat, lng: u.lng, properties: { name: `${u.name} (${team.name})`, color: colorForId(team.name) } }))
-      )
-    );
-    return [
-      {
-        id: "preview-units",
-        kind: "points",
-        data: pointsFeatureCollection(points),
-        colorByFeature: true,
-        radius: 7,
-        showLabels: true,
-      },
-    ];
-  }, [definition]);
-
-  const previewPoints = useMemo(
-    () => (definition ? definition.teams.flatMap((t) => t.fleets.flatMap((f) => f.units.map((u) => ({ lat: u.lat, lng: u.lng })))) : []),
-    [definition]
+  // Silhouettes réalistes plutôt que des points colorés (Phase 5, retour
+  // utilisateur 2026-08-14) — même recette qu'ArbiterDashboard.tsx :
+  // longueur réelle inconnue pour une classe de bibliothèque à ce stade
+  // (LibraryClassOption n'a pas ce champ), repli systématique sur
+  // DEFAULT_LENGTH_METERS, suffisant pour un aperçu de composition.
+  const shipMarkers = useMemo<ShipMarkerConfig[]>(
+    () =>
+      teams.flatMap((t) =>
+        t.fleets.flatMap((f) =>
+          f.units
+            .filter((u) => u.lat.trim() && u.lng.trim())
+            .map((u) => {
+              const silhouette = classifySilhouette(u.classRef.category, u.classRef.name);
+              return {
+                id: u.clientId,
+                lat: Number(u.lat),
+                lng: Number(u.lng),
+                headingDeg: u.headingDeg.trim() ? Number(u.headingDeg) : 0,
+                color: t.colorHex,
+                silhouette,
+                lengthMeters: DEFAULT_LENGTH_METERS[silhouette],
+                label: u.name,
+              };
+            })
+        )
+      ),
+    [teams]
   );
+
+  const previewSources = useMemo<MapSourceConfig[]>(() => {
+    const list: MapSourceConfig[] = [];
+
+    const airbasePoints = airbasesState.filter((a) => a.lat.trim() && a.lng.trim()).map((a) => ({ lat: Number(a.lat), lng: Number(a.lng), properties: { name: a.name || a.key } }));
+    if (airbasePoints.length > 0) {
+      list.push({ id: "airbases", kind: "points", data: pointsFeatureCollection(airbasePoints), color: "#38bdf8", radius: 6, showLabels: true });
+    }
+
+    if (selectedUnit && selectedUnit.lat.trim() && selectedUnit.lng.trim()) {
+      list.push({
+        id: "highlight",
+        kind: "points",
+        data: pointsFeatureCollection([{ lat: Number(selectedUnit.lat), lng: Number(selectedUnit.lng), properties: {} }]),
+        color: "#facc15",
+        radius: 10,
+      });
+    }
+    if (selectedAirbase && selectedAirbase.lat.trim() && selectedAirbase.lng.trim()) {
+      list.push({
+        id: "highlight",
+        kind: "points",
+        data: pointsFeatureCollection([{ lat: Number(selectedAirbase.lat), lng: Number(selectedAirbase.lng), properties: {} }]),
+        color: "#facc15",
+        radius: 10,
+      });
+    }
+    if (draftPosition) {
+      list.push({
+        id: "draft",
+        kind: "points",
+        data: pointsFeatureCollection([{ lat: draftPosition.lat, lng: draftPosition.lng, properties: { name: "nouvelle position" } }]),
+        color: "#f97316",
+        radius: 9,
+        showLabels: true,
+      });
+    }
+    return list;
+  }, [airbasesState, selectedUnit, selectedAirbase, draftPosition]);
+
+  // Dérivé directement de l'état brut (pas de `definition`, qui peut être
+  // `null` en cours d'édition — Phase 5, retour utilisateur 2026-08-14) :
+  // la carte doit rester utilisable pour placer une unité même si le reste
+  // du formulaire n'est pas encore valide (objectifs vides, etc.).
+  const previewPoints = useMemo(() => {
+    const unitPoints = allUnits(teams)
+      .filter((u) => u.lat.trim() && u.lng.trim())
+      .map((u) => ({ lat: Number(u.lat), lng: Number(u.lng) }));
+    const airbasePoints = airbasesState.filter((a) => a.lat.trim() && a.lng.trim()).map((a) => ({ lat: Number(a.lat), lng: Number(a.lng) }));
+    return [...unitPoints, ...airbasePoints];
+  }, [teams, airbasesState]);
 
   function save() {
     if (!definition) return;
@@ -624,13 +749,57 @@ export function ScenarioEditorForm({
             </fieldset>
 
             <div className="rounded-md border border-slate-800 bg-slate-900 p-3">
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Aperçu des positions</h3>
-              {definition ? (
-                <div className="h-64 overflow-hidden rounded-md">
-                  <GameMap center={{ lat: mapCenterLat, lng: mapCenterLng }} zoom={mapDefaultZoom} sources={previewSources} fitToPoints={previewPoints} />
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Positions</h3>
+              <div className="h-64 overflow-hidden rounded-md">
+                <GameMap
+                  ref={gameMapRef}
+                  center={{ lat: mapCenterLat, lng: mapCenterLng }}
+                  zoom={mapDefaultZoom}
+                  sources={previewSources}
+                  fitToPoints={previewPoints}
+                  shipMarkers={shipMarkers}
+                  shipMarkersMinZoom={0}
+                  onClick={handleMapClick}
+                />
+              </div>
+              {selection ? (
+                <div className="mt-2 rounded-md border border-brass-700 bg-brass-950/20 p-2 text-xs">
+                  <p className="text-brass-300">
+                    {selectedUnit ? `Unité sélectionnée : ${selectedUnit.name}` : selectedAirbase ? `Base sélectionnée : ${selectedAirbase.name || selectedAirbase.key}` : null}
+                    {" — cliquez la carte pour choisir sa position."}
+                  </p>
+                  {draftPosition && (
+                    <p className="mt-1 text-slate-400">
+                      Nouvelle position : {draftPosition.lat.toFixed(4)}, {draftPosition.lng.toFixed(4)}
+                    </p>
+                  )}
+                  {posError && <p className="mt-1 text-red-400">{posError}</p>}
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelection(null);
+                        setDraftPosition(null);
+                        setPosError(null);
+                      }}
+                      className="rounded border border-slate-700 px-2 py-1 hover:bg-slate-900"
+                    >
+                      Fermer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={applyDraftPosition}
+                      disabled={!draftPosition}
+                      className="flex-1 rounded bg-brass-600 px-2 py-1 font-medium hover:bg-brass-500 disabled:opacity-50"
+                    >
+                      Appliquer
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <p className="text-xs text-slate-600">L&apos;aperçu apparaît une fois le scénario valide.</p>
+                <p className="mt-2 text-xs text-slate-600">
+                  Cliquez le 🎯 d&apos;une unité ou d&apos;une base ci-contre pour la positionner en cliquant la carte.
+                </p>
               )}
             </div>
 
@@ -661,12 +830,27 @@ export function ScenarioEditorForm({
                 <LibraryBrowserPanel classes={libraryClasses} teams={teams} onAddUnit={handleAddUnitFromLibrary} />
               </div>
               <div className="lg:col-span-2">
-                <TeamsBoard teams={teams} setTeams={setTeams} airbases={airbasesState} squadrons={squadronsState} nextClientId={nextClientId} />
+                <TeamsBoard
+                  teams={teams}
+                  setTeams={setTeams}
+                  airbases={airbasesState}
+                  squadrons={squadronsState}
+                  nextClientId={nextClientId}
+                  selectedUnitClientId={selection?.kind === "unit" ? selection.unitClientId : null}
+                  onSelectUnitForPlacement={selectUnitForPlacement}
+                />
               </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <AirbasesPanel airbases={airbasesState} onAdd={handleAddAirbase} onUpdate={handleUpdateAirbase} onRemove={handleRemoveAirbase} />
+              <AirbasesPanel
+                airbases={airbasesState}
+                onAdd={handleAddAirbase}
+                onUpdate={handleUpdateAirbase}
+                onRemove={handleRemoveAirbase}
+                selectedAirbaseClientId={selection?.kind === "airbase" ? selection.clientId : null}
+                onSelectForPlacement={selectAirbaseForPlacement}
+              />
               <SquadronsPanel
                 squadrons={squadronsState}
                 airbases={airbasesState}

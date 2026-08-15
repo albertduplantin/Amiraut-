@@ -35,6 +35,8 @@ export function UnitRosterRow({
   onChange,
   onRemove,
   removeDisabledReason,
+  isSelectedForPlacement,
+  onSelectForPlacement,
 }: {
   unit: BuilderUnit;
   airbases: BuilderAirbase[];
@@ -44,6 +46,9 @@ export function UnitRosterRow({
   onChange: (patch: Partial<BuilderUnit>) => void;
   onRemove: () => void;
   removeDisabledReason: string | null;
+  /** Placement interactif sur la carte (Phase 5, retour utilisateur 2026-08-14) — voir ScenarioEditorForm.handleMapClick. */
+  isSelectedForPlacement: boolean;
+  onSelectForPlacement: () => void;
 }) {
   function handleBaseRefSelect(optionValue: string) {
     if (optionValue === "none") return onChange({ baseRef: { kind: "none" } });
@@ -60,7 +65,7 @@ export function UnitRosterRow({
   const positioned = unit.lat.trim() !== "" && unit.lng.trim() !== "";
 
   return (
-    <li className="rounded-md border border-slate-800 bg-slate-900/60 p-2">
+    <li className={`rounded-md border p-2 ${isSelectedForPlacement ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}>
       <div className="flex flex-wrap items-center gap-2">
         <input
           value={unit.name}
@@ -80,6 +85,14 @@ export function UnitRosterRow({
           Lng
           <input value={unit.lng} onChange={(e) => onChange({ lng: e.target.value })} className={`${fieldClass} w-20`} placeholder="-10.0" />
         </label>
+        <button
+          type="button"
+          onClick={onSelectForPlacement}
+          title="Placer en cliquant sur la carte"
+          className={`text-xs ${isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}`}
+        >
+          🎯{isSelectedForPlacement ? " en cours…" : ""}
+        </button>
         {!positioned && <span className="text-[11px] text-amber-400">non positionné</span>}
         <button
           type="button"

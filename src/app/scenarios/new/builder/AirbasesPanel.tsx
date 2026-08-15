@@ -17,11 +17,16 @@ export function AirbasesPanel({
   onAdd,
   onUpdate,
   onRemove,
+  selectedAirbaseClientId,
+  onSelectForPlacement,
 }: {
   airbases: BuilderAirbase[];
   onAdd: () => void;
   onUpdate: (clientId: string, patch: Partial<BuilderAirbase>) => void;
   onRemove: (clientId: string) => void;
+  /** Placement interactif sur la carte (Phase 5, retour utilisateur 2026-08-14). */
+  selectedAirbaseClientId: string | null;
+  onSelectForPlacement: (clientId: string) => void;
 }) {
   return (
     <div className="panel-brass space-y-2 p-3">
@@ -34,7 +39,10 @@ export function AirbasesPanel({
       {airbases.length === 0 && <p className="text-xs text-slate-600">Aucune base aérienne.</p>}
       <ul className="space-y-2">
         {airbases.map((a) => (
-          <li key={a.clientId} className="rounded-md border border-slate-800 bg-slate-900/60 p-2">
+          <li
+            key={a.clientId}
+            className={`rounded-md border p-2 ${selectedAirbaseClientId === a.clientId ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}
+          >
             <div className="flex flex-wrap items-center gap-2">
               <input value={a.name} onChange={(e) => onUpdate(a.clientId, { name: e.target.value })} placeholder="Nom (ex: Reykjavik)" className={`${fieldClass} min-w-[8rem] flex-1`} />
               <input value={a.key} onChange={(e) => onUpdate(a.clientId, { key: e.target.value })} placeholder="clé" className={`${fieldClass} w-24`} title="Clé stable, référencée par les unités/escadrilles" />
@@ -46,6 +54,14 @@ export function AirbasesPanel({
                 Lng
                 <input value={a.lng} onChange={(e) => onUpdate(a.clientId, { lng: e.target.value })} className={`${fieldClass} w-20`} />
               </label>
+              <button
+                type="button"
+                onClick={() => onSelectForPlacement(a.clientId)}
+                title="Placer en cliquant sur la carte"
+                className={`text-xs ${selectedAirbaseClientId === a.clientId ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}`}
+              >
+                🎯{selectedAirbaseClientId === a.clientId ? " en cours…" : ""}
+              </button>
               <button type="button" onClick={() => onRemove(a.clientId)} className="ml-auto text-xs text-red-500 hover:text-red-400">
                 Supprimer
               </button>
