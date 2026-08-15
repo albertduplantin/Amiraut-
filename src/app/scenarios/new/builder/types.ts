@@ -43,6 +43,8 @@ export type LibraryClassOption = {
   theater: string | null;
   /** Type fin (voir unitTypeTaxonomy.ts) — filtre l'assistant guidé (Phase 3) et l'aperçu carte (Phase 4). */
   iconKey: string;
+  /** Installation immobile (station d'écoute…) — filtre les classes candidates pour ce type de conteneur (3e chantier, Phase 3). */
+  passive: boolean;
 };
 
 /**
@@ -83,17 +85,19 @@ export type BuilderFleet = {
   name: string;
   units: BuilderUnit[];
   /**
-   * Filtre nation mémorisé (Phase 3, retour utilisateur 2026-08-15) —
-   * jamais sérialisé dans ScenarioDefinition, préremplit seulement le
-   * filtre de l'assistant "Ajouter un bâtiment" (AddUnitWizardModal) pour
-   * cette task force. Une task force multi-nations reste possible : ce
-   * n'est qu'une commodité, pas une contrainte.
+   * "normal" (task force navale, par défaut) ou "station" (station
+   * d'écoute — 3e chantier, Phase 3, retour utilisateur 2026-08-15) : une
+   * task force `kind:"station"` contient exactement une unité passive, pas
+   * de nouveau concept de schéma (voir le plan) — juste un marqueur
+   * d'affichage/de garde-fou côté builder. `undefined` = "normal", pour ne
+   * pas casser les scénarios dupliqués écrits avant ce champ.
    */
-  preferredNation?: string;
+  kind?: "normal" | "station";
 };
 /** `nation` (retour utilisateur 2026-08-15, troisième chantier) — voir nations.ts ; `colorHex` en est dérivé automatiquement, plus de choix manuel. */
 export type BuilderTeam = { clientId: string; name: string; colorHex: string; nation: string; fleets: BuilderFleet[] };
-export type BuilderAirbase = { clientId: string; key: string; name: string; lat: string; lng: string };
+/** `teamClientId` (retour utilisateur 2026-08-15, troisième chantier) : une base aérienne appartient désormais à une équipe, affichée dans sa liste de forces plutôt qu'un panneau global séparé. */
+export type BuilderAirbase = { clientId: string; key: string; name: string; lat: string; lng: string; teamClientId: string };
 export type BuilderSquadron = {
   clientId: string;
   key: string;

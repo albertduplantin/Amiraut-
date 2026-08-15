@@ -124,6 +124,7 @@ export function QuickCreateClassModal({ onClose, onCreated }: { onClose: () => v
         category: payload.category,
         theater: payload.theater ?? null,
         iconKey: values.iconKey,
+        passive: values.passive,
       });
     });
   }

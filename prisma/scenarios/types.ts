@@ -135,6 +135,16 @@ export type ScenarioAirbase = {
   name: string;
   lat: number;
   lng: number;
+  /**
+   * Équipe propriétaire (constructeur visuel, retour utilisateur
+   * 2026-08-15, troisième chantier) — résolue par nom comme
+   * `ScenarioUnit.carrierUnitName`. Optionnel pour rester rétrocompatible
+   * avec les scénarios antérieurs à ce champ. PUREMENT informatif côté
+   * constructeur (affichage groupé par camp) : sans impact moteur, un avion
+   * connaît déjà son équipe via sa propre `Unit`, quelle que soit la base
+   * qu'il référence.
+   */
+  teamName?: string;
 };
 
 /**

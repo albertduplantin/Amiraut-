@@ -4,6 +4,7 @@ import { useState, type Dispatch, type DragEvent, type SetStateAction } from "re
 import type { BuilderTeam, BuilderAirbase, BuilderSquadron, BuilderUnit, ClientIdGenerator, LibraryClassOption } from "./types";
 import { allUnits } from "./types";
 import { UnitRosterRow } from "./UnitRosterRow";
+import { AirbasesPanel } from "./AirbasesPanel";
 import { allowDrop, readDragPayload, setDragPayload } from "./dragDrop";
 import { NATIONS, nationFlag } from "./nations";
 
@@ -35,6 +36,13 @@ export function TeamsBoard({
   onAddUnitFromLibrary,
   onOpenAddContainer,
   onOpenUnitWizard,
+  onAddAirbaseForTeam,
+  onAddStationForTeam,
+  onUpdateAirbase,
+  onRemoveAirbase,
+  selectedAirbaseClientId,
+  onSelectAirbaseForPlacement,
+  onAssignAircraftToAirbase,
 }: {
   teams: BuilderTeam[];
   setTeams: Dispatch<SetStateAction<BuilderTeam[]>>;
@@ -50,6 +58,18 @@ export function TeamsBoard({
   /** Assistants guidés (Phase 3, retour utilisateur 2026-08-15) — coexistent avec les boutons/glisser-déposer ci-dessus. */
   onOpenAddContainer: () => void;
   onOpenUnitWizard: (teamClientId: string, fleetClientId: string) => void;
+  /**
+   * Bases aériennes/stations d'écoute D'UNE équipe (retour utilisateur
+   * 2026-08-15, troisième chantier) — rendues dans la même liste que ses
+   * task forces, plus un panneau global séparé "hors des camps".
+   */
+  onAddAirbaseForTeam: (teamClientId: string) => void;
+  onAddStationForTeam: (teamClientId: string) => void;
+  onUpdateAirbase: (clientId: string, patch: Partial<BuilderAirbase>) => void;
+  onRemoveAirbase: (clientId: string) => void;
+  selectedAirbaseClientId: string | null;
+  onSelectAirbaseForPlacement: (clientId: string) => void;
+  onAssignAircraftToAirbase: (teamClientId: string, fleetClientId: string, unitClientId: string, airbaseKey: string) => void;
 }) {
   function addTeam() {
     setTeams((prev) => {
@@ -139,7 +159,33 @@ export function TeamsBoard({
     onAddUnitFromLibrary(libClass, teamClientId, fleetClientId);
   }
 
+  /**
+   * Station d'écoute (retour utilisateur 2026-08-15, troisième chantier) —
+   * n'accepte que le glisser-déposer d'une classe PASSIVE de la
+   * bibliothèque (pas le bouton "+ Ajouter", cette liste de cible-là reste
+   * pensée pour les task forces/bases) et au plus une unité à la fois.
+   */
+  function handleDropOnStation(e: DragEvent, teamClientId: string, fleetClientId: string, currentUnitCount: number) {
+    e.preventDefault();
+    const payload = readDragPayload(e);
+    if (!payload || payload.kind !== "libraryClass") return;
+    const libClass = libraryClasses.find((c) => c.id === payload.libraryClassId);
+    if (!libClass) return;
+    if (currentUnitCount > 0) {
+      setStationDropError("Retirez d'abord l'unité actuelle avant d'en glisser une autre.");
+      setTimeout(() => setStationDropError(null), 3000);
+      return;
+    }
+    if (!libClass.passive) {
+      setStationDropError("Seule une classe passive (installation immobile) peut être une station d'écoute.");
+      setTimeout(() => setStationDropError(null), 3000);
+      return;
+    }
+    onAddUnitFromLibrary(libClass, teamClientId, fleetClientId);
+  }
+
   const [flagPickerFor, setFlagPickerFor] = useState<string | null>(null);
+  const [stationDropError, setStationDropError] = useState<string | null>(null);
   const [nationError, setNationError] = useState<string | null>(null);
 
   function handleSelectNation(teamClientId: string, nation: string) {
@@ -229,7 +275,7 @@ export function TeamsBoard({
               </div>
 
               <div className="space-y-2">
-                {team.fleets.map((fleet) => (
+                {team.fleets.filter((f) => f.kind !== "station").map((fleet) => (
                   <div
                     key={fleet.clientId}
                     onDragOver={allowDrop}
@@ -297,6 +343,78 @@ export function TeamsBoard({
               <button type="button" onClick={() => addFleet(team.clientId)} className="text-xs text-brass-400 hover:text-brass-300">
                 + Nouvelle task force
               </button>
+
+              <AirbasesPanel
+                airbases={airbases.filter((a) => a.teamClientId === team.clientId)}
+                onAdd={() => onAddAirbaseForTeam(team.clientId)}
+                onUpdate={onUpdateAirbase}
+                onRemove={onRemoveAirbase}
+                selectedAirbaseClientId={selectedAirbaseClientId}
+                onSelectForPlacement={onSelectAirbaseForPlacement}
+                onAssignAircraft={onAssignAircraftToAirbase}
+              />
+
+              <div className="space-y-2 border-t border-slate-800 pt-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Stations d&apos;écoute</h4>
+                  <button type="button" onClick={() => onAddStationForTeam(team.clientId)} className="text-[11px] text-brass-400 hover:text-brass-300">
+                    + Nouvelle station
+                  </button>
+                </div>
+                {stationDropError && <p className="text-xs text-red-400">{stationDropError}</p>}
+                {team.fleets.filter((f) => f.kind === "station").length === 0 && <p className="text-xs text-slate-600">Aucune station d&apos;écoute.</p>}
+                <ul className="space-y-2">
+                  {team.fleets
+                    .filter((f) => f.kind === "station")
+                    .map((station) => (
+                      <li
+                        key={station.clientId}
+                        onDragOver={allowDrop}
+                        onDrop={(e) => handleDropOnStation(e, team.clientId, station.clientId, station.units.length)}
+                        className="rounded-md border border-slate-800 bg-slate-950/40 p-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span title="Station d'écoute — installation passive isolée">📡</span>
+                          <input
+                            value={station.name}
+                            onChange={(e) => updateFleetName(team.clientId, station.clientId, e.target.value)}
+                            className={`${fieldClass} flex-1 text-xs`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeFleet(team.clientId, station.clientId)}
+                            className="shrink-0 text-xs text-red-500 hover:text-red-400"
+                            title="Supprimer la station"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        {station.units.length === 0 ? (
+                          <p className="mt-1.5 text-[11px] text-slate-600">Glissez ici une classe passive de la bibliothèque.</p>
+                        ) : (
+                          <ul className="mt-1.5">
+                            {station.units.map((unit) => (
+                              <UnitRosterRow
+                                key={unit.clientId}
+                                unit={unit}
+                                teamClientId={team.clientId}
+                                fleetClientId={station.clientId}
+                                airbases={airbases}
+                                squadrons={squadrons}
+                                carrierCandidates={[]}
+                                onChange={(patch) => updateUnit(team.clientId, station.clientId, unit.clientId, patch)}
+                                onRemove={() => removeUnit(team.clientId, station.clientId, unit.clientId)}
+                                removeDisabledReason={null}
+                                isSelectedForPlacement={selectedUnitClientId === unit.clientId}
+                                onSelectForPlacement={() => onSelectUnitForPlacement(team.clientId, station.clientId, unit.clientId)}
+                              />
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    ))}
+                </ul>
+              </div>
             </div>
           );
         })}

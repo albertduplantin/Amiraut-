@@ -119,6 +119,8 @@ const AirbaseSchema = z.object({
   name: z.string().min(1),
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),
+  // Optionnel, purement informatif côté constructeur — voir ScenarioAirbase.teamName (types.ts).
+  teamName: z.string().min(1).optional(),
 });
 
 /** Escadrille — voir ScenarioSquadron (types.ts). */
@@ -205,6 +207,12 @@ export const ScenarioDefinitionSchema = z
         for (const unit of fleet.units) {
           categoryByUnitName.set(unit.name, categoryByClassKey.get(unit.classKey));
         }
+      }
+    }
+
+    for (const [ai, airbase] of (def.airbases ?? []).entries()) {
+      if (airbase.teamName && !teamNames.has(airbase.teamName)) {
+        ctx.addIssue({ code: "custom", message: `équipe inconnue « ${airbase.teamName} »`, path: ["airbases", ai, "teamName"] });
       }
     }
 

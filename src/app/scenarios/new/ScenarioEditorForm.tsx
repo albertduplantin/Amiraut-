@@ -24,7 +24,6 @@ import {
 } from "./builder/types";
 import { LibraryBrowserPanel } from "./builder/LibraryBrowserPanel";
 import { TeamsBoard } from "./builder/TeamsBoard";
-import { AirbasesPanel } from "./builder/AirbasesPanel";
 import { SquadronsPanel } from "./builder/SquadronsPanel";
 import { allowDrop, readDragPayload } from "./builder/dragDrop";
 import { applyFormationAtCenter } from "./builder/formation";
@@ -177,8 +176,20 @@ function buildInitialTeams(duplicateFrom: ScenarioDefinition | null, libraryClas
   }));
 }
 
-function buildInitialAirbases(duplicateFrom: ScenarioDefinition | null, nextClientId: ClientIdGenerator): BuilderAirbase[] {
-  return (duplicateFrom?.airbases ?? []).map((a) => ({ clientId: nextClientId("airbase"), key: a.key, name: a.name, lat: String(a.lat), lng: String(a.lng) }));
+/**
+ * `teams` déjà construites (voir l'ordre d'appel dans le composant) — sert
+ * à résoudre `ScenarioAirbase.teamName` en `teamClientId` (retour
+ * utilisateur 2026-08-15, troisième chantier : une base appartient
+ * désormais à une équipe). Repli sur la première équipe si `teamName` est
+ * absent (scénario antérieur à ce champ) ou ne correspond à aucune équipe
+ * connue — l'utilisateur peut la réaffecter ensuite via le sélecteur
+ * d'équipe de la carte base aérienne.
+ */
+function buildInitialAirbases(duplicateFrom: ScenarioDefinition | null, teams: BuilderTeam[], nextClientId: ClientIdGenerator): BuilderAirbase[] {
+  return (duplicateFrom?.airbases ?? []).map((a) => {
+    const team = teams.find((t) => t.name === a.teamName) ?? teams[0];
+    return { clientId: nextClientId("airbase"), key: a.key, name: a.name, lat: String(a.lat), lng: String(a.lng), teamClientId: team?.clientId ?? "" };
+  });
 }
 
 function buildInitialSquadrons(duplicateFrom: ScenarioDefinition | null, nextClientId: ClientIdGenerator): BuilderSquadron[] {
@@ -230,7 +241,7 @@ export function ScenarioEditorForm({
   const [nextClientId] = useState<ClientIdGenerator>(() => createClientIdGenerator());
 
   const [teams, setTeams] = useState<BuilderTeam[]>(() => buildInitialTeams(duplicateFrom, libraryClasses, nextClientId));
-  const [airbasesState, setAirbasesState] = useState<BuilderAirbase[]>(() => buildInitialAirbases(duplicateFrom, nextClientId));
+  const [airbasesState, setAirbasesState] = useState<BuilderAirbase[]>(() => buildInitialAirbases(duplicateFrom, teams, nextClientId));
   const [squadronsState, setSquadronsState] = useState<BuilderSquadron[]>(() => buildInitialSquadrons(duplicateFrom, nextClientId));
   const [objectivesByTeamName, setObjectivesByTeamName] = useState<Record<string, string>>(() => buildInitialObjectives(duplicateFrom));
 
@@ -413,14 +424,25 @@ export function ScenarioEditorForm({
     );
   }
 
-  /**
-   * Assistant "+" (Phase 3, retour utilisateur 2026-08-15) — variante
-   * d'`addTeam`/`addFleet` (normalement internes à TeamsBoard.tsx) exposée
-   * ici pour être appelable depuis AddContainerModal. Créer une nouvelle
-   * équipe demande sa nation (troisième chantier, retour utilisateur
-   * 2026-08-15) — voir BuilderTeam.nation, nations.ts ; choisir une équipe
-   * existante hérite directement de sa nation déjà fixée.
+/**
+   * Assistant "+" (Phase 3, retour utilisateur 2026-08-15) — résout la
+   * cible d'un nouveau conteneur (task force/base/station) vers un
+   * `teamClientId`, créant l'équipe à la volée si besoin (avec sa
+   * "Task Force 1" par défaut, comme `addTeam` dans TeamsBoard.tsx).
+   * `nextClientId` est synchrone : l'id de la nouvelle équipe est connu
+   * immédiatement, pas besoin d'attendre le prochain rendu pour l'utiliser.
    */
+  function ensureTeamForTarget(target: { teamClientId: string } | { newTeamName: string; nation: string }): string {
+    if ("teamClientId" in target) return target.teamClientId;
+    const clientId = nextClientId("team");
+    const colorHex = NATIONS.find((n) => n.value === target.nation)?.colorHex ?? "#94a3b8";
+    setTeams((prev) => [
+      ...prev,
+      { clientId, name: target.newTeamName, colorHex, nation: target.nation, fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }] },
+    ]);
+    return clientId;
+  }
+
   function handleCreateFleetContainer(target: { teamClientId: string } | { newTeamName: string; nation: string }) {
     if ("teamClientId" in target) {
       setTeams((prev) =>
@@ -432,21 +454,27 @@ export function ScenarioEditorForm({
       );
       return;
     }
-    const colorHex = NATIONS.find((n) => n.value === target.nation)?.colorHex ?? "#94a3b8";
-    setTeams((prev) => [
-      ...prev,
-      {
-        clientId: nextClientId("team"),
-        name: target.newTeamName,
-        colorHex,
-        nation: target.nation,
-        fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }],
-      },
-    ]);
+    ensureTeamForTarget(target); // la nouvelle équipe a déjà sa "Task Force 1", rien de plus à faire.
   }
 
-  function handleAddAirbase() {
-    setAirbasesState((prev) => [...prev, { clientId: nextClientId("airbase"), key: `base-${prev.length + 1}`, name: "", lat: String(mapCenterLat), lng: String(mapCenterLng) }]);
+  /** `target` (retour utilisateur 2026-08-15, troisième chantier) — une base aérienne appartient désormais à une équipe, voir BuilderAirbase.teamClientId. */
+  function handleAddAirbase(target: { teamClientId: string } | { newTeamName: string; nation: string }) {
+    const teamClientId = ensureTeamForTarget(target);
+    setAirbasesState((prev) => [...prev, { clientId: nextClientId("airbase"), key: `base-${prev.length + 1}`, name: "", lat: String(mapCenterLat), lng: String(mapCenterLng), teamClientId }]);
+  }
+
+  /**
+   * Station d'écoute (retour utilisateur 2026-08-15, troisième chantier) —
+   * pas de nouveau concept de schéma : une task force `kind:"station"`
+   * contenant au plus une unité passive (voir BuilderFleet.kind, types.ts).
+   */
+  function handleAddStation(target: { teamClientId: string } | { newTeamName: string; nation: string }) {
+    const teamClientId = ensureTeamForTarget(target);
+    setTeams((prev) =>
+      prev.map((t) =>
+        t.clientId === teamClientId ? { ...t, fleets: [...t.fleets, { clientId: nextClientId("fleet"), name: "Station d'écoute", units: [], kind: "station" as const }] } : t
+      )
+    );
   }
   function handleUpdateAirbase(clientId: string, patch: Partial<BuilderAirbase>) {
     setAirbasesState((prev) => prev.map((a) => (a.clientId === clientId ? { ...a, ...patch } : a)));
@@ -575,7 +603,16 @@ export function ScenarioEditorForm({
           fleets: t.fleets.map((f) => ({ name: f.name, units: f.units.map(mapUnit) })),
         })
       ),
-      airbases: airbasesState.length > 0 ? airbasesState.map((a) => ({ key: a.key, name: a.name, lat: Number(a.lat) || 0, lng: Number(a.lng) || 0 })) : undefined,
+      airbases:
+        airbasesState.length > 0
+          ? airbasesState.map((a) => ({
+              key: a.key,
+              name: a.name,
+              lat: Number(a.lat) || 0,
+              lng: Number(a.lng) || 0,
+              teamName: teams.find((t) => t.clientId === a.teamClientId)?.name,
+            }))
+          : undefined,
       squadrons:
         squadronsState.length > 0
           ? squadronsState.map((s) => ({
@@ -803,15 +840,13 @@ export function ScenarioEditorForm({
                 onAddUnitFromLibrary={handleAddUnitFromLibrary}
                 onOpenAddContainer={() => setAddContainerModalOpen(true)}
                 onOpenUnitWizard={(teamClientId, fleetClientId) => setUnitWizardFor({ teamClientId, fleetClientId })}
-              />
-              <AirbasesPanel
-                airbases={airbasesState}
-                onAdd={handleAddAirbase}
-                onUpdate={handleUpdateAirbase}
-                onRemove={handleRemoveAirbase}
+                onAddAirbaseForTeam={(teamClientId) => handleAddAirbase({ teamClientId })}
+                onAddStationForTeam={(teamClientId) => handleAddStation({ teamClientId })}
+                onUpdateAirbase={handleUpdateAirbase}
+                onRemoveAirbase={handleRemoveAirbase}
                 selectedAirbaseClientId={selection?.kind === "airbase" ? selection.clientId : null}
-                onSelectForPlacement={selectAirbaseForPlacement}
-                onAssignAircraft={(teamClientId, fleetClientId, unitClientId, airbaseKey) =>
+                onSelectAirbaseForPlacement={selectAirbaseForPlacement}
+                onAssignAircraftToAirbase={(teamClientId, fleetClientId, unitClientId, airbaseKey) =>
                   handleAssignUnitBaseRef(teamClientId, fleetClientId, unitClientId, { kind: "airbase", key: airbaseKey })
                 }
               />
@@ -949,6 +984,7 @@ export function ScenarioEditorForm({
           onClose={() => setAddContainerModalOpen(false)}
           onCreateFleet={handleCreateFleetContainer}
           onCreateAirbase={handleAddAirbase}
+          onCreateStation={handleAddStation}
         />
       )}
 
@@ -961,7 +997,7 @@ export function ScenarioEditorForm({
             <AddUnitWizardModal
               fleetName={`${team.name} / ${fleet.name}`}
               libraryClasses={libraryClasses}
-              preferredNation={fleet.preferredNation}
+              preferredNation={team.nation}
               onClose={() => setUnitWizardFor(null)}
               onPick={(libClass) => handleAddUnitFromLibrary(libClass, unitWizardFor.teamClientId, unitWizardFor.fleetClientId)}
             />
