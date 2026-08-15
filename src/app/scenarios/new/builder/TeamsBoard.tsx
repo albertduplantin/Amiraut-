@@ -2,7 +2,7 @@
 
 import { useState, type Dispatch, type DragEvent, type SetStateAction } from "react";
 import type { BuilderTeam, BuilderAirbase, BuilderSquadron, BuilderUnit, ClientIdGenerator, LibraryClassOption } from "./types";
-import { allUnits } from "./types";
+import { allUnits, aircraftForCarrier, aircraftForAirbase } from "./types";
 import { UnitRosterRow } from "./UnitRosterRow";
 import { AirbasesPanel } from "./AirbasesPanel";
 import { allowDrop, readDragPayload, setDragPayload } from "./dragDrop";
@@ -46,6 +46,9 @@ export function TeamsBoard({
   onAddAircraftToAirbase,
   onOpenAircraftWizard,
   onAddAircraftToCarrier,
+  onOpenAircraftWizardForCarrier,
+  selectedFleetClientId,
+  onSelectFleetForPlacement,
 }: {
   teams: BuilderTeam[];
   setTeams: Dispatch<SetStateAction<BuilderTeam[]>>;
@@ -79,6 +82,11 @@ export function TeamsBoard({
   onOpenAircraftWizard: (teamClientId: string, airbaseKey: string) => void;
   /** Avion créé à la volée sur un porte-avions (Phase 4, retour utilisateur 2026-08-15) — glisser-déposer direct sur la ligne du navire. */
   onAddAircraftToCarrier: (libClass: LibraryClassOption, teamClientId: string, carrierUnitName: string) => void;
+  /** Assistant guidé "+ Avion" sur un porte-avions (Phase 5, retour utilisateur 2026-08-15 — même bouton que sur une base, une fois l'affichage dépliant construit). */
+  onOpenAircraftWizardForCarrier: (teamClientId: string, carrierUnitName: string) => void;
+  /** Positionnement de groupe (Phase 5, retour utilisateur 2026-08-15) — bouton 🎯 en plus du glisser-déposer déjà là. */
+  selectedFleetClientId: string | null;
+  onSelectFleetForPlacement: (teamClientId: string, fleetClientId: string) => void;
 }) {
   function addTeam() {
     setTeams((prev) => {
@@ -145,18 +153,39 @@ export function TeamsBoard({
       )
     );
   }
+  /**
+   * Retirer une unité — nettoie au passage (Phase 4/5, retour utilisateur
+   * 2026-08-15) :
+   * - une task force "Aviation" cachée devenue vide (invisible dans
+   *   l'arbre, l'utilisateur ne pourrait jamais la retrouver pour corriger
+   *   l'erreur "une flotte doit avoir au moins une unité" qu'elle
+   *   déclencherait sinon à l'enregistrement) ;
+   * - si l'unité retirée était un PORTE-AVIONS, ses avions rattachés
+   *   (`baseRef.kind==="carrier"`, par nom) retombent à "Aucune" plutôt
+   *   que de garder une référence pendante vers un navire qui n'existe
+   *   plus — leur task force "Aviation" repasse en "normal" si elle
+   *   devient orpheline, pour rester trouvable.
+   */
   function removeUnit(teamClientId: string, fleetClientId: string, unitClientId: string) {
+    const removedUnit = teams.find((t) => t.clientId === teamClientId)?.fleets.find((f) => f.clientId === fleetClientId)?.units.find((u) => u.clientId === unitClientId);
     setTeams((prev) =>
-      prev.map((t) =>
-        t.clientId === teamClientId
-          ? {
-              ...t,
-              fleets: t.fleets.map((f) =>
-                f.clientId === fleetClientId ? { ...f, units: f.units.filter((u) => u.clientId !== unitClientId) } : f
-              ),
-            }
-          : t
-      )
+      prev.map((t) => {
+        if (t.clientId !== teamClientId) return t;
+        return {
+          ...t,
+          fleets: t.fleets
+            .map((f) => {
+              const withoutRemoved = f.clientId === fleetClientId ? { ...f, units: f.units.filter((u) => u.clientId !== unitClientId) } : f;
+              if (!removedUnit) return withoutRemoved;
+              const units = withoutRemoved.units.map((u) =>
+                u.baseRef.kind === "carrier" && u.baseRef.unitName === removedUnit.name ? { ...u, baseRef: { kind: "none" as const } } : u
+              );
+              const gotOrphaned = withoutRemoved.kind === "aviation" && units.some((u, i) => u.baseRef.kind === "none" && withoutRemoved.units[i].baseRef.kind !== "none");
+              return { ...withoutRemoved, units, kind: gotOrphaned ? "normal" : withoutRemoved.kind };
+            })
+            .filter((f) => !(f.kind === "aviation" && f.units.length === 0)),
+        };
+      })
     );
   }
   function handleDropOnFleet(e: DragEvent, teamClientId: string, fleetClientId: string) {
@@ -205,6 +234,22 @@ export function TeamsBoard({
   const [stationDropError, setStationDropError] = useState<string | null>(null);
   const [fleetDropError, setFleetDropError] = useState<string | null>(null);
   const [nationError, setNationError] = useState<string | null>(null);
+  /**
+   * Arborescence dépliante (Phase 5, retour utilisateur 2026-08-15) —
+   * repliée par défaut (clientId de task force/porte-avions), un clic
+   * déplie. Un seul `Set` pour les deux (task forces ET navires
+   * porte-avions) : les clientId ne se chevauchent jamais entre les deux
+   * univers.
+   */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  function toggleExpanded(clientId: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(clientId)) next.delete(clientId);
+      else next.add(clientId);
+      return next;
+    });
+  }
 
   function handleSelectNation(teamClientId: string, nation: string) {
     const error = changeTeamNation(teamClientId, nation);
@@ -214,6 +259,33 @@ export function TeamsBoard({
       return;
     }
     setFlagPickerFor(null);
+  }
+
+  /**
+   * Avions rattachés à un porte-avions, prêts à être rendus (Phase 5,
+   * retour utilisateur 2026-08-15) — ils vivent dans la task force
+   * "Aviation" cachée de leur équipe (Phase 4), pas dans celle du
+   * porte-avions lui-même : `removeUnit`/`onSelectUnitForPlacement` ont
+   * donc besoin de LEUR PROPRE teamClientId/fleetClientId, pas ceux de la
+   * task force en cours de rendu.
+   */
+  function carrierAircraftRows(carrierUnit: BuilderUnit) {
+    return aircraftForCarrier(teams, carrierUnit.name).map((lu) => ({
+      unit: lu.unit,
+      onRemove: () => removeUnit(lu.teamClientId, lu.fleetClientId, lu.unit.clientId),
+      isSelectedForPlacement: selectedUnitClientId === lu.unit.clientId,
+      onSelectForPlacement: () => onSelectUnitForPlacement(lu.teamClientId, lu.fleetClientId, lu.unit.clientId),
+    }));
+  }
+
+  /** Même principe que `carrierAircraftRows`, pour une base aérienne (Phase 5, retour utilisateur 2026-08-15). */
+  function airbaseAircraftRows(airbaseKey: string) {
+    return aircraftForAirbase(teams, airbaseKey).map((lu) => ({
+      unit: lu.unit,
+      onRemove: () => removeUnit(lu.teamClientId, lu.fleetClientId, lu.unit.clientId),
+      isSelectedForPlacement: selectedUnitClientId === lu.unit.clientId,
+      onSelectForPlacement: () => onSelectUnitForPlacement(lu.teamClientId, lu.fleetClientId, lu.unit.clientId),
+    }));
   }
 
   function updateUnit(teamClientId: string, fleetClientId: string, unitClientId: string, patch: Partial<BuilderTeam["fleets"][number]["units"][number]>) {
@@ -294,71 +366,94 @@ export function TeamsBoard({
               </div>
 
               <div className="space-y-2">
-                {team.fleets.filter((f) => f.kind !== "station" && f.kind !== "aviation").map((fleet) => (
-                  <div
-                    key={fleet.clientId}
-                    onDragOver={allowDrop}
-                    onDrop={(e) => handleDropOnFleet(e, team.clientId, fleet.clientId)}
-                    className="rounded-md border border-slate-800 bg-slate-950/40 p-2 transition-colors"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        draggable
-                        onDragStart={(e) => setDragPayload(e, { kind: "fleet", teamClientId: team.clientId, fleetClientId: fleet.clientId })}
-                        title="Glisser sur la carte pour positionner toute la task force (formation générique)"
-                        className="cursor-grab text-brass-500 active:cursor-grabbing"
-                      >
-                        ⚓
-                      </span>
-                      <input
-                        value={fleet.name}
-                        onChange={(e) => updateFleetName(team.clientId, fleet.clientId, e.target.value)}
-                        className={`${fieldClass} flex-1 text-xs`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeFleet(team.clientId, fleet.clientId)}
-                        disabled={team.fleets.length <= 1}
-                        title={team.fleets.length <= 1 ? "Il faut au moins une task force par équipe" : "Supprimer la task force"}
-                        className="shrink-0 text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onOpenUnitWizard(team.clientId, fleet.clientId)}
-                      className="mt-1 text-[11px] text-brass-400 hover:text-brass-300"
-                      title="Choisir un type de bâtiment, puis la classe précise"
+                {team.fleets.filter((f) => f.kind !== "station" && f.kind !== "aviation").map((fleet) => {
+                  const isExpanded = expanded.has(fleet.clientId);
+                  return (
+                    <div
+                      key={fleet.clientId}
+                      onDragOver={allowDrop}
+                      onDrop={(e) => handleDropOnFleet(e, team.clientId, fleet.clientId)}
+                      className={`rounded-md border p-2 transition-colors ${selectedFleetClientId === fleet.clientId ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-950/40"}`}
                     >
-                      + Bâtiment
-                    </button>
-                    {fleet.units.length === 0 ? (
-                      <p className="mt-2 text-xs text-slate-600">Aucune unité — ajoutez-en depuis la bibliothèque.</p>
-                    ) : (
-                      <ul className="mt-2 space-y-1.5">
-                        {fleet.units.map((unit) => (
-                          <UnitRosterRow
-                            key={unit.clientId}
-                            unit={unit}
-                            teamClientId={team.clientId}
-                            fleetClientId={fleet.clientId}
-                            airbases={airbases}
-                            squadrons={squadrons}
-                            carrierCandidates={allSurfaceUnits.filter((u) => u.clientId !== unit.clientId)}
-                            libraryClasses={libraryClasses}
-                            onChange={(patch) => updateUnit(team.clientId, fleet.clientId, unit.clientId, patch)}
-                            onRemove={() => removeUnit(team.clientId, fleet.clientId, unit.clientId)}
-                            onAddAircraftToCarrier={onAddAircraftToCarrier}
-                            removeDisabledReason={fleet.units.length <= 1 ? "Il faut au moins une unité par task force" : null}
-                            isSelectedForPlacement={selectedUnitClientId === unit.clientId}
-                            onSelectForPlacement={() => onSelectUnitForPlacement(team.clientId, fleet.clientId, unit.clientId)}
-                          />
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ))}
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => toggleExpanded(fleet.clientId)} className="shrink-0 text-slate-500 hover:text-slate-300" title={isExpanded ? "Replier" : "Déplier"}>
+                          {isExpanded ? "▾" : "▸"}
+                        </button>
+                        <span
+                          draggable
+                          onDragStart={(e) => setDragPayload(e, { kind: "fleet", teamClientId: team.clientId, fleetClientId: fleet.clientId })}
+                          title="Glisser sur la carte pour positionner toute la task force (formation générique)"
+                          className="cursor-grab text-brass-500 active:cursor-grabbing"
+                        >
+                          ⚓
+                        </span>
+                        <input
+                          value={fleet.name}
+                          onChange={(e) => updateFleetName(team.clientId, fleet.clientId, e.target.value)}
+                          className={`${fieldClass} flex-1 text-xs`}
+                        />
+                        <span className="shrink-0 text-[11px] text-slate-500">({fleet.units.length})</span>
+                        <button
+                          type="button"
+                          onClick={() => onSelectFleetForPlacement(team.clientId, fleet.clientId)}
+                          title="Positionner toute la task force en cliquant la carte"
+                          className={`shrink-0 text-xs ${selectedFleetClientId === fleet.clientId ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}`}
+                        >
+                          🎯
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeFleet(team.clientId, fleet.clientId)}
+                          disabled={team.fleets.length <= 1}
+                          title={team.fleets.length <= 1 ? "Il faut au moins une task force par équipe" : "Supprimer la task force"}
+                          className="shrink-0 text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      {isExpanded && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => onOpenUnitWizard(team.clientId, fleet.clientId)}
+                            className="mt-1 text-[11px] text-brass-400 hover:text-brass-300"
+                            title="Choisir un type de bâtiment, puis la classe précise"
+                          >
+                            + Bâtiment
+                          </button>
+                          {fleet.units.length === 0 ? (
+                            <p className="mt-2 text-xs text-slate-600">Aucune unité — ajoutez-en depuis la bibliothèque.</p>
+                          ) : (
+                            <ul className="mt-2 space-y-1.5">
+                              {fleet.units.map((unit) => (
+                                <UnitRosterRow
+                                  key={unit.clientId}
+                                  unit={unit}
+                                  teamClientId={team.clientId}
+                                  fleetClientId={fleet.clientId}
+                                  airbases={airbases}
+                                  squadrons={squadrons}
+                                  carrierCandidates={allSurfaceUnits.filter((u) => u.clientId !== unit.clientId)}
+                                  libraryClasses={libraryClasses}
+                                  onChange={(patch) => updateUnit(team.clientId, fleet.clientId, unit.clientId, patch)}
+                                  onRemove={() => removeUnit(team.clientId, fleet.clientId, unit.clientId)}
+                                  onAddAircraftToCarrier={onAddAircraftToCarrier}
+                                  removeDisabledReason={fleet.units.length <= 1 ? "Il faut au moins une unité par task force" : null}
+                                  isSelectedForPlacement={selectedUnitClientId === unit.clientId}
+                                  onSelectForPlacement={() => onSelectUnitForPlacement(team.clientId, fleet.clientId, unit.clientId)}
+                                  isExpanded={expanded.has(unit.clientId)}
+                                  onToggleExpanded={() => toggleExpanded(unit.clientId)}
+                                  assignedAircraft={carrierAircraftRows(unit)}
+                                  onOpenAircraftWizardForCarrier={() => onOpenAircraftWizardForCarrier(team.clientId, unit.name)}
+                                />
+                              ))}
+                            </ul>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               <button type="button" onClick={() => addFleet(team.clientId)} className="text-xs text-brass-400 hover:text-brass-300">
@@ -376,6 +471,9 @@ export function TeamsBoard({
                 onAssignAircraft={onAssignAircraftToAirbase}
                 onAddAircraftFromLibrary={onAddAircraftToAirbase}
                 onOpenAircraftWizard={onOpenAircraftWizard}
+                expanded={expanded}
+                onToggleExpanded={toggleExpanded}
+                getAssignedAircraft={airbaseAircraftRows}
               />
 
               <div className="space-y-2 border-t border-slate-800 pt-2">
@@ -433,6 +531,10 @@ export function TeamsBoard({
                                 removeDisabledReason={null}
                                 isSelectedForPlacement={selectedUnitClientId === unit.clientId}
                                 onSelectForPlacement={() => onSelectUnitForPlacement(team.clientId, station.clientId, unit.clientId)}
+                                isExpanded={false}
+                                onToggleExpanded={() => {}}
+                                assignedAircraft={[]}
+                                onOpenAircraftWizardForCarrier={() => {}}
                               />
                             ))}
                           </ul>

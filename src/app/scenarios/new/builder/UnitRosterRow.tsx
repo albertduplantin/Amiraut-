@@ -23,20 +23,19 @@ function baseRefToOptionValue(ref: BaseRef): string {
 }
 
 /**
- * Ligne d'unité posée (task force ou roster d'escadrille) — nom, classe
- * (lecture seule : le changement de classe n'est pas pris en charge dans ce
- * constructeur, voir ClassRef), position (saisie numérique — remplacée par
- * le clic-carte en Phase 5), et pour un avion, la source de base
- * (aucune/base aérienne/escadrille/porte-avions), retour utilisateur
- * 2026-08-14.
+ * Ligne d'unité posée (task force ou roster d'escadrille) — juste le nom
+ * et un bouton 🎯 pour la positionner (retour utilisateur 2026-08-15,
+ * troisième chantier, Phase 5 : "inutile de mettre des infos en plus sur
+ * les bâtiments comme la latitude longitude etc.") ; pour un avion, la
+ * source de base (aucune/base aérienne/escadrille/porte-avions).
  *
- * Porte-avions (Phase 4, retour utilisateur 2026-08-15, troisième chantier
- * — "en cliquant sur le porte-avions ou en glissant déposant dessus lui
- * ajouter des avions") : une ligne dont la classe est un porte-avions
- * (iconKey "carrier") accepte le glisser-déposer d'une classe AVION de la
- * bibliothèque — crée l'avion à la volée, rattaché tout de suite. Le
- * bouton "+ Avion" équivalent au "+ Bâtiment" des task forces arrive en
- * Phase 5, une fois l'affichage dépliant construit (voir le plan).
+ * Porte-avions (Phase 4/5, retour utilisateur 2026-08-15 — "en cliquant
+ * sur le porte-avions ou en glissant déposant dessus lui ajouter des
+ * avions") : une ligne dont la classe est un porte-avions (iconKey
+ * "carrier") accepte le glisser-déposer d'une classe AVION de la
+ * bibliothèque et gagne une flèche d'expansion qui déplie la liste de ses
+ * avions déjà rattachés, chacun avec son propre 🎯, plus un bouton
+ * "+ Avion" (assistant guidé, comme sur une base aérienne).
  */
 export function UnitRosterRow({
   unit,
@@ -52,6 +51,10 @@ export function UnitRosterRow({
   removeDisabledReason,
   isSelectedForPlacement,
   onSelectForPlacement,
+  isExpanded,
+  onToggleExpanded,
+  assignedAircraft,
+  onOpenAircraftWizardForCarrier,
 }: {
   unit: BuilderUnit;
   /** Nécessaires uniquement pour le glisser-déposer d'un avion vers une base/escadrille/porte-avions. */
@@ -71,6 +74,11 @@ export function UnitRosterRow({
   /** Placement interactif sur la carte (Phase 5, retour utilisateur 2026-08-14) — voir ScenarioEditorForm.handleMapClick. */
   isSelectedForPlacement: boolean;
   onSelectForPlacement: () => void;
+  /** Arborescence dépliante (Phase 5, retour utilisateur 2026-08-15) — pertinent seulement pour un porte-avions, ignoré sinon. */
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
+  assignedAircraft: { unit: BuilderUnit; onRemove: () => void; isSelectedForPlacement: boolean; onSelectForPlacement: () => void }[];
+  onOpenAircraftWizardForCarrier: () => void;
 }) {
   const [dropError, setDropError] = useState<string | null>(null);
 
@@ -87,7 +95,6 @@ export function UnitRosterRow({
 
   const isAircraft = unit.classRef.category === "AIRCRAFT";
   const isCarrier = unit.classRef.category === "SURFACE_SHIP" && resolveClassInfo(unit.classRef, libraryClasses)?.iconKey === "carrier";
-  const positioned = unit.lat.trim() !== "" && unit.lng.trim() !== "";
 
   function handleDropOnCarrier(e: React.DragEvent) {
     e.preventDefault();
@@ -117,10 +124,15 @@ export function UnitRosterRow({
       className={`rounded-md border p-2 transition-colors ${isAircraft ? "cursor-grab active:cursor-grabbing" : ""} ${isSelectedForPlacement ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}
     >
       <div className="flex flex-wrap items-center gap-2">
+        {isCarrier && (
+          <button type="button" onClick={onToggleExpanded} className="shrink-0 text-slate-500 hover:text-slate-300" title={isExpanded ? "Replier" : "Déplier"}>
+            {isExpanded ? "▾" : "▸"}
+          </button>
+        )}
         <input
           value={unit.name}
           onChange={(e) => onChange({ name: e.target.value })}
-          className={`${fieldClass} min-w-[10rem] flex-1`}
+          className={`${fieldClass} min-w-[8rem] flex-1`}
           placeholder="Nom de l'unité"
         />
         <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400" title={unit.classRef.kind === "inline" ? "Classe héritée du scénario dupliqué, non modifiable ici" : "Classe de bibliothèque"}>
@@ -128,29 +140,20 @@ export function UnitRosterRow({
           {unit.classRef.kind === "inline" && " (héritée)"}
           {isCarrier && " 🛫"}
         </span>
-        <label className="flex items-center gap-1 text-[11px] text-slate-500">
-          Lat
-          <input value={unit.lat} onChange={(e) => onChange({ lat: e.target.value })} className={`${fieldClass} w-20`} placeholder="60.0" />
-        </label>
-        <label className="flex items-center gap-1 text-[11px] text-slate-500">
-          Lng
-          <input value={unit.lng} onChange={(e) => onChange({ lng: e.target.value })} className={`${fieldClass} w-20`} placeholder="-10.0" />
-        </label>
         <button
           type="button"
           onClick={onSelectForPlacement}
           title="Placer en cliquant sur la carte"
-          className={`text-xs ${isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}`}
+          className={`shrink-0 text-xs ${isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}`}
         >
-          🎯{isSelectedForPlacement ? " en cours…" : ""}
+          🎯
         </button>
-        {!positioned && <span className="text-[11px] text-amber-400">non positionné</span>}
         <button
           type="button"
           onClick={onRemove}
           disabled={removeDisabledReason !== null}
-          title={removeDisabledReason ?? undefined}
-          className="ml-auto text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
+          title={removeDisabledReason ?? "Retirer"}
+          className="ml-auto shrink-0 text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
         >
           Retirer
         </button>
@@ -180,6 +183,31 @@ export function UnitRosterRow({
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {isCarrier && isExpanded && (
+        <div className="mt-1.5 space-y-1 border-t border-slate-800 pt-1.5">
+          <button type="button" onClick={onOpenAircraftWizardForCarrier} className="text-[11px] text-brass-400 hover:text-brass-300" title="Choisir un type d'avion, puis la classe précise">
+            + Avion
+          </button>
+          {assignedAircraft.length === 0 ? (
+            <p className="text-[11px] text-slate-600">Aucun avion rattaché — glissez-en un depuis la bibliothèque.</p>
+          ) : (
+            <ul className="space-y-1">
+              {assignedAircraft.map((a) => (
+                <li key={a.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px]">
+                  <span className="flex-1 truncate">{a.unit.name}</span>
+                  <button type="button" onClick={a.onSelectForPlacement} title="Placer en cliquant sur la carte" className={a.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
+                    🎯
+                  </button>
+                  <button type="button" onClick={a.onRemove} className="text-red-500 hover:text-red-400" title="Retirer">
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </li>

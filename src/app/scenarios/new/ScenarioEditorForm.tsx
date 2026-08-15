@@ -21,6 +21,7 @@ import {
   createClientIdGenerator,
   allUnits,
   surfaceShipUnits,
+  aircraftForAirbase,
 } from "./builder/types";
 import { LibraryBrowserPanel } from "./builder/LibraryBrowserPanel";
 import { TeamsBoard } from "./builder/TeamsBoard";
@@ -254,7 +255,9 @@ export function ScenarioEditorForm({
   // — coexistent avec les boutons/glisser-déposer déjà en place.
   const [addContainerModalOpen, setAddContainerModalOpen] = useState(false);
   const [unitWizardFor, setUnitWizardFor] = useState<{ teamClientId: string; fleetClientId: string } | null>(null);
-  const [aircraftWizardFor, setAircraftWizardFor] = useState<{ teamClientId: string; airbaseKey: string } | null>(null);
+  const [aircraftWizardFor, setAircraftWizardFor] = useState<
+    { teamClientId: string; target: { kind: "airbase"; airbaseKey: string } | { kind: "carrier"; carrierUnitName: string } } | null
+  >(null);
 
   // Mise en page 3 colonnes façon arbitre (Phase 4, retour utilisateur
   // 2026-08-15) — rail gauche collapsible comme ArbiterDashboard.tsx, infos
@@ -270,7 +273,12 @@ export function ScenarioEditorForm({
   // que "Enregistrer le scénario" (plus bas) n'a pas été cliqué : la
   // position "appliquée" ne fait que mettre à jour l'état local du
   // formulaire.
-  const [selection, setSelection] = useState<{ kind: "unit"; teamClientId: string; fleetClientId: string; unitClientId: string } | { kind: "airbase"; clientId: string } | null>(null);
+  const [selection, setSelection] = useState<
+    | { kind: "unit"; teamClientId: string; fleetClientId: string; unitClientId: string }
+    | { kind: "airbase"; clientId: string }
+    | { kind: "fleet"; teamClientId: string; fleetClientId: string }
+    | null
+  >(null);
   const [draftPosition, setDraftPosition] = useState<LatLng | null>(null);
   const [posError, setPosError] = useState<string | null>(null);
   const gameMapRef = useRef<GameMapHandle>(null);
@@ -280,6 +288,10 @@ export function ScenarioEditorForm({
       ? (allUnits(teams).find((u) => u.clientId === selection.unitClientId) ?? null)
       : null;
   const selectedAirbase = selection?.kind === "airbase" ? (airbasesState.find((a) => a.clientId === selection.clientId) ?? null) : null;
+  const selectedFleet =
+    selection?.kind === "fleet"
+      ? (teams.find((t) => t.clientId === selection.teamClientId)?.fleets.find((f) => f.clientId === selection.fleetClientId) ?? null)
+      : null;
 
   function selectUnitForPlacement(teamClientId: string, fleetClientId: string, unitClientId: string) {
     setSelection((prev) =>
@@ -293,6 +305,12 @@ export function ScenarioEditorForm({
     setDraftPosition(null);
     setPosError(null);
   }
+  /** Positionnement de groupe (Phase 5, retour utilisateur 2026-08-15) — bouton 🎯 en plus du glisser-déposer (chantier précédent), même mécanisme clic-carte que pour une unité/base seule. */
+  function selectFleetForPlacement(teamClientId: string, fleetClientId: string) {
+    setSelection((prev) => (prev?.kind === "fleet" && prev.fleetClientId === fleetClientId ? null : { kind: "fleet", teamClientId, fleetClientId }));
+    setDraftPosition(null);
+    setPosError(null);
+  }
 
   function handleMapClick(pos: LatLng) {
     if (!selection) return;
@@ -302,6 +320,54 @@ export function ScenarioEditorForm({
     }
     setPosError(null);
     setDraftPosition(pos);
+  }
+
+  /**
+   * Repositionne TOUTE une task force en un geste (Phase 2, retour
+   * utilisateur 2026-08-15) — translate ses unités déjà positionnées
+   * (offset centroïde→dépose, formation relative conservée, même calcul
+   * que la reposition de flotte côté arbitre — ArbiterDashboard.tsx,
+   * selectFleet/fleetDraftOffset) si au moins une a une position "réelle"
+   * (voir le repli "toutes au même point" ci-dessous), sinon génère une
+   * formation neuve (formation.ts, placeholder générique assumé). Appelée
+   * aussi bien par le glisser-déposer (handleMapDrop) que par le bouton 🎯
+   * de groupe (Phase 5, applyDraftPosition) — factorisée pour ne pas
+   * dupliquer ce calcul.
+   */
+  function applyGroupPositionToFleet(prev: BuilderTeam[], teamClientId: string, fleetClientId: string, drop: LatLng): BuilderTeam[] {
+    return prev.map((t) => {
+      if (t.clientId !== teamClientId) return t;
+      return {
+        ...t,
+        fleets: t.fleets.map((f) => {
+          if (f.clientId !== fleetClientId) return f;
+          const positioned = f.units.filter((u) => u.lat.trim() && u.lng.trim());
+          // Une unité fraîchement ajoutée depuis la bibliothèque hérite du
+          // centre carte par défaut (voir handleAddUnitFromLibrary) — elle a
+          // donc toujours une position "non vide" sans jamais avoir été
+          // réellement placée. Si toutes les unités déjà "positionnées"
+          // partagent EXACTEMENT le même point, ce n'est jamais une vraie
+          // formation à préserver par translation (elle resterait empilée
+          // au même endroit) : mieux vaut générer une formation neuve,
+          // comme si aucune n'était positionnée.
+          const distinctPositions = new Set(positioned.map((u) => `${u.lat},${u.lng}`));
+          if (positioned.length > 0 && distinctPositions.size > 1) {
+            const centroid = {
+              lat: positioned.reduce((s, u) => s + Number(u.lat), 0) / positioned.length,
+              lng: positioned.reduce((s, u) => s + Number(u.lng), 0) / positioned.length,
+            };
+            const dLat = drop.lat - centroid.lat;
+            const dLng = drop.lng - centroid.lng;
+            return {
+              ...f,
+              units: f.units.map((u) => (u.lat.trim() && u.lng.trim() ? { ...u, lat: String(Number(u.lat) + dLat), lng: String(Number(u.lng) + dLng) } : u)),
+            };
+          }
+          const positions = applyFormationAtCenter(drop, f.units.length);
+          return { ...f, units: f.units.map((u, i) => ({ ...u, lat: String(positions[i].lat), lng: String(positions[i].lng) })) };
+        }),
+      };
+    });
   }
 
   /**
@@ -326,53 +392,39 @@ export function ScenarioEditorForm({
     setPosError(null);
 
     if (payload.kind === "airbase") {
+      const base = airbasesState.find((a) => a.clientId === payload.airbaseClientId);
       setAirbasesState((prev) => prev.map((a) => (a.clientId === payload.airbaseClientId ? { ...a, lat: String(drop.lat), lng: String(drop.lng) } : a)));
+      if (base) repositionAirbaseAircraft(base.key, drop);
       return;
     }
     if (payload.kind === "fleet") {
-      setTeams((prev) =>
-        prev.map((t) => {
-          if (t.clientId !== payload.teamClientId) return t;
-          return {
-            ...t,
-            fleets: t.fleets.map((f) => {
-              if (f.clientId !== payload.fleetClientId) return f;
-              const positioned = f.units.filter((u) => u.lat.trim() && u.lng.trim());
-              // Une unité fraîchement ajoutée depuis la bibliothèque hérite
-              // du centre carte par défaut (voir handleAddUnitFromLibrary) —
-              // elle a donc toujours une position "non vide" sans jamais
-              // avoir été réellement placée. Si toutes les unités déjà
-              // "positionnées" partagent EXACTEMENT le même point, ce n'est
-              // jamais une vraie formation à préserver par translation
-              // (elle resterait empilée au même endroit) : mieux vaut générer
-              // une formation neuve, comme si aucune n'était positionnée.
-              const distinctPositions = new Set(positioned.map((u) => `${u.lat},${u.lng}`));
-              if (positioned.length > 0 && distinctPositions.size > 1) {
-                // Au moins une unité déjà positionnée : translation par
-                // offset centroïde→dépose, formation relative conservée —
-                // même calcul que la reposition de flotte de l'arbitre
-                // (ArbiterDashboard.tsx, selectFleet/fleetDraftOffset).
-                const centroid = {
-                  lat: positioned.reduce((s, u) => s + Number(u.lat), 0) / positioned.length,
-                  lng: positioned.reduce((s, u) => s + Number(u.lng), 0) / positioned.length,
-                };
-                const dLat = drop.lat - centroid.lat;
-                const dLng = drop.lng - centroid.lng;
-                return {
-                  ...f,
-                  units: f.units.map((u) =>
-                    u.lat.trim() && u.lng.trim() ? { ...u, lat: String(Number(u.lat) + dLat), lng: String(Number(u.lng) + dLng) } : u
-                  ),
-                };
-              }
-              // Aucune unité positionnée : formation générique de départ.
-              const positions = applyFormationAtCenter(drop, f.units.length);
-              return { ...f, units: f.units.map((u, i) => ({ ...u, lat: String(positions[i].lat), lng: String(positions[i].lng) })) };
-            }),
-          };
-        })
-      );
+      setTeams((prev) => applyGroupPositionToFleet(prev, payload.teamClientId, payload.fleetClientId, drop));
     }
+  }
+
+  /** "une base aérienne avec tous ses avions" (retour utilisateur 2026-08-15, Phase 5) — factorisé, appelé par le glisser-déposer ET le bouton 🎯 de groupe (applyDraftPosition). */
+  function repositionAirbaseAircraft(airbaseKey: string, drop: LatLng) {
+    const attached = aircraftForAirbase(teams, airbaseKey);
+    if (attached.length === 0) return;
+    const positions = applyFormationAtCenter(drop, attached.length);
+    setTeams((prev) =>
+      attached.reduce(
+        (acc, lu, i) =>
+          acc.map((t) =>
+            t.clientId === lu.teamClientId
+              ? {
+                  ...t,
+                  fleets: t.fleets.map((f) =>
+                    f.clientId === lu.fleetClientId
+                      ? { ...f, units: f.units.map((u) => (u.clientId === lu.unit.clientId ? { ...u, lat: String(positions[i].lat), lng: String(positions[i].lng) } : u)) }
+                      : f
+                  ),
+                }
+              : t
+          ),
+        prev
+      )
+    );
   }
 
   function applyDraftPosition() {
@@ -393,9 +445,16 @@ export function ScenarioEditorForm({
             : t
         )
       );
-    } else {
+    } else if (selection.kind === "airbase") {
       const { clientId } = selection;
+      const base = airbasesState.find((a) => a.clientId === clientId);
       setAirbasesState((prev) => prev.map((a) => (a.clientId === clientId ? { ...a, lat: String(draftPosition.lat), lng: String(draftPosition.lng) } : a)));
+      // "une base aérienne avec tous ses avions" (retour utilisateur 2026-08-15, Phase 5).
+      if (base) repositionAirbaseAircraft(base.key, draftPosition);
+    } else {
+      // "fleet" — bouton 🎯 de groupe (Phase 5, retour utilisateur 2026-08-15), même calcul que le glisser-déposer.
+      const { teamClientId, fleetClientId } = selection;
+      setTeams((prev) => applyGroupPositionToFleet(prev, teamClientId, fleetClientId, draftPosition));
     }
     setDraftPosition(null);
   }
@@ -533,17 +592,29 @@ export function ScenarioEditorForm({
     const removed = airbasesState.find((a) => a.clientId === clientId);
     setAirbasesState((prev) => prev.filter((a) => a.clientId !== clientId));
     if (!removed) return;
-    setTeams((prev) =>
-      prev.map((t) => ({
-        ...t,
-        fleets: t.fleets.map((f) => ({
-          ...f,
-          units: f.units.map((u) => (u.baseRef.kind === "airbase" && u.baseRef.key === removed.key ? { ...u, baseRef: { kind: "none" } } : u)),
-        })),
-      }))
-    );
+    setTeams((prev) => detachAircraftFromBase(prev, (baseRef) => baseRef.kind === "airbase" && baseRef.key === removed.key));
     setSquadronsState((prev) => prev.map((s) => (s.baseRef.kind === "airbase" && s.baseRef.key === removed.key ? { ...s, baseRef: { kind: "none" } } : s)));
     setSelection((prev) => (prev?.kind === "airbase" && prev.clientId === clientId ? null : prev));
+  }
+
+  /**
+   * Détache les avions référençant `matches` (base/porte-avions/escadrille
+   * supprimé) — `baseRef` retombe à "none". Une task force "Aviation"
+   * cachée (Phase 4) qui se retrouve avec un avion ainsi orphelin repasse
+   * en "normal" (Phase 5, retour utilisateur 2026-08-15) : sinon
+   * l'utilisateur ne pourrait jamais la retrouver dans l'arbre pour gérer
+   * cet avion désormais sans base — mieux vaut la révéler que la laisser
+   * invisible avec du contenu orphelin.
+   */
+  function detachAircraftFromBase(teams: BuilderTeam[], matches: (baseRef: BaseRef) => boolean): BuilderTeam[] {
+    return teams.map((t) => ({
+      ...t,
+      fleets: t.fleets.map((f) => {
+        const units = f.units.map((u) => (matches(u.baseRef) ? { ...u, baseRef: { kind: "none" as const } } : u));
+        const gotOrphaned = f.kind === "aviation" && units.some((u, i) => u.baseRef.kind === "none" && f.units[i].baseRef.kind !== "none");
+        return { ...f, units, kind: gotOrphaned ? "normal" : f.kind };
+      }),
+    }));
   }
 
   /** Glisser-déposer d'un avion déjà en flotte vers une base aérienne/escadrille (Phase 6, retour utilisateur 2026-08-14) — voir AirbasesPanel/SquadronsPanel, dragDrop.ts. */
@@ -574,15 +645,7 @@ export function ScenarioEditorForm({
     const removed = squadronsState.find((s) => s.clientId === clientId);
     setSquadronsState((prev) => prev.filter((s) => s.clientId !== clientId));
     if (!removed) return;
-    setTeams((prev) =>
-      prev.map((t) => ({
-        ...t,
-        fleets: t.fleets.map((f) => ({
-          ...f,
-          units: f.units.map((u) => (u.baseRef.kind === "squadron" && u.baseRef.key === removed.key ? { ...u, baseRef: { kind: "none" } } : u)),
-        })),
-      }))
-    );
+    setTeams((prev) => detachAircraftFromBase(prev, (baseRef) => baseRef.kind === "squadron" && baseRef.key === removed.key));
   }
 
   const memberCountByKey = useMemo(() => {
@@ -885,6 +948,8 @@ export function ScenarioEditorForm({
                 nextClientId={nextClientId}
                 selectedUnitClientId={selection?.kind === "unit" ? selection.unitClientId : null}
                 onSelectUnitForPlacement={selectUnitForPlacement}
+                selectedFleetClientId={selection?.kind === "fleet" ? selection.fleetClientId : null}
+                onSelectFleetForPlacement={selectFleetForPlacement}
                 libraryClasses={libraryClasses}
                 onAddUnitFromLibrary={handleAddUnitFromLibrary}
                 onOpenAddContainer={() => setAddContainerModalOpen(true)}
@@ -899,8 +964,9 @@ export function ScenarioEditorForm({
                   handleAssignUnitBaseRef(teamClientId, fleetClientId, unitClientId, { kind: "airbase", key: airbaseKey })
                 }
                 onAddAircraftToAirbase={handleAddAircraftToAirbase}
-                onOpenAircraftWizard={(teamClientId, airbaseKey) => setAircraftWizardFor({ teamClientId, airbaseKey })}
+                onOpenAircraftWizard={(teamClientId, airbaseKey) => setAircraftWizardFor({ teamClientId, target: { kind: "airbase", airbaseKey } })}
                 onAddAircraftToCarrier={handleAddAircraftToCarrier}
+                onOpenAircraftWizardForCarrier={(teamClientId, carrierUnitName) => setAircraftWizardFor({ teamClientId, target: { kind: "carrier", carrierUnitName } })}
               />
               <SquadronsPanel
                 squadrons={squadronsState}
@@ -937,13 +1003,19 @@ export function ScenarioEditorForm({
           />
 
           <div className="pointer-events-none absolute left-4 top-4 max-w-xs rounded-md border border-slate-700 bg-slate-950/80 px-3 py-1.5 text-[11px] text-slate-400">
-            Glissez ⚓/✈ une task force/base depuis le rail pour la positionner — ou 🎯 une unité, puis cliquez la carte.
+            Glissez ⚓/✈ une task force/base depuis le rail, ou cliquez son 🎯, puis cliquez la carte pour la positionner.
           </div>
 
-          {(selectedUnit || selectedAirbase) && (
+          {(selectedUnit || selectedAirbase || selectedFleet) && (
             <div className="absolute bottom-4 left-4 max-w-xs rounded-md border border-slate-700 bg-slate-950/90 p-3 text-xs shadow-lg">
               <p className="font-medium text-brass-300">
-                {selectedUnit ? `Unité : ${selectedUnit.name}` : selectedAirbase ? `Base : ${selectedAirbase.name || selectedAirbase.key}` : null}
+                {selectedUnit
+                  ? `Unité : ${selectedUnit.name}`
+                  : selectedAirbase
+                    ? `Base : ${selectedAirbase.name || selectedAirbase.key}`
+                    : selectedFleet
+                      ? `Task force : ${selectedFleet.name} (${selectedFleet.units.length} unité(s))`
+                      : null}
               </p>
               <p className="mt-1 text-slate-500">Cliquez la carte pour choisir sa position.</p>
               {draftPosition && (
@@ -1066,15 +1138,28 @@ export function ScenarioEditorForm({
       {aircraftWizardFor &&
         (() => {
           const team = teams.find((t) => t.clientId === aircraftWizardFor.teamClientId);
-          const airbase = airbasesState.find((a) => a.key === aircraftWizardFor.airbaseKey && a.teamClientId === aircraftWizardFor.teamClientId);
-          if (!team || !airbase) return null;
+          if (!team) return null;
+          const { target } = aircraftWizardFor;
+          if (target.kind === "airbase") {
+            const airbase = airbasesState.find((a) => a.key === target.airbaseKey && a.teamClientId === aircraftWizardFor.teamClientId);
+            if (!airbase) return null;
+            return (
+              <AddAircraftWizardModal
+                targetLabel={`${team.name} / ${airbase.name || airbase.key}`}
+                libraryClasses={libraryClasses}
+                preferredNation={team.nation}
+                onClose={() => setAircraftWizardFor(null)}
+                onPick={(libClass) => handleAddAircraftToAirbase(libClass, aircraftWizardFor.teamClientId, target.airbaseKey)}
+              />
+            );
+          }
           return (
             <AddAircraftWizardModal
-              targetLabel={`${team.name} / ${airbase.name || airbase.key}`}
+              targetLabel={`${team.name} / ${target.carrierUnitName}`}
               libraryClasses={libraryClasses}
               preferredNation={team.nation}
               onClose={() => setAircraftWizardFor(null)}
-              onPick={(libClass) => handleAddAircraftToAirbase(libClass, aircraftWizardFor.teamClientId, aircraftWizardFor.airbaseKey)}
+              onPick={(libClass) => handleAddAircraftToCarrier(libClass, aircraftWizardFor.teamClientId, target.carrierUnitName)}
             />
           );
         })()}

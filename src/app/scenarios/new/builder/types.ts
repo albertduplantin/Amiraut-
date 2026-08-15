@@ -132,3 +132,20 @@ export function resolveClassInfo(ref: ClassRef, libraryClasses: LibraryClassOpti
 export function carrierUnits(teams: BuilderTeam[], libraryClasses: LibraryClassOption[]): BuilderUnit[] {
   return surfaceShipUnits(teams).filter((u) => resolveClassInfo(u.classRef, libraryClasses)?.iconKey === "carrier");
 }
+
+/** Unité posée + sa localisation (équipe/flotte) — un avion rattaché à une base/un porte-avions vit dans la task force "Aviation" cachée de son équipe (Phase 4), pas forcément celle qu'on est en train de parcourir. */
+export type LocatedUnit = { unit: BuilderUnit; teamClientId: string; fleetClientId: string };
+
+export function allLocatedUnits(teams: BuilderTeam[]): LocatedUnit[] {
+  return teams.flatMap((t) => t.fleets.flatMap((f) => f.units.map((unit): LocatedUnit => ({ unit, teamClientId: t.clientId, fleetClientId: f.clientId }))));
+}
+
+/** Avions rattachés à une base aérienne donnée (Phase 5, retour utilisateur 2026-08-15) — pour l'afficher en dépliant sa carte. */
+export function aircraftForAirbase(teams: BuilderTeam[], airbaseKey: string): LocatedUnit[] {
+  return allLocatedUnits(teams).filter((lu) => lu.unit.baseRef.kind === "airbase" && lu.unit.baseRef.key === airbaseKey);
+}
+
+/** Avions rattachés à un porte-avions donné (Phase 5, retour utilisateur 2026-08-15) — pour l'afficher en dépliant sa ligne. */
+export function aircraftForCarrier(teams: BuilderTeam[], carrierUnitName: string): LocatedUnit[] {
+  return allLocatedUnits(teams).filter((lu) => lu.unit.baseRef.kind === "carrier" && lu.unit.baseRef.unitName === carrierUnitName);
+}
