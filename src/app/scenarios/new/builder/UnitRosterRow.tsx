@@ -6,6 +6,8 @@ import { resolveClassInfo } from "./types";
 import { setDragPayload, readDragPayload, allowDrop } from "./dragDrop";
 
 const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs";
+/** Nom sans cadre visible au repos (retour utilisateur 2026-08-15 — "inutile de mettre cette imbrication de cadres") : un fond/bordure apparaît seulement au survol/focus, pour rester éditable sans surcharger la ligne d'un encadré permanent. */
+const nameFieldClass = "min-w-[8rem] flex-1 truncate rounded bg-transparent px-1 py-0.5 text-sm text-slate-200 outline-none hover:bg-slate-900/60 focus:bg-slate-950 focus:ring-1 focus:ring-brass-600";
 
 function baseRefToOptionValue(ref: BaseRef): string {
   switch (ref.kind) {
@@ -28,6 +30,15 @@ function baseRefToOptionValue(ref: BaseRef): string {
  * troisième chantier, Phase 5 : "inutile de mettre des infos en plus sur
  * les bâtiments comme la latitude longitude etc.") ; pour un avion, la
  * source de base (aucune/base aérienne/escadrille/porte-avions).
+ *
+ * Sans cadre au repos (retour utilisateur 2026-08-15 — "inutile de mettre
+ * cette imbrication de cadres, cela surcharge l'interface, mets juste le
+ * nom [...] avec les icônes placer et supprimer") : la ligne n'a plus de
+ * bordure/fond permanents (un encadré par unité, dans un encadré de task
+ * force, dans un encadré d'équipe...), juste le nom (éditable, cadre
+ * discret seulement au survol/focus, voir `nameFieldClass`) et 🎯/✕. Le
+ * bouton "Retirer" est aussi devenu une icône ✕ (cohérent avec les
+ * suppressions de task force/base/station, déjà icône seule).
  *
  * Porte-avions (Phase 4/5, retour utilisateur 2026-08-15 — "en cliquant
  * sur le porte-avions ou en glissant déposant dessus lui ajouter des
@@ -125,7 +136,7 @@ export function UnitRosterRow({
       onDragOver={isCarrier ? allowDrop : undefined}
       onDrop={isCarrier ? handleDropOnCarrier : undefined}
       title={isAircraft ? "Glisser vers une base aérienne ou une escadrille pour l'y rattacher" : isCarrier ? "Glisser un avion de la bibliothèque ici pour l'y rattacher" : undefined}
-      className={`rounded-md border p-2 transition-colors ${isAircraft ? "cursor-grab active:cursor-grabbing" : ""} ${isSelectedForPlacement ? "border-brass-500 bg-brass-950/20 ring-1 ring-brass-500" : "border-slate-800 bg-slate-900/60"}`}
+      className={`rounded px-1 py-0.5 transition-colors ${isAircraft ? "cursor-grab active:cursor-grabbing" : ""} ${isSelectedForPlacement ? "bg-brass-950/30" : ""}`}
     >
       <div className="flex flex-wrap items-center gap-2">
         {isCarrier && (
@@ -136,7 +147,7 @@ export function UnitRosterRow({
         <input
           value={unit.name}
           onChange={(e) => onChange({ name: e.target.value })}
-          className={`${fieldClass} min-w-[8rem] flex-1`}
+          className={nameFieldClass}
           placeholder="Nom de l'unité"
           title={`Classe : ${unit.classRef.name}${unit.classRef.kind === "inline" ? " (héritée du scénario dupliqué, non modifiable ici)" : ""}`}
         />
@@ -160,7 +171,7 @@ export function UnitRosterRow({
           title={removeDisabledReason ?? "Retirer"}
           className="ml-auto shrink-0 text-xs text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
         >
-          Retirer
+          ✕
         </button>
       </div>
 
@@ -201,26 +212,21 @@ export function UnitRosterRow({
           ) : (
             <>
               {squadronGroups.map((group) => (
-                <div key={group.squadron.clientId} className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
-                  <div className="flex items-center gap-2">
+                <div key={group.squadron.clientId} className="rounded border border-slate-800/70 pb-1">
+                  <div className="flex items-center gap-2 px-1 pt-1">
                     <span title="Escadrille" className="shrink-0 text-brass-500">
                       ✈✈
                     </span>
-                    <input
-                      value={group.squadron.name}
-                      onChange={(e) => group.onRename(e.target.value)}
-                      className={`${fieldClass} min-w-[6rem] flex-1`}
-                      placeholder="Nom de l'escadrille"
-                    />
+                    <input value={group.squadron.name} onChange={(e) => group.onRename(e.target.value)} className={nameFieldClass} placeholder="Nom de l'escadrille" />
                     <span className="shrink-0 text-[11px] text-slate-500">({group.members.length})</span>
                     <button type="button" onClick={group.onRemove} className="shrink-0 text-[11px] text-red-500 hover:text-red-400" title="Supprimer l'escadrille (détache ses avions)">
                       ✕
                     </button>
                   </div>
-                  <ul className="mt-1 space-y-1">
+                  <ul>
                     {group.members.map((a) => (
-                      <li key={a.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-900/60 px-2 py-1 text-[11px]">
-                        <span className="flex-1 truncate">{a.unit.name}</span>
+                      <li key={a.unit.clientId} className="flex items-center gap-2 px-1 py-0.5 text-[11px]">
+                        <span className="flex-1 truncate pl-4">{a.unit.name}</span>
                         <button type="button" onClick={a.onSelectForPlacement} title="Placer en cliquant sur la carte" className={a.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
                           🎯
                         </button>
@@ -233,9 +239,9 @@ export function UnitRosterRow({
                 </div>
               ))}
               {assignedAircraft.length > 0 && (
-                <ul className="space-y-1">
+                <ul>
                   {assignedAircraft.map((a) => (
-                    <li key={a.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px]">
+                    <li key={a.unit.clientId} className="flex items-center gap-2 px-1 py-0.5 text-[11px]">
                       <span className="flex-1 truncate">{a.unit.name}</span>
                       <button type="button" onClick={a.onSelectForPlacement} title="Placer en cliquant sur la carte" className={a.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
                         🎯

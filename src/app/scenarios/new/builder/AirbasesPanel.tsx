@@ -4,7 +4,8 @@ import { useState } from "react";
 import type { BuilderAirbase, LibraryClassOption, AircraftRowView, SquadronGroupView } from "./types";
 import { allowDrop, readDragPayload, setDragPayload } from "./dragDrop";
 
-const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs";
+/** Nom sans cadre visible au repos (retour utilisateur 2026-08-15 — "inutile de mettre cette imbrication de cadres") — voir UnitRosterRow.tsx, même style. */
+const nameFieldClass = "min-w-[8rem] flex-1 truncate rounded bg-transparent px-1 py-0.5 text-sm text-slate-200 outline-none hover:bg-slate-900/60 focus:bg-slate-950 focus:ring-1 focus:ring-brass-600";
 
 /**
  * Bases aériennes d'UNE équipe (retour utilisateur 2026-08-15, troisième
@@ -129,7 +130,7 @@ export function AirbasesPanel({
                 >
                   ✈
                 </span>
-                <input value={a.name} onChange={(e) => onUpdate(a.clientId, { name: e.target.value })} placeholder="Nom (ex: Reykjavik)" className={`${fieldClass} min-w-[8rem] flex-1`} />
+                <input value={a.name} onChange={(e) => onUpdate(a.clientId, { name: e.target.value })} placeholder="Nom (ex: Reykjavik)" className={nameFieldClass} />
                 <button
                   type="button"
                   onClick={() => onSelectForPlacement(a.clientId)}
@@ -157,26 +158,21 @@ export function AirbasesPanel({
                   ) : (
                     <>
                       {squadronGroups.map((group) => (
-                        <div key={group.squadron.clientId} className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
-                          <div className="flex items-center gap-2">
+                        <div key={group.squadron.clientId} className="rounded border border-slate-800/70 pb-1">
+                          <div className="flex items-center gap-2 px-1 pt-1">
                             <span title="Escadrille" className="shrink-0 text-brass-500">
                               ✈✈
                             </span>
-                            <input
-                              value={group.squadron.name}
-                              onChange={(e) => group.onRename(e.target.value)}
-                              className={`${fieldClass} min-w-[6rem] flex-1`}
-                              placeholder="Nom de l'escadrille"
-                            />
+                            <input value={group.squadron.name} onChange={(e) => group.onRename(e.target.value)} className={nameFieldClass} placeholder="Nom de l'escadrille" />
                             <span className="shrink-0 text-[11px] text-slate-500">({group.members.length})</span>
                             <button type="button" onClick={group.onRemove} className="shrink-0 text-[11px] text-red-500 hover:text-red-400" title="Supprimer l'escadrille (détache ses avions)">
                               ✕
                             </button>
                           </div>
-                          <ul className="mt-1 space-y-1">
+                          <ul>
                             {group.members.map((row) => (
-                              <li key={row.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-900/60 px-2 py-1 text-[11px]">
-                                <span className="flex-1 truncate">{row.unit.name}</span>
+                              <li key={row.unit.clientId} className="flex items-center gap-2 px-1 py-0.5 text-[11px]">
+                                <span className="flex-1 truncate pl-4">{row.unit.name}</span>
                                 <button type="button" onClick={row.onSelectForPlacement} title="Placer en cliquant sur la carte" className={row.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
                                   🎯
                                 </button>
@@ -189,9 +185,9 @@ export function AirbasesPanel({
                         </div>
                       ))}
                       {assigned.length > 0 && (
-                        <ul className="space-y-1">
+                        <ul>
                           {assigned.map((row) => (
-                            <li key={row.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px]">
+                            <li key={row.unit.clientId} className="flex items-center gap-2 px-1 py-0.5 text-[11px]">
                               <span className="flex-1 truncate">{row.unit.name}</span>
                               <button type="button" onClick={row.onSelectForPlacement} title="Placer en cliquant sur la carte" className={row.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
                                 🎯
