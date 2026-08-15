@@ -139,6 +139,8 @@ const TeamSchema = z.object({
   colorHex: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, "couleur hexadécimale attendue, ex: #3388ff"),
+  // Optionnel — voir ScenarioTeam.nation, types.ts (rétrocompatibilité).
+  nation: z.string().min(1).optional(),
   fleets: z.array(FleetSchema).min(1, "une équipe doit avoir au moins une flotte"),
 });
 

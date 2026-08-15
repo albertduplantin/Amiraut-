@@ -31,6 +31,7 @@ import { applyFormationAtCenter } from "./builder/formation";
 import { AddContainerModal } from "./builder/AddContainerModal";
 import { AddUnitWizardModal } from "./builder/AddUnitWizardModal";
 import { ScenarioMetaModal, type ScenarioMetaTab } from "./builder/ScenarioMetaModal";
+import { NATIONS } from "./builder/nations";
 
 /**
  * Constructeur de scénarios (module séparé de la feuille de route) —
@@ -124,17 +125,38 @@ function baseRefFromUnit(u: ScenarioUnit): BaseRef {
   return { kind: "none" };
 }
 
+/**
+ * Nationalité d'une équipe dupliquée depuis un scénario antérieur à ce
+ * champ (retour utilisateur 2026-08-15, troisième chantier) — `t.nation`
+ * est optionnel pour rester rétrocompatible (voir ScenarioTeam, types.ts).
+ * Repli sur la nation de sa première unité identifiable plutôt qu'une
+ * valeur arbitraire : garantit qu'au chargement, le verrou de
+ * `changeTeamNation` (TeamsBoard.tsx) ne se déclenche jamais à tort sur du
+ * contenu déjà cohérent.
+ */
+function inferTeamNation(t: ScenarioTeam, source: ScenarioDefinition, libraryClasses: LibraryClassOption[]): string {
+  for (const f of t.fleets) {
+    for (const u of f.units) {
+      const classRef = classRefFromScenario(u.classKey, source, libraryClasses);
+      const nation = classRef.kind === "inline" ? classRef.def.nation : libraryClasses.find((l) => l.id === classRef.libraryClassId)?.nation;
+      if (nation && nation !== "?") return nation;
+    }
+  }
+  return NATIONS[0].value;
+}
+
 function buildInitialTeams(duplicateFrom: ScenarioDefinition | null, libraryClasses: LibraryClassOption[], nextClientId: ClientIdGenerator): BuilderTeam[] {
   if (!duplicateFrom) {
     return [
-      { clientId: nextClientId("team"), name: "Camp A", colorHex: "#3388ff", fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }] },
-      { clientId: nextClientId("team"), name: "Camp B", colorHex: "#dc2626", fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }] },
+      { clientId: nextClientId("team"), name: NATIONS[0].value, colorHex: NATIONS[0].colorHex, nation: NATIONS[0].value, fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }] },
+      { clientId: nextClientId("team"), name: NATIONS[1].value, colorHex: NATIONS[1].colorHex, nation: NATIONS[1].value, fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }] },
     ];
   }
   return duplicateFrom.teams.map((t) => ({
     clientId: nextClientId("team"),
     name: t.name,
     colorHex: t.colorHex,
+    nation: t.nation ?? inferTeamNation(t, duplicateFrom, libraryClasses),
     fleets: t.fleets.map((f) => ({
       clientId: nextClientId("fleet"),
       name: f.name,
@@ -394,28 +416,31 @@ export function ScenarioEditorForm({
   /**
    * Assistant "+" (Phase 3, retour utilisateur 2026-08-15) — variante
    * d'`addTeam`/`addFleet` (normalement internes à TeamsBoard.tsx) exposée
-   * ici pour être appelable depuis AddContainerModal, avec en plus le
-   * `preferredNation` optionnel sur la nouvelle task force.
+   * ici pour être appelable depuis AddContainerModal. Créer une nouvelle
+   * équipe demande sa nation (troisième chantier, retour utilisateur
+   * 2026-08-15) — voir BuilderTeam.nation, nations.ts ; choisir une équipe
+   * existante hérite directement de sa nation déjà fixée.
    */
-  function handleCreateFleetContainer(target: { teamClientId: string } | { newTeamName: string }, preferredNation: string) {
-    const nation = preferredNation || undefined;
+  function handleCreateFleetContainer(target: { teamClientId: string } | { newTeamName: string; nation: string }) {
     if ("teamClientId" in target) {
       setTeams((prev) =>
         prev.map((t) =>
           t.clientId === target.teamClientId
-            ? { ...t, fleets: [...t.fleets, { clientId: nextClientId("fleet"), name: `Task Force ${t.fleets.length + 1}`, units: [], preferredNation: nation }] }
+            ? { ...t, fleets: [...t.fleets, { clientId: nextClientId("fleet"), name: `Task Force ${t.fleets.length + 1}`, units: [] }] }
             : t
         )
       );
       return;
     }
+    const colorHex = NATIONS.find((n) => n.value === target.nation)?.colorHex ?? "#94a3b8";
     setTeams((prev) => [
       ...prev,
       {
         clientId: nextClientId("team"),
         name: target.newTeamName,
-        colorHex: prev.length % 2 === 0 ? "#3388ff" : "#dc2626",
-        fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [], preferredNation: nation }],
+        colorHex,
+        nation: target.nation,
+        fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }],
       },
     ]);
   }
@@ -546,6 +571,7 @@ export function ScenarioEditorForm({
         (t): ScenarioTeam => ({
           name: t.name,
           colorHex: t.colorHex,
+          nation: t.nation,
           fleets: t.fleets.map((f) => ({ name: f.name, units: f.units.map(mapUnit) })),
         })
       ),

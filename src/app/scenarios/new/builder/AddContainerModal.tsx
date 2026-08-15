@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { BuilderTeam } from "./types";
+import { NATIONS } from "./nations";
 
 const fieldClass = "mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm";
 
@@ -13,8 +14,11 @@ const fieldClass = "mt-1 block w-full rounded-md border border-slate-700 bg-slat
  * rattache via baseRef, quelle que soit son équipe), donc le choix
  * d'équipe n'a de sens que pour une task force : le type se choisit
  * D'ABORD, l'étape équipe ne s'affiche qu'ensuite si "Task force navale".
- * La nationalité reste un simple filtre mémorisé (`preferredNation`), pas
- * un lien structurel — voir types.ts.
+ *
+ * Nationalité (troisième chantier, retour utilisateur 2026-08-15) : ne se
+ * choisit ici QUE pour une nouvelle équipe — elle fixe alors la nation du
+ * camp (voir BuilderTeam.nation, nations.ts), pas un simple filtre. Choisir
+ * une équipe existante hérite directement de sa nation déjà fixée.
  */
 export function AddContainerModal({
   teams,
@@ -24,17 +28,17 @@ export function AddContainerModal({
 }: {
   teams: BuilderTeam[];
   onClose: () => void;
-  onCreateFleet: (target: { teamClientId: string } | { newTeamName: string }, preferredNation: string) => void;
+  onCreateFleet: (target: { teamClientId: string } | { newTeamName: string; nation: string }) => void;
   onCreateAirbase: () => void;
 }) {
   const [kind, setKind] = useState<"fleet" | "airbase" | null>(null);
   const [teamChoice, setTeamChoice] = useState<string>(teams[0]?.clientId ?? "__new__");
   const [newTeamName, setNewTeamName] = useState("");
-  const [nation, setNation] = useState("");
+  const [newTeamNation, setNewTeamNation] = useState(NATIONS[0].value);
 
   function submitFleet() {
-    const target = teamChoice === "__new__" ? { newTeamName: newTeamName.trim() || `Équipe ${teams.length + 1}` } : { teamClientId: teamChoice };
-    onCreateFleet(target, nation.trim());
+    const target = teamChoice === "__new__" ? { newTeamName: newTeamName.trim() || newTeamNation, nation: newTeamNation } : { teamClientId: teamChoice };
+    onCreateFleet(target);
     onClose();
   }
 
@@ -82,15 +86,23 @@ export function AddContainerModal({
               </select>
             </label>
             {teamChoice === "__new__" && (
-              <label className="block text-xs font-medium text-slate-400">
-                Nom de la nouvelle équipe
-                <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder={`Équipe ${teams.length + 1}`} className={fieldClass} />
-              </label>
+              <>
+                <label className="block text-xs font-medium text-slate-400">
+                  Nationalité (fixe la nation du camp, filtre la bibliothèque)
+                  <select value={newTeamNation} onChange={(e) => setNewTeamNation(e.target.value)} className={fieldClass}>
+                    {NATIONS.map((n) => (
+                      <option key={n.value} value={n.value}>
+                        {n.flag} {n.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-xs font-medium text-slate-400">
+                  Nom de la nouvelle équipe
+                  <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder={newTeamNation} className={fieldClass} />
+                </label>
+              </>
             )}
-            <label className="block text-xs font-medium text-slate-400">
-              Nationalité (facultatif — filtre uniquement, préremplit l&apos;assistant &laquo; Ajouter un bâtiment &raquo;)
-              <input value={nation} onChange={(e) => setNation(e.target.value)} placeholder="ex: Royaume-Uni" className={fieldClass} />
-            </label>
             <button type="button" onClick={submitFleet} className="w-full rounded-md bg-brass-600 px-4 py-2 text-sm font-medium hover:bg-brass-500">
               Créer la task force
             </button>

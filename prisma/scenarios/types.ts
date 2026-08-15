@@ -162,6 +162,15 @@ export type ScenarioFleet = {
 export type ScenarioTeam = {
   name: string;
   colorHex: string;
+  /**
+   * Nationalité du camp (constructeur visuel, retour utilisateur
+   * 2026-08-15, troisième chantier — voir builder/nations.ts) : filtre la
+   * bibliothèque au moment de composer un scénario. Optionnel pour rester
+   * rétrocompatible avec les scénarios existants (écrits à la main ou créés
+   * avant cette fonctionnalité), qui n'en ont pas — sans impact moteur,
+   * purement informatif côté constructeur.
+   */
+  nation?: string;
   fleets: ScenarioFleet[];
 };
 

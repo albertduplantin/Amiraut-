@@ -91,7 +91,8 @@ export type BuilderFleet = {
    */
   preferredNation?: string;
 };
-export type BuilderTeam = { clientId: string; name: string; colorHex: string; fleets: BuilderFleet[] };
+/** `nation` (retour utilisateur 2026-08-15, troisième chantier) — voir nations.ts ; `colorHex` en est dérivé automatiquement, plus de choix manuel. */
+export type BuilderTeam = { clientId: string; name: string; colorHex: string; nation: string; fleets: BuilderFleet[] };
 export type BuilderAirbase = { clientId: string; key: string; name: string; lat: string; lng: string };
 export type BuilderSquadron = {
   clientId: string;

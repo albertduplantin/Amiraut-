@@ -1,12 +1,20 @@
 "use client";
 
-import type { Dispatch, DragEvent, SetStateAction } from "react";
-import type { BuilderTeam, BuilderAirbase, BuilderSquadron, ClientIdGenerator, LibraryClassOption } from "./types";
+import { useState, type Dispatch, type DragEvent, type SetStateAction } from "react";
+import type { BuilderTeam, BuilderAirbase, BuilderSquadron, BuilderUnit, ClientIdGenerator, LibraryClassOption } from "./types";
 import { allUnits } from "./types";
 import { UnitRosterRow } from "./UnitRosterRow";
 import { allowDrop, readDragPayload, setDragPayload } from "./dragDrop";
+import { NATIONS, nationFlag } from "./nations";
 
 const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm";
+
+/** Nationalité d'une unité posée — via sa classe de bibliothèque, ou sa définition en ligne héritée (voir ClassRef, types.ts). */
+function unitNation(unit: BuilderUnit, libraryClasses: LibraryClassOption[]): string | undefined {
+  const ref = unit.classRef;
+  if (ref.kind === "inline") return ref.def.nation;
+  return libraryClasses.find((c) => c.id === ref.libraryClassId)?.nation;
+}
 
 /**
  * Task forces (retour utilisateur 2026-08-14) : colonnes par équipe, cartes
@@ -44,21 +52,50 @@ export function TeamsBoard({
   onOpenUnitWizard: (teamClientId: string, fleetClientId: string) => void;
 }) {
   function addTeam() {
-    setTeams((prev) => [
-      ...prev,
-      {
-        clientId: nextClientId("team"),
-        name: `Équipe ${prev.length + 1}`,
-        colorHex: prev.length % 2 === 0 ? "#3388ff" : "#dc2626",
-        fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }],
-      },
-    ]);
+    setTeams((prev) => {
+      // Cycle sur les 6 nations plutôt qu'alterner bleu/rouge (retour
+      // utilisateur 2026-08-15, troisième chantier) — une nouvelle équipe
+      // prend la prochaine nation non encore utilisée par les équipes
+      // existantes, repli sur un cycle simple si toutes le sont déjà.
+      const usedNations = new Set(prev.map((t) => t.nation));
+      const nation = NATIONS.find((n) => !usedNations.has(n.value))?.value ?? NATIONS[prev.length % NATIONS.length].value;
+      const colorHex = NATIONS.find((n) => n.value === nation)?.colorHex ?? "#94a3b8";
+      return [
+        ...prev,
+        {
+          clientId: nextClientId("team"),
+          name: nation,
+          colorHex,
+          nation,
+          fleets: [{ clientId: nextClientId("fleet"), name: "Task Force 1", units: [] }],
+        },
+      ];
+    });
   }
   function removeTeam(teamClientId: string) {
     setTeams((prev) => prev.filter((t) => t.clientId !== teamClientId));
   }
-  function updateTeam(teamClientId: string, patch: Partial<Pick<BuilderTeam, "name" | "colorHex">>) {
-    setTeams((prev) => prev.map((t) => (t.clientId === teamClientId ? { ...t, ...patch } : t)));
+  function updateTeamName(teamClientId: string, name: string) {
+    setTeams((prev) => prev.map((t) => (t.clientId === teamClientId ? { ...t, name } : t)));
+  }
+  /**
+   * Changer le drapeau d'un camp (retour utilisateur 2026-08-15) — verrou
+   * confirmé par l'utilisateur : refusé tant qu'au moins une unité d'une
+   * AUTRE nationalité est déjà posée dans ce camp (il faut la retirer
+   * d'abord), pour ne jamais laisser un camp affiché sous un drapeau qui ne
+   * correspond pas à son contenu réel.
+   */
+  function changeTeamNation(teamClientId: string, nation: string): string | null {
+    const team = teams.find((t) => t.clientId === teamClientId);
+    if (!team) return null;
+    const mismatch = allUnits([team]).find((u) => {
+      const n = unitNation(u, libraryClasses);
+      return n && n !== nation;
+    });
+    if (mismatch) return `Impossible : « ${mismatch.name} » (${unitNation(mismatch, libraryClasses)}) est déjà dans ce camp. Retirez-la d'abord.`;
+    const colorHex = NATIONS.find((n) => n.value === nation)?.colorHex ?? team.colorHex;
+    setTeams((prev) => prev.map((t) => (t.clientId === teamClientId ? { ...t, nation, colorHex } : t)));
+    return null;
   }
   function addFleet(teamClientId: string) {
     setTeams((prev) =>
@@ -102,6 +139,19 @@ export function TeamsBoard({
     onAddUnitFromLibrary(libClass, teamClientId, fleetClientId);
   }
 
+  const [flagPickerFor, setFlagPickerFor] = useState<string | null>(null);
+  const [nationError, setNationError] = useState<string | null>(null);
+
+  function handleSelectNation(teamClientId: string, nation: string) {
+    const error = changeTeamNation(teamClientId, nation);
+    if (error) {
+      setNationError(error);
+      setTimeout(() => setNationError(null), 4000);
+      return;
+    }
+    setFlagPickerFor(null);
+  }
+
   function updateUnit(teamClientId: string, fleetClientId: string, unitClientId: string, patch: Partial<BuilderTeam["fleets"][number]["units"][number]>) {
     setTeams((prev) =>
       prev.map((t) =>
@@ -132,16 +182,39 @@ export function TeamsBoard({
           </button>
         </div>
       </div>
+      {nationError && <p className="rounded-md border border-red-800 bg-red-950/30 px-3 py-2 text-xs text-red-300">{nationError}</p>}
       <div className="grid grid-cols-1 gap-3">
         {teams.map((team) => {
           const allSurfaceUnits = allUnits(teams).filter((u) => u.classRef.category === "SURFACE_SHIP");
           return (
             <div key={team.clientId} className="panel-brass space-y-3 p-3">
-              <div className="flex items-center gap-2">
-                <input type="color" value={team.colorHex} onChange={(e) => updateTeam(team.clientId, { colorHex: e.target.value })} className="h-7 w-7 rounded border border-slate-700 bg-slate-950" />
+              <div className="relative flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFlagPickerFor((prev) => (prev === team.clientId ? null : team.clientId))}
+                  title="Nationalité du camp — filtre la bibliothèque"
+                  className="flex h-7 w-9 shrink-0 items-center justify-center rounded border border-slate-700 bg-slate-950 text-base hover:border-brass-600"
+                >
+                  {nationFlag(team.nation)}
+                </button>
+                {flagPickerFor === team.clientId && (
+                  <div className="absolute left-0 top-9 z-10 flex flex-wrap gap-1 rounded-md border border-slate-700 bg-slate-950 p-2 shadow-lg">
+                    {NATIONS.map((n) => (
+                      <button
+                        key={n.value}
+                        type="button"
+                        onClick={() => handleSelectNation(team.clientId, n.value)}
+                        title={n.label}
+                        className={`rounded px-2 py-1 text-base hover:bg-slate-900 ${team.nation === n.value ? "bg-brass-900/50 ring-1 ring-brass-500" : ""}`}
+                      >
+                        {n.flag}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <input
                   value={team.name}
-                  onChange={(e) => updateTeam(team.clientId, { name: e.target.value })}
+                  onChange={(e) => updateTeamName(team.clientId, e.target.value)}
                   className={`${fieldClass} flex-1 font-medium`}
                 />
                 <button
