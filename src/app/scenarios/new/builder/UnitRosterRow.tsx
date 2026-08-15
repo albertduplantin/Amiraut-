@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { BuilderUnit, BuilderAirbase, BuilderSquadron, BaseRef, LibraryClassOption } from "./types";
+import type { BuilderUnit, BuilderAirbase, BuilderSquadron, BaseRef, LibraryClassOption, AircraftRowView, SquadronGroupView } from "./types";
 import { resolveClassInfo } from "./types";
 import { setDragPayload, readDragPayload, allowDrop } from "./dragDrop";
 
@@ -54,6 +54,7 @@ export function UnitRosterRow({
   isExpanded,
   onToggleExpanded,
   assignedAircraft,
+  squadronGroups,
   onOpenAircraftWizardForCarrier,
 }: {
   unit: BuilderUnit;
@@ -77,7 +78,10 @@ export function UnitRosterRow({
   /** Arborescence dépliante (Phase 5, retour utilisateur 2026-08-15) — pertinent seulement pour un porte-avions, ignoré sinon. */
   isExpanded: boolean;
   onToggleExpanded: () => void;
-  assignedAircraft: { unit: BuilderUnit; onRemove: () => void; isSelectedForPlacement: boolean; onSelectForPlacement: () => void }[];
+  /** Avions rattachés directement à ce porte-avions, hors escadrille. */
+  assignedAircraft: AircraftRowView[];
+  /** Escadrilles basées sur ce porte-avions, groupées avec leurs membres (Phase 6, retour utilisateur 2026-08-15). */
+  squadronGroups: SquadronGroupView[];
   onOpenAircraftWizardForCarrier: () => void;
 }) {
   const [dropError, setDropError] = useState<string | null>(null);
@@ -191,22 +195,58 @@ export function UnitRosterRow({
           <button type="button" onClick={onOpenAircraftWizardForCarrier} className="text-[11px] text-brass-400 hover:text-brass-300" title="Choisir un type d'avion, puis la classe précise">
             + Avion
           </button>
-          {assignedAircraft.length === 0 ? (
+          {squadronGroups.length === 0 && assignedAircraft.length === 0 ? (
             <p className="text-[11px] text-slate-600">Aucun avion rattaché — glissez-en un depuis la bibliothèque.</p>
           ) : (
-            <ul className="space-y-1">
-              {assignedAircraft.map((a) => (
-                <li key={a.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px]">
-                  <span className="flex-1 truncate">{a.unit.name}</span>
-                  <button type="button" onClick={a.onSelectForPlacement} title="Placer en cliquant sur la carte" className={a.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
-                    🎯
-                  </button>
-                  <button type="button" onClick={a.onRemove} className="text-red-500 hover:text-red-400" title="Retirer">
-                    ✕
-                  </button>
-                </li>
+            <>
+              {squadronGroups.map((group) => (
+                <div key={group.squadron.clientId} className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
+                  <div className="flex items-center gap-2">
+                    <span title="Escadrille" className="shrink-0 text-brass-500">
+                      ✈✈
+                    </span>
+                    <input
+                      value={group.squadron.name}
+                      onChange={(e) => group.onRename(e.target.value)}
+                      className={`${fieldClass} min-w-[6rem] flex-1`}
+                      placeholder="Nom de l'escadrille"
+                    />
+                    <span className="shrink-0 text-[11px] text-slate-500">({group.members.length})</span>
+                    <button type="button" onClick={group.onRemove} className="shrink-0 text-[11px] text-red-500 hover:text-red-400" title="Supprimer l'escadrille (détache ses avions)">
+                      ✕
+                    </button>
+                  </div>
+                  <ul className="mt-1 space-y-1">
+                    {group.members.map((a) => (
+                      <li key={a.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-900/60 px-2 py-1 text-[11px]">
+                        <span className="flex-1 truncate">{a.unit.name}</span>
+                        <button type="button" onClick={a.onSelectForPlacement} title="Placer en cliquant sur la carte" className={a.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
+                          🎯
+                        </button>
+                        <button type="button" onClick={a.onRemove} className="text-red-500 hover:text-red-400" title="Retirer">
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+              {assignedAircraft.length > 0 && (
+                <ul className="space-y-1">
+                  {assignedAircraft.map((a) => (
+                    <li key={a.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px]">
+                      <span className="flex-1 truncate">{a.unit.name}</span>
+                      <button type="button" onClick={a.onSelectForPlacement} title="Placer en cliquant sur la carte" className={a.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
+                        🎯
+                      </button>
+                      <button type="button" onClick={a.onRemove} className="text-red-500 hover:text-red-400" title="Retirer">
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </div>
       )}

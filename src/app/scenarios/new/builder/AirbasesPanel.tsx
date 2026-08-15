@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { BuilderAirbase, BuilderUnit, LibraryClassOption } from "./types";
+import type { BuilderAirbase, LibraryClassOption, AircraftRowView, SquadronGroupView } from "./types";
 import { allowDrop, readDragPayload, setDragPayload } from "./dragDrop";
 
 const fieldClass = "rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs";
-
-export type AircraftRow = { unit: BuilderUnit; onRemove: () => void; isSelectedForPlacement: boolean; onSelectForPlacement: () => void };
 
 /**
  * Bases aériennes d'UNE équipe (retour utilisateur 2026-08-15, troisième
@@ -46,6 +44,7 @@ export function AirbasesPanel({
   expanded,
   onToggleExpanded,
   getAssignedAircraft,
+  getSquadronGroups,
 }: {
   airbases: BuilderAirbase[];
   libraryClasses: LibraryClassOption[];
@@ -64,7 +63,10 @@ export function AirbasesPanel({
   /** Arborescence dépliante (Phase 5, retour utilisateur 2026-08-15) — Set partagé avec TeamsBoard.tsx. */
   expanded: Set<string>;
   onToggleExpanded: (clientId: string) => void;
-  getAssignedAircraft: (airbaseKey: string) => AircraftRow[];
+  /** Avions rattachés directement à la base, hors escadrille (Phase 5). */
+  getAssignedAircraft: (airbaseKey: string) => AircraftRowView[];
+  /** Escadrilles de la base, groupées avec leurs membres (Phase 6, retour utilisateur 2026-08-15 — ajout groupé d'avions). */
+  getSquadronGroups: (airbaseKey: string) => SquadronGroupView[];
 }) {
   const [dropError, setDropError] = useState<string | null>(null);
 
@@ -107,6 +109,7 @@ export function AirbasesPanel({
         {airbases.map((a) => {
           const isExpanded = expanded.has(a.clientId);
           const assigned = isExpanded ? getAssignedAircraft(a.key) : [];
+          const squadronGroups = isExpanded ? getSquadronGroups(a.key) : [];
           return (
             <li
               key={a.clientId}
@@ -149,22 +152,58 @@ export function AirbasesPanel({
                   >
                     + Avion
                   </button>
-                  {assigned.length === 0 ? (
+                  {squadronGroups.length === 0 && assigned.length === 0 ? (
                     <p className="text-[11px] text-slate-600">Aucun avion rattaché — glissez-en un depuis la bibliothèque.</p>
                   ) : (
-                    <ul className="space-y-1">
-                      {assigned.map((row) => (
-                        <li key={row.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px]">
-                          <span className="flex-1 truncate">{row.unit.name}</span>
-                          <button type="button" onClick={row.onSelectForPlacement} title="Placer en cliquant sur la carte" className={row.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
-                            🎯
-                          </button>
-                          <button type="button" onClick={row.onRemove} className="text-red-500 hover:text-red-400" title="Retirer">
-                            ✕
-                          </button>
-                        </li>
+                    <>
+                      {squadronGroups.map((group) => (
+                        <div key={group.squadron.clientId} className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
+                          <div className="flex items-center gap-2">
+                            <span title="Escadrille" className="shrink-0 text-brass-500">
+                              ✈✈
+                            </span>
+                            <input
+                              value={group.squadron.name}
+                              onChange={(e) => group.onRename(e.target.value)}
+                              className={`${fieldClass} min-w-[6rem] flex-1`}
+                              placeholder="Nom de l'escadrille"
+                            />
+                            <span className="shrink-0 text-[11px] text-slate-500">({group.members.length})</span>
+                            <button type="button" onClick={group.onRemove} className="shrink-0 text-[11px] text-red-500 hover:text-red-400" title="Supprimer l'escadrille (détache ses avions)">
+                              ✕
+                            </button>
+                          </div>
+                          <ul className="mt-1 space-y-1">
+                            {group.members.map((row) => (
+                              <li key={row.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-900/60 px-2 py-1 text-[11px]">
+                                <span className="flex-1 truncate">{row.unit.name}</span>
+                                <button type="button" onClick={row.onSelectForPlacement} title="Placer en cliquant sur la carte" className={row.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
+                                  🎯
+                                </button>
+                                <button type="button" onClick={row.onRemove} className="text-red-500 hover:text-red-400" title="Retirer">
+                                  ✕
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       ))}
-                    </ul>
+                      {assigned.length > 0 && (
+                        <ul className="space-y-1">
+                          {assigned.map((row) => (
+                            <li key={row.unit.clientId} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px]">
+                              <span className="flex-1 truncate">{row.unit.name}</span>
+                              <button type="button" onClick={row.onSelectForPlacement} title="Placer en cliquant sur la carte" className={row.isSelectedForPlacement ? "text-brass-300" : "text-brass-500 hover:text-brass-400"}>
+                                🎯
+                              </button>
+                              <button type="button" onClick={row.onRemove} className="text-red-500 hover:text-red-400" title="Retirer">
+                                ✕
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
                   )}
                 </div>
               )}

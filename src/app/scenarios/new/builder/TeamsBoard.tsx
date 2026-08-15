@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, type Dispatch, type DragEvent, type SetStateAction } from "react";
-import type { BuilderTeam, BuilderAirbase, BuilderSquadron, BuilderUnit, ClientIdGenerator, LibraryClassOption } from "./types";
-import { allUnits, aircraftForCarrier, aircraftForAirbase } from "./types";
+import type { BuilderTeam, BuilderAirbase, BuilderSquadron, BuilderUnit, ClientIdGenerator, LibraryClassOption, SquadronGroupView } from "./types";
+import { allUnits, aircraftForCarrier, aircraftForAirbase, squadronsForAirbase, squadronsForCarrier, unitsInSquadron } from "./types";
 import { UnitRosterRow } from "./UnitRosterRow";
 import { AirbasesPanel } from "./AirbasesPanel";
 import { allowDrop, readDragPayload, setDragPayload } from "./dragDrop";
@@ -47,6 +47,8 @@ export function TeamsBoard({
   onOpenAircraftWizard,
   onAddAircraftToCarrier,
   onOpenAircraftWizardForCarrier,
+  onUpdateSquadron,
+  onRemoveSquadron,
   selectedFleetClientId,
   onSelectFleetForPlacement,
 }: {
@@ -84,6 +86,9 @@ export function TeamsBoard({
   onAddAircraftToCarrier: (libClass: LibraryClassOption, teamClientId: string, carrierUnitName: string) => void;
   /** Assistant guidé "+ Avion" sur un porte-avions (Phase 5, retour utilisateur 2026-08-15 — même bouton que sur une base, une fois l'affichage dépliant construit). */
   onOpenAircraftWizardForCarrier: (teamClientId: string, carrierUnitName: string) => void;
+  /** Renommer/supprimer une escadrille depuis l'arbre (Phase 6, retour utilisateur 2026-08-15) — plus de panneau `SquadronsPanel` séparé. */
+  onUpdateSquadron: (clientId: string, patch: Partial<BuilderSquadron>) => void;
+  onRemoveSquadron: (clientId: string) => void;
   /** Positionnement de groupe (Phase 5, retour utilisateur 2026-08-15) — bouton 🎯 en plus du glisser-déposer déjà là. */
   selectedFleetClientId: string | null;
   onSelectFleetForPlacement: (teamClientId: string, fleetClientId: string) => void;
@@ -288,6 +293,27 @@ export function TeamsBoard({
     }));
   }
 
+  /** Escadrilles d'une base/d'un porte-avions, groupées avec leurs membres pré-liés (Phase 6, retour utilisateur 2026-08-15 — ajout groupé d'avions). Factorisé une fois, utilisé par les deux cibles possibles d'une escadrille. */
+  function squadronGroups(matching: BuilderSquadron[]): SquadronGroupView[] {
+    return matching.map((squadron) => ({
+      squadron,
+      onRemove: () => onRemoveSquadron(squadron.clientId),
+      onRename: (name: string) => onUpdateSquadron(squadron.clientId, { name }),
+      members: unitsInSquadron(teams, squadron.key).map((lu) => ({
+        unit: lu.unit,
+        onRemove: () => removeUnit(lu.teamClientId, lu.fleetClientId, lu.unit.clientId),
+        isSelectedForPlacement: selectedUnitClientId === lu.unit.clientId,
+        onSelectForPlacement: () => onSelectUnitForPlacement(lu.teamClientId, lu.fleetClientId, lu.unit.clientId),
+      })),
+    }));
+  }
+  function airbaseSquadronGroups(airbaseKey: string): SquadronGroupView[] {
+    return squadronGroups(squadronsForAirbase(squadrons, airbaseKey));
+  }
+  function carrierSquadronGroups(carrierUnitName: string): SquadronGroupView[] {
+    return squadronGroups(squadronsForCarrier(squadrons, carrierUnitName));
+  }
+
   function updateUnit(teamClientId: string, fleetClientId: string, unitClientId: string, patch: Partial<BuilderTeam["fleets"][number]["units"][number]>) {
     setTeams((prev) =>
       prev.map((t) =>
@@ -444,6 +470,7 @@ export function TeamsBoard({
                                   isExpanded={expanded.has(unit.clientId)}
                                   onToggleExpanded={() => toggleExpanded(unit.clientId)}
                                   assignedAircraft={carrierAircraftRows(unit)}
+                                  squadronGroups={carrierSquadronGroups(unit.name)}
                                   onOpenAircraftWizardForCarrier={() => onOpenAircraftWizardForCarrier(team.clientId, unit.name)}
                                 />
                               ))}
@@ -474,6 +501,7 @@ export function TeamsBoard({
                 expanded={expanded}
                 onToggleExpanded={toggleExpanded}
                 getAssignedAircraft={airbaseAircraftRows}
+                getSquadronGroups={airbaseSquadronGroups}
               />
 
               <div className="space-y-2 border-t border-slate-800 pt-2">
@@ -534,6 +562,7 @@ export function TeamsBoard({
                                 isExpanded={false}
                                 onToggleExpanded={() => {}}
                                 assignedAircraft={[]}
+                                squadronGroups={[]}
                                 onOpenAircraftWizardForCarrier={() => {}}
                               />
                             ))}

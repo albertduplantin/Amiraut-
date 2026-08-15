@@ -20,12 +20,10 @@ import {
   type ClientIdGenerator,
   createClientIdGenerator,
   allUnits,
-  surfaceShipUnits,
   aircraftForAirbase,
 } from "./builder/types";
 import { LibraryBrowserPanel } from "./builder/LibraryBrowserPanel";
 import { TeamsBoard } from "./builder/TeamsBoard";
-import { SquadronsPanel } from "./builder/SquadronsPanel";
 import { allowDrop, readDragPayload } from "./builder/dragDrop";
 import { applyFormationAtCenter } from "./builder/formation";
 import { AddContainerModal } from "./builder/AddContainerModal";
@@ -510,26 +508,40 @@ export function ScenarioEditorForm({
     return clientId;
   }
 
-  /** Avion ajouté directement à une base aérienne (Phase 4, retour utilisateur 2026-08-15) — glisser-déposer ou assistant "+ Avion". */
-  function handleAddAircraftToAirbase(libClass: LibraryClassOption, teamClientId: string, airbaseKey: string) {
+  /**
+   * Ajoute un ou plusieurs avions de la même classe à une base/un
+   * porte-avions (Phase 4, étendu Phase 6, retour utilisateur
+   * 2026-08-15) : quantité 1 (par défaut) = comportement inchangé,
+   * quantité > 1 = crée EN PLUS une escadrille (voir §4.1.1.1 Amirauté
+   * 2013, déjà cité au chantier précédent — les avions groupés hors
+   * reconnaissance/attaque isolée forment une escadrille), chaque avion
+   * rattaché à elle plutôt que directement à la base/au porte-avions.
+   */
+  function addAircraftToBase(libClass: LibraryClassOption, teamClientId: string, target: { kind: "airbase"; key: string } | { kind: "carrier"; unitName: string }, quantity: number) {
     const fleetClientId = ensureAviationFleet(teamClientId);
-    const newUnit = buildUnitFromLibraryClass(libClass, { kind: "airbase", key: airbaseKey });
+    const directBaseRef: BaseRef = target.kind === "airbase" ? { kind: "airbase", key: target.key } : { kind: "carrier", unitName: target.unitName };
+    let unitBaseRef: BaseRef = directBaseRef;
+    if (quantity > 1) {
+      const squadronKey = `escadrille-${squadronsState.length + 1}`;
+      setSquadronsState((prev) => [...prev, { clientId: nextClientId("squadron"), key: squadronKey, name: `Escadrille ${libClass.name}`, baseRef: directBaseRef }]);
+      unitBaseRef = { kind: "squadron", key: squadronKey };
+    }
+    const newUnits = Array.from({ length: Math.max(1, quantity) }, () => buildUnitFromLibraryClass(libClass, unitBaseRef));
     setTeams((prev) =>
       prev.map((t) =>
-        t.clientId === teamClientId ? { ...t, fleets: t.fleets.map((f) => (f.clientId === fleetClientId ? { ...f, units: [...f.units, newUnit] } : f)) } : t
+        t.clientId === teamClientId ? { ...t, fleets: t.fleets.map((f) => (f.clientId === fleetClientId ? { ...f, units: [...f.units, ...newUnits] } : f)) } : t
       )
     );
   }
 
-  /** Avion ajouté directement à un porte-avions (Phase 4, retour utilisateur 2026-08-15) — glisser-déposer sur le navire. */
-  function handleAddAircraftToCarrier(libClass: LibraryClassOption, teamClientId: string, carrierUnitName: string) {
-    const fleetClientId = ensureAviationFleet(teamClientId);
-    const newUnit = buildUnitFromLibraryClass(libClass, { kind: "carrier", unitName: carrierUnitName });
-    setTeams((prev) =>
-      prev.map((t) =>
-        t.clientId === teamClientId ? { ...t, fleets: t.fleets.map((f) => (f.clientId === fleetClientId ? { ...f, units: [...f.units, newUnit] } : f)) } : t
-      )
-    );
+  /** Avion(s) ajouté(s) directement à une base aérienne (Phase 4/6, retour utilisateur 2026-08-15) — glisser-déposer ou assistant "+ Avion". */
+  function handleAddAircraftToAirbase(libClass: LibraryClassOption, teamClientId: string, airbaseKey: string, quantity = 1) {
+    addAircraftToBase(libClass, teamClientId, { kind: "airbase", key: airbaseKey }, quantity);
+  }
+
+  /** Avion(s) ajouté(s) directement à un porte-avions (Phase 4/6, retour utilisateur 2026-08-15) — glisser-déposer sur le navire ou assistant "+ Avion". */
+  function handleAddAircraftToCarrier(libClass: LibraryClassOption, teamClientId: string, carrierUnitName: string, quantity = 1) {
+    addAircraftToBase(libClass, teamClientId, { kind: "carrier", unitName: carrierUnitName }, quantity);
   }
 
 /**
@@ -635,9 +647,13 @@ export function ScenarioEditorForm({
     );
   }
 
-  function handleAddSquadron() {
-    setSquadronsState((prev) => [...prev, { clientId: nextClientId("squadron"), key: `escadrille-${prev.length + 1}`, name: "", baseRef: { kind: "none" } }]);
-  }
+  /**
+   * Renommer/supprimer une escadrille (Phase 6, retour utilisateur
+   * 2026-08-15) — plus de création manuelle d'escadrille vide ni de
+   * panneau `SquadronsPanel` séparé : une escadrille naît toujours d'un
+   * ajout groupé (voir `addAircraftToBase`), et se gère ensuite depuis
+   * l'arborescence (dépliant sa base/son porte-avions, TeamsBoard.tsx).
+   */
   function handleUpdateSquadron(clientId: string, patch: Partial<BuilderSquadron>) {
     setSquadronsState((prev) => prev.map((s) => (s.clientId === clientId ? { ...s, ...patch } : s)));
   }
@@ -647,14 +663,6 @@ export function ScenarioEditorForm({
     if (!removed) return;
     setTeams((prev) => detachAircraftFromBase(prev, (baseRef) => baseRef.kind === "squadron" && baseRef.key === removed.key));
   }
-
-  const memberCountByKey = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const u of allUnits(teams)) {
-      if (u.baseRef.kind === "squadron") map.set(u.baseRef.key, (map.get(u.baseRef.key) ?? 0) + 1);
-    }
-    return map;
-  }, [teams]);
 
   const { definition, validationIssues } = useMemo(() => {
     const unitClassMap = new Map<string, ScenarioUnitClass | { key: string; libraryKey: string }>();
@@ -967,18 +975,8 @@ export function ScenarioEditorForm({
                 onOpenAircraftWizard={(teamClientId, airbaseKey) => setAircraftWizardFor({ teamClientId, target: { kind: "airbase", airbaseKey } })}
                 onAddAircraftToCarrier={handleAddAircraftToCarrier}
                 onOpenAircraftWizardForCarrier={(teamClientId, carrierUnitName) => setAircraftWizardFor({ teamClientId, target: { kind: "carrier", carrierUnitName } })}
-              />
-              <SquadronsPanel
-                squadrons={squadronsState}
-                airbases={airbasesState}
-                carrierCandidates={surfaceShipUnits(teams)}
-                memberCountByKey={memberCountByKey}
-                onAdd={handleAddSquadron}
-                onUpdate={handleUpdateSquadron}
-                onRemove={handleRemoveSquadron}
-                onAssignAircraft={(teamClientId, fleetClientId, unitClientId, squadronKey) =>
-                  handleAssignUnitBaseRef(teamClientId, fleetClientId, unitClientId, { kind: "squadron", key: squadronKey })
-                }
+                onUpdateSquadron={handleUpdateSquadron}
+                onRemoveSquadron={handleRemoveSquadron}
               />
             </>
           )}
@@ -1149,7 +1147,7 @@ export function ScenarioEditorForm({
                 libraryClasses={libraryClasses}
                 preferredNation={team.nation}
                 onClose={() => setAircraftWizardFor(null)}
-                onPick={(libClass) => handleAddAircraftToAirbase(libClass, aircraftWizardFor.teamClientId, target.airbaseKey)}
+                onPick={(libClass, quantity) => handleAddAircraftToAirbase(libClass, aircraftWizardFor.teamClientId, target.airbaseKey, quantity)}
               />
             );
           }
@@ -1159,7 +1157,7 @@ export function ScenarioEditorForm({
               libraryClasses={libraryClasses}
               preferredNation={team.nation}
               onClose={() => setAircraftWizardFor(null)}
-              onPick={(libClass) => handleAddAircraftToCarrier(libClass, aircraftWizardFor.teamClientId, target.carrierUnitName)}
+              onPick={(libClass, quantity) => handleAddAircraftToCarrier(libClass, aircraftWizardFor.teamClientId, target.carrierUnitName, quantity)}
             />
           );
         })()}

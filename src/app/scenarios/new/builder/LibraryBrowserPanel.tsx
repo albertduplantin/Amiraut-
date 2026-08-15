@@ -36,6 +36,15 @@ type Target =
  * plus simple qu'un filtre dynamique de la liste selon la ligne survolée
  * (chaque ligne a son propre bouton "+ Ajouter", la cible reste un choix
  * global fait une fois).
+ *
+ * Quantité pour les avions (Phase 6, retour utilisateur 2026-08-15—
+ * "pouvoir en ajouter plusieurs du même type à la fois [...] cela devient
+ * une escadrille") : un petit sélecteur -/+ apparaît à côté du bouton
+ * "+ Ajouter" d'une classe AVION uniquement — 1 = avion isolé (comportement
+ * inchangé), plus de 1 = escadrille auto-créée (voir addAircraftToBase,
+ * ScenarioEditorForm.tsx). Un seul sélecteur partagé pour toute la liste
+ * plutôt qu'un par ligne : plus simple, et la quantité n'a de sens que pour
+ * l'avion qu'on est en train d'ajouter.
  */
 export function LibraryBrowserPanel({
   classes,
@@ -49,12 +58,13 @@ export function LibraryBrowserPanel({
   teams: BuilderTeam[];
   airbases: BuilderAirbase[];
   onAddUnit: (libraryClass: LibraryClassOption, teamClientId: string, fleetClientId: string) => void;
-  onAddAircraftToAirbase: (libraryClass: LibraryClassOption, teamClientId: string, airbaseKey: string) => void;
-  onAddAircraftToCarrier: (libraryClass: LibraryClassOption, teamClientId: string, carrierUnitName: string) => void;
+  onAddAircraftToAirbase: (libraryClass: LibraryClassOption, teamClientId: string, airbaseKey: string, quantity?: number) => void;
+  onAddAircraftToCarrier: (libraryClass: LibraryClassOption, teamClientId: string, carrierUnitName: string, quantity?: number) => void;
 }) {
   const [extraClasses, setExtraClasses] = useState<LibraryClassOption[]>([]);
   const [showQuickCreate, setShowQuickCreate] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [aircraftQuantity, setAircraftQuantity] = useState(1);
   const allClasses = [...classes, ...extraClasses];
 
   const targets: Target[] = [
@@ -95,8 +105,8 @@ export function LibraryBrowserPanel({
       return;
     }
     if (t.kind === "fleet") onAddUnit(libClass, t.teamClientId, t.fleetClientId);
-    else if (t.kind === "airbase") onAddAircraftToAirbase(libClass, t.teamClientId, t.airbaseKey);
-    else onAddAircraftToCarrier(libClass, t.teamClientId, t.carrierUnitName);
+    else if (t.kind === "airbase") onAddAircraftToAirbase(libClass, t.teamClientId, t.airbaseKey, aircraftQuantity);
+    else onAddAircraftToCarrier(libClass, t.teamClientId, t.carrierUnitName, aircraftQuantity);
   }
 
   return (
@@ -124,6 +134,32 @@ export function LibraryBrowserPanel({
           ))}
         </select>
       </label>
+      {(() => {
+        const t = targets.find((x) => x.value === effectiveTarget);
+        if (!t || t.kind === "fleet") return null;
+        return (
+          <label className="block text-xs text-slate-400">
+            Quantité (avions)
+            <div className="mt-1 flex items-center gap-1">
+              <button type="button" onClick={() => setAircraftQuantity((q) => Math.max(1, q - 1))} className="rounded border border-slate-700 px-2 py-1 hover:bg-slate-900">
+                −
+              </button>
+              <input
+                type="number"
+                min={1}
+                max={24}
+                value={aircraftQuantity}
+                onChange={(e) => setAircraftQuantity(Math.min(24, Math.max(1, Number(e.target.value) || 1)))}
+                className="w-12 rounded-md border border-slate-700 bg-slate-950 px-1 py-1 text-center text-xs"
+              />
+              <button type="button" onClick={() => setAircraftQuantity((q) => Math.min(24, q + 1))} className="rounded border border-slate-700 px-2 py-1 hover:bg-slate-900">
+                +
+              </button>
+              {aircraftQuantity > 1 && <span className="ml-1 text-[11px] text-brass-400">→ escadrille de {aircraftQuantity}</span>}
+            </div>
+          </label>
+        );
+      })()}
       {addError && <p className="text-xs text-red-400">{addError}</p>}
 
       {allClasses.length === 0 && <p className="text-xs text-slate-600">Aucune classe dans la bibliothèque.</p>}

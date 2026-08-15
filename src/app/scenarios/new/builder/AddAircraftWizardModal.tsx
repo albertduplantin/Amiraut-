@@ -7,10 +7,15 @@ import { AIRCRAFT_TYPES, typeLabel } from "./unitTypeTaxonomy";
 /**
  * Assistant "+ Avion" (Phase 4, retour utilisateur 2026-08-15, troisième
  * chantier) — variante d'`AddUnitWizardModal.tsx` (même squelette : puces
- * de type → liste filtrée par nation → choix) pour une base aérienne. Un
- * porte-avions gagnera le même bouton en Phase 5, une fois son affichage
- * dépliant construit (voir le plan) — le glisser-déposer d'une classe
- * avion directement sur le porte-avions fonctionne déjà sans attendre.
+ * de type → liste filtrée par nation → choix) pour une base aérienne ou un
+ * porte-avions (Phase 5, une fois l'affichage dépliant construit).
+ *
+ * Quantité (Phase 6, retour utilisateur 2026-08-15 — "pouvoir en ajouter
+ * plusieurs du même type à la fois [...] dans ce cas cela devient une
+ * escadrille") : un sélecteur -/+ au-dessus de la liste, appliqué à
+ * n'importe quelle classe cliquée ensuite. 1 = comportement inchangé
+ * (avion isolé) ; plus de 1 = crée une escadrille (voir addAircraftToBase,
+ * ScenarioEditorForm.tsx).
  */
 export function AddAircraftWizardModal({
   targetLabel,
@@ -23,10 +28,11 @@ export function AddAircraftWizardModal({
   libraryClasses: LibraryClassOption[];
   preferredNation?: string;
   onClose: () => void;
-  onPick: (libClass: LibraryClassOption) => void;
+  onPick: (libClass: LibraryClassOption, quantity: number) => void;
 }) {
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [nationFilter, setNationFilter] = useState(preferredNation ?? "");
+  const [quantity, setQuantity] = useState(1);
 
   const aircraftClasses = useMemo(() => libraryClasses.filter((c) => c.category === "AIRCRAFT"), [libraryClasses]);
 
@@ -72,17 +78,39 @@ export function AddAircraftWizardModal({
 
         {selectedType && (
           <div className="mt-4 border-t border-slate-800 pt-3">
-            <label className="block text-xs font-medium text-slate-400">
-              Nationalité (filtre)
-              <select value={nationFilter} onChange={(e) => setNationFilter(e.target.value)} className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm">
-                <option value="">Toutes</option>
-                {nations.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="flex gap-3">
+              <label className="flex-1 text-xs font-medium text-slate-400">
+                Nationalité (filtre)
+                <select value={nationFilter} onChange={(e) => setNationFilter(e.target.value)} className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm">
+                  <option value="">Toutes</option>
+                  {nations.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-medium text-slate-400">
+                Quantité
+                <div className="mt-1 flex items-center gap-1">
+                  <button type="button" onClick={() => setQuantity((q) => Math.max(1, q - 1))} className="rounded border border-slate-700 px-2 py-1.5 hover:bg-slate-900">
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={quantity}
+                    onChange={(e) => setQuantity(Math.min(24, Math.max(1, Number(e.target.value) || 1)))}
+                    className="w-12 rounded-md border border-slate-700 bg-slate-950 px-1 py-1.5 text-center text-sm"
+                  />
+                  <button type="button" onClick={() => setQuantity((q) => Math.min(24, q + 1))} className="rounded border border-slate-700 px-2 py-1.5 hover:bg-slate-900">
+                    +
+                  </button>
+                </div>
+              </label>
+            </div>
+            {quantity > 1 && <p className="mt-2 text-[11px] text-brass-400">{quantity} avions du même type → une escadrille sera créée.</p>}
 
             <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto">
               {filtered.length === 0 && <p className="text-xs text-slate-600">Aucune classe {typeLabel("AIRCRAFT", selectedType).toLowerCase()} pour ce filtre.</p>}
@@ -91,7 +119,7 @@ export function AddAircraftWizardModal({
                   <button
                     type="button"
                     onClick={() => {
-                      onPick(c);
+                      onPick(c, quantity);
                       onClose();
                     }}
                     className="flex w-full items-center justify-between rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-left text-sm hover:border-brass-600 hover:bg-brass-950/20"

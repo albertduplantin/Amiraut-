@@ -149,3 +149,24 @@ export function aircraftForAirbase(teams: BuilderTeam[], airbaseKey: string): Lo
 export function aircraftForCarrier(teams: BuilderTeam[], carrierUnitName: string): LocatedUnit[] {
   return allLocatedUnits(teams).filter((lu) => lu.unit.baseRef.kind === "carrier" && lu.unit.baseRef.unitName === carrierUnitName);
 }
+
+/** Membres d'une escadrille donnée (Phase 6, retour utilisateur 2026-08-15) — pour l'afficher en dépliant sa base/son porte-avions. */
+export function unitsInSquadron(teams: BuilderTeam[], squadronKey: string): LocatedUnit[] {
+  return allLocatedUnits(teams).filter((lu) => lu.unit.baseRef.kind === "squadron" && lu.unit.baseRef.key === squadronKey);
+}
+
+/** Escadrilles basées sur une base aérienne donnée (Phase 6, retour utilisateur 2026-08-15). */
+export function squadronsForAirbase(squadrons: BuilderSquadron[], airbaseKey: string): BuilderSquadron[] {
+  return squadrons.filter((s) => s.baseRef.kind === "airbase" && s.baseRef.key === airbaseKey);
+}
+
+/** Escadrilles basées sur un porte-avions donné (Phase 6, retour utilisateur 2026-08-15). */
+export function squadronsForCarrier(squadrons: BuilderSquadron[], carrierUnitName: string): BuilderSquadron[] {
+  return squadrons.filter((s) => s.baseRef.kind === "carrier" && s.baseRef.unitName === carrierUnitName);
+}
+
+/** Vue pré-liée d'un avion posé (bouton retirer/placer déjà connectés à son teamClientId/fleetClientId réels — voir LocatedUnit) — Phase 5/6, partagée par AirbasesPanel.tsx et UnitRosterRow.tsx (vue porte-avions). */
+export type AircraftRowView = { unit: BuilderUnit; onRemove: () => void; isSelectedForPlacement: boolean; onSelectForPlacement: () => void };
+
+/** Escadrille + ses membres pré-liés, pour affichage groupé en dépliant une base aérienne/un porte-avions (Phase 6, retour utilisateur 2026-08-15 — "si plus tard on clique en dépliant le contenu de la base aérienne on doit voir les escadrilles"). Plus de panneau `SquadronsPanel` séparé : renommer/supprimer se fait directement depuis ce groupe. */
+export type SquadronGroupView = { squadron: BuilderSquadron; onRemove: () => void; onRename: (name: string) => void; members: AircraftRowView[] };
