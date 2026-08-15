@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { LibraryClassOption, BuilderTeam, BuilderAirbase, UnitCategory } from "./types";
 import { carrierUnits } from "./types";
 import { setDragPayload } from "./dragDrop";
+import { nationFlag } from "./nations";
 // Chemin : builder/ → new/ → scenarios/ → app/ → library/ (trois niveaux).
 import { QuickCreateClassModal } from "../../../library/QuickCreateClassModal";
 
@@ -45,6 +46,13 @@ type Target =
  * ScenarioEditorForm.tsx). Un seul sélecteur partagé pour toute la liste
  * plutôt qu'un par ligne : plus simple, et la quantité n'a de sens que pour
  * l'avion qu'on est en train d'ajouter.
+ *
+ * Filtre nation (Phase 7, retour utilisateur 2026-08-15 — "si un camp a
+ * une nationalité, on ne puisse choisir que les bateaux de cette
+ * nationalité") : une fois une cible choisie dans "Ajouter à…", la liste
+ * ENTIÈRE se filtre sur la nation de l'équipe propriétaire de cette cible
+ * — restreint aussi ce qui peut être glissé-déposé, pas seulement le
+ * bouton "+ Ajouter", puisque c'est la même liste pour les deux chemins.
  */
 export function LibraryBrowserPanel({
   classes,
@@ -83,9 +91,11 @@ export function LibraryBrowserPanel({
   ];
   const [target, setTarget] = useState(targets[0]?.value ?? "");
   const effectiveTarget = targets.some((t) => t.value === target) ? target : (targets[0]?.value ?? "");
+  const targetTeamNation = teams.find((t) => t.clientId === targets.find((x) => x.value === effectiveTarget)?.teamClientId)?.nation ?? null;
+  const visibleClasses = targetTeamNation ? allClasses.filter((c) => c.nation === targetTeamNation) : allClasses;
 
   const byCategory = new Map<UnitCategory, LibraryClassOption[]>();
-  for (const c of allClasses) {
+  for (const c of visibleClasses) {
     const list = byCategory.get(c.category) ?? [];
     list.push(c);
     byCategory.set(c.category, list);
@@ -134,6 +144,11 @@ export function LibraryBrowserPanel({
           ))}
         </select>
       </label>
+      {targetTeamNation && (
+        <p className="text-[11px] text-slate-500">
+          Filtré sur {nationFlag(targetTeamNation)} {targetTeamNation}.
+        </p>
+      )}
       {(() => {
         const t = targets.find((x) => x.value === effectiveTarget);
         if (!t || t.kind === "fleet") return null;
@@ -162,7 +177,11 @@ export function LibraryBrowserPanel({
       })()}
       {addError && <p className="text-xs text-red-400">{addError}</p>}
 
-      {allClasses.length === 0 && <p className="text-xs text-slate-600">Aucune classe dans la bibliothèque.</p>}
+      {visibleClasses.length === 0 && (
+        <p className="text-xs text-slate-600">
+          {allClasses.length === 0 ? "Aucune classe dans la bibliothèque." : `Aucune classe ${targetTeamNation} dans la bibliothèque.`}
+        </p>
+      )}
 
       <div className="max-h-[28rem] space-y-4 overflow-y-auto pr-1">
         {(["SURFACE_SHIP", "SUBMARINE", "AIRCRAFT"] as const).map((cat) => {

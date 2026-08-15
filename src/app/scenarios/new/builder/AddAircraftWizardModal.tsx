@@ -16,25 +16,30 @@ import { AIRCRAFT_TYPES, typeLabel } from "./unitTypeTaxonomy";
  * n'importe quelle classe cliquée ensuite. 1 = comportement inchangé
  * (avion isolé) ; plus de 1 = crée une escadrille (voir addAircraftToBase,
  * ScenarioEditorForm.tsx).
+ *
+ * Filtre nation (Phase 7, retour utilisateur 2026-08-15 — "si un camp a
+ * une nationalité, on ne puisse choisir que les bateaux de cette
+ * nationalité") : `nation` est un FILTRE DUR (la nation du camp
+ * propriétaire de la cible), plus un simple filtre manuel — le sélecteur
+ * "Nationalité (filtre)" a disparu.
  */
 export function AddAircraftWizardModal({
   targetLabel,
   libraryClasses,
-  preferredNation,
+  nation,
   onClose,
   onPick,
 }: {
   targetLabel: string;
   libraryClasses: LibraryClassOption[];
-  preferredNation?: string;
+  nation: string;
   onClose: () => void;
   onPick: (libClass: LibraryClassOption, quantity: number) => void;
 }) {
   const [selectedType, setSelectedType] = useState<string | null>(null);
-  const [nationFilter, setNationFilter] = useState(preferredNation ?? "");
   const [quantity, setQuantity] = useState(1);
 
-  const aircraftClasses = useMemo(() => libraryClasses.filter((c) => c.category === "AIRCRAFT"), [libraryClasses]);
+  const aircraftClasses = useMemo(() => libraryClasses.filter((c) => c.category === "AIRCRAFT" && c.nation === nation), [libraryClasses, nation]);
 
   const countByType = useMemo(() => {
     const counts = new Map<string, number>();
@@ -42,12 +47,10 @@ export function AddAircraftWizardModal({
     return counts;
   }, [aircraftClasses]);
 
-  const nations = useMemo(() => Array.from(new Set(aircraftClasses.map((c) => c.nation))).sort(), [aircraftClasses]);
-
   const filtered = useMemo(() => {
     if (!selectedType) return [];
-    return aircraftClasses.filter((c) => c.iconKey === selectedType && (!nationFilter || c.nation === nationFilter));
-  }, [aircraftClasses, selectedType, nationFilter]);
+    return aircraftClasses.filter((c) => c.iconKey === selectedType);
+  }, [aircraftClasses, selectedType]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
@@ -78,42 +81,29 @@ export function AddAircraftWizardModal({
 
         {selectedType && (
           <div className="mt-4 border-t border-slate-800 pt-3">
-            <div className="flex gap-3">
-              <label className="flex-1 text-xs font-medium text-slate-400">
-                Nationalité (filtre)
-                <select value={nationFilter} onChange={(e) => setNationFilter(e.target.value)} className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm">
-                  <option value="">Toutes</option>
-                  {nations.map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-xs font-medium text-slate-400">
-                Quantité
-                <div className="mt-1 flex items-center gap-1">
-                  <button type="button" onClick={() => setQuantity((q) => Math.max(1, q - 1))} className="rounded border border-slate-700 px-2 py-1.5 hover:bg-slate-900">
-                    −
-                  </button>
-                  <input
-                    type="number"
-                    min={1}
-                    max={24}
-                    value={quantity}
-                    onChange={(e) => setQuantity(Math.min(24, Math.max(1, Number(e.target.value) || 1)))}
-                    className="w-12 rounded-md border border-slate-700 bg-slate-950 px-1 py-1.5 text-center text-sm"
-                  />
-                  <button type="button" onClick={() => setQuantity((q) => Math.min(24, q + 1))} className="rounded border border-slate-700 px-2 py-1.5 hover:bg-slate-900">
-                    +
-                  </button>
-                </div>
-              </label>
-            </div>
+            <label className="text-xs font-medium text-slate-400">
+              Quantité
+              <div className="mt-1 flex items-center gap-1">
+                <button type="button" onClick={() => setQuantity((q) => Math.max(1, q - 1))} className="rounded border border-slate-700 px-2 py-1.5 hover:bg-slate-900">
+                  −
+                </button>
+                <input
+                  type="number"
+                  min={1}
+                  max={24}
+                  value={quantity}
+                  onChange={(e) => setQuantity(Math.min(24, Math.max(1, Number(e.target.value) || 1)))}
+                  className="w-12 rounded-md border border-slate-700 bg-slate-950 px-1 py-1.5 text-center text-sm"
+                />
+                <button type="button" onClick={() => setQuantity((q) => Math.min(24, q + 1))} className="rounded border border-slate-700 px-2 py-1.5 hover:bg-slate-900">
+                  +
+                </button>
+              </div>
+            </label>
             {quantity > 1 && <p className="mt-2 text-[11px] text-brass-400">{quantity} avions du même type → une escadrille sera créée.</p>}
 
             <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto">
-              {filtered.length === 0 && <p className="text-xs text-slate-600">Aucune classe {typeLabel("AIRCRAFT", selectedType).toLowerCase()} pour ce filtre.</p>}
+              {filtered.length === 0 && <p className="text-xs text-slate-600">Aucune classe {typeLabel("AIRCRAFT", selectedType).toLowerCase()} pour {nation}.</p>}
               {filtered.map((c) => (
                 <li key={c.id}>
                   <button

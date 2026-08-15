@@ -17,24 +17,33 @@ const TYPE_CHIPS = [...SHIP_TYPES, SUBMARINE_CHIP];
  * uniquement une fois un type choisi (un croiseur lourd n'a de sens que
  * pour une task force navale — pas de variante base aérienne/escadrille,
  * celles-ci restent peuplées uniquement par glisser-déposer).
+ *
+ * Filtre nation (Phase 7, retour utilisateur 2026-08-15, troisième
+ * chantier — "si un camp a une nationalité, on ne puisse choisir que les
+ * bateaux de cette nationalité") : `nation` est désormais un FILTRE DUR
+ * (la nation du camp cible), plus un simple filtre manuel modifiable —
+ * le sélecteur "Nationalité (filtre)" a disparu, l'utilisateur n'a plus à
+ * le renseigner lui-même.
  */
 export function AddUnitWizardModal({
   fleetName,
   libraryClasses,
-  preferredNation,
+  nation,
   onClose,
   onPick,
 }: {
   fleetName: string;
   libraryClasses: LibraryClassOption[];
-  preferredNation?: string;
+  nation: string;
   onClose: () => void;
   onPick: (libClass: LibraryClassOption) => void;
 }) {
   const [selectedType, setSelectedType] = useState<string | null>(null);
-  const [nationFilter, setNationFilter] = useState(preferredNation ?? "");
 
-  const shipAndSubClasses = useMemo(() => libraryClasses.filter((c) => c.category === "SURFACE_SHIP" || c.category === "SUBMARINE"), [libraryClasses]);
+  const shipAndSubClasses = useMemo(
+    () => libraryClasses.filter((c) => (c.category === "SURFACE_SHIP" || c.category === "SUBMARINE") && c.nation === nation),
+    [libraryClasses, nation]
+  );
 
   const countByType = useMemo(() => {
     const counts = new Map<string, number>();
@@ -45,17 +54,10 @@ export function AddUnitWizardModal({
     return counts;
   }, [shipAndSubClasses]);
 
-  const nations = useMemo(() => Array.from(new Set(shipAndSubClasses.map((c) => c.nation))).sort(), [shipAndSubClasses]);
-
   const filtered = useMemo(() => {
     if (!selectedType) return [];
-    return shipAndSubClasses.filter((c) => {
-      const typeKey = c.category === "SUBMARINE" ? "submarine" : c.iconKey;
-      if (typeKey !== selectedType) return false;
-      if (nationFilter && c.nation !== nationFilter) return false;
-      return true;
-    });
-  }, [shipAndSubClasses, selectedType, nationFilter]);
+    return shipAndSubClasses.filter((c) => (c.category === "SUBMARINE" ? "submarine" : c.iconKey) === selectedType);
+  }, [shipAndSubClasses, selectedType]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
@@ -86,20 +88,8 @@ export function AddUnitWizardModal({
 
         {selectedType && (
           <div className="mt-4 border-t border-slate-800 pt-3">
-            <label className="block text-xs font-medium text-slate-400">
-              Nationalité (filtre)
-              <select value={nationFilter} onChange={(e) => setNationFilter(e.target.value)} className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm">
-                <option value="">Toutes</option>
-                {nations.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </label>
-
             <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto">
-              {filtered.length === 0 && <p className="text-xs text-slate-600">Aucune classe {typeLabel("SURFACE_SHIP", selectedType).toLowerCase()} pour ce filtre.</p>}
+              {filtered.length === 0 && <p className="text-xs text-slate-600">Aucune classe {typeLabel("SURFACE_SHIP", selectedType).toLowerCase()} pour {nation}.</p>}
               {filtered.map((c) => (
                 <li key={c.id}>
                   <button

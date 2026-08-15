@@ -1126,7 +1126,7 @@ export function ScenarioEditorForm({
             <AddUnitWizardModal
               fleetName={`${team.name} / ${fleet.name}`}
               libraryClasses={libraryClasses}
-              preferredNation={team.nation}
+              nation={team.nation}
               onClose={() => setUnitWizardFor(null)}
               onPick={(libClass) => handleAddUnitFromLibrary(libClass, unitWizardFor.teamClientId, unitWizardFor.fleetClientId)}
             />
@@ -1145,7 +1145,7 @@ export function ScenarioEditorForm({
               <AddAircraftWizardModal
                 targetLabel={`${team.name} / ${airbase.name || airbase.key}`}
                 libraryClasses={libraryClasses}
-                preferredNation={team.nation}
+                nation={team.nation}
                 onClose={() => setAircraftWizardFor(null)}
                 onPick={(libClass, quantity) => handleAddAircraftToAirbase(libClass, aircraftWizardFor.teamClientId, target.airbaseKey, quantity)}
               />
@@ -1155,7 +1155,7 @@ export function ScenarioEditorForm({
             <AddAircraftWizardModal
               targetLabel={`${team.name} / ${target.carrierUnitName}`}
               libraryClasses={libraryClasses}
-              preferredNation={team.nation}
+              nation={team.nation}
               onClose={() => setAircraftWizardFor(null)}
               onPick={(libClass, quantity) => handleAddAircraftToCarrier(libClass, aircraftWizardFor.teamClientId, target.carrierUnitName, quantity)}
             />
