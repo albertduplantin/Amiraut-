@@ -24,6 +24,7 @@ import {
   type DepthBand as CombatDepthBand,
   type HitChanceBreakdown,
   type TorpedoSpreadType,
+  type LocalizedDamageEffect,
 } from "@/lib/combat";
 import {
   describeShot,
@@ -50,6 +51,61 @@ function pickWeaponSlotToDisable(profile: CombatProfile | null | undefined, alre
   if (gunSlots.length > 0) return gunSlots[Math.floor(Math.random() * gunSlots.length)];
   if (profile?.torpedoTubes && !alreadyDisabled.includes(TORPEDO_WEAPON_SLOT)) return TORPEDO_WEAPON_SLOT;
   return null;
+}
+
+/**
+ * Traduit un effet de dégât localisé (`rollLocalizedDamage`, combat.ts) en
+ * effet stocké (`LocalizedEffectStored`, tacticalNarrative.ts), compte tenu
+ * de l'état déjà endommagé de la cible (une pièce déjà désactivée n'a rien
+ * de plus à désactiver ; un gouvernail/télépointage déjà touché reste tel
+ * quel sans effet narratif redondant). Factorisé (retour utilisateur
+ * 2026-08-15, chantier moteur) — utilisé par `submitTacticalFireShot` (GUN),
+ * `advanceTorpedoSalvos` (TORPEDO) et désormais `resolveAutoAirToSurface`
+ * (BOMB) : la table BOMB existait déjà dans combat.ts mais n'était jamais
+ * appelée sur ce dernier chemin, un bombardement ne pouvait donc jamais
+ * désactiver une tourelle, bloquer un gouvernail, etc.
+ */
+function deriveStoredLocalizedEffect(
+  effect: LocalizedDamageEffect,
+  target: { unitClass: { combatProfile: unknown }; disabledWeaponSlots: string[]; rudderJammed: boolean; fireControlDamaged: boolean }
+): LocalizedEffectStored | null {
+  if (effect.type === "TURRET") {
+    const slot = pickWeaponSlotToDisable(target.unitClass.combatProfile as CombatProfile | null, target.disabledWeaponSlots);
+    return slot ? { type: "WEAPON_DISABLED", slot } : null;
+  }
+  if (effect.type === "ENGINE") return { type: "ENGINE", speedReductionRatio: effect.speedReductionRatio };
+  if (effect.type === "RUDDER") return target.rudderJammed ? null : { type: "RUDDER" };
+  if (effect.type === "FIRE_CONTROL") return target.fireControlDamaged ? null : { type: "FIRE_CONTROL" };
+  if (effect.type === "MAGAZINE") return { type: "MAGAZINE" };
+  return null;
+}
+
+/**
+ * Fusionne UN effet localisé stocké dans les champs d'avarie persistants
+ * d'un navire — même logique que la boucle de cumul de fin de manche
+ * (`resolveFirePhase`), factorisée (retour utilisateur 2026-08-15) pour
+ * être appelable une seule fois hors round tactique (résolution
+ * automatique air-surface, qui n'a pas de phase de résolution de manche
+ * séparée où cumuler plusieurs tirs).
+ */
+function mergeLocalizedEffect(
+  base: { disabledWeaponSlots: string[]; speedCapKnots: number | null; rudderJammed: boolean; fireControlDamaged: boolean },
+  effect: LocalizedEffectStored,
+  maxSpeedKnots: number
+): { disabledWeaponSlots: string[]; speedCapKnots: number | null; rudderJammed: boolean; fireControlDamaged: boolean } {
+  if (effect.type === "WEAPON_DISABLED") {
+    const disabledSlots = new Set(base.disabledWeaponSlots);
+    disabledSlots.add(effect.slot);
+    return { ...base, disabledWeaponSlots: Array.from(disabledSlots) };
+  }
+  if (effect.type === "ENGINE") {
+    const currentEffectiveMax = base.speedCapKnots ?? maxSpeedKnots;
+    const reduced = Math.max(MIN_SPEED_CAP_KNOTS, currentEffectiveMax * (1 - effect.speedReductionRatio));
+    return { ...base, speedCapKnots: base.speedCapKnots == null ? reduced : Math.min(base.speedCapKnots, reduced) };
+  }
+  if (effect.type === "RUDDER") return { ...base, rudderJammed: true };
+  if (effect.type === "FIRE_CONTROL") return { ...base, fireControlDamaged: true };
+  return base; // MAGAZINE : déjà reflété dans les dégâts, rien de plus à fusionner ici.
 }
 
 const NM_TO_M = 1852;
@@ -874,18 +930,7 @@ export async function submitTacticalFireShot(params: {
   if (outcome.hit && params.weaponType === "GUN" && target.unitClass.category === "SURFACE_SHIP") {
     const { effect, debug } = rollLocalizedDamage({ weaponType: params.weaponType, damageRatio });
     localizedDebugLine = describeLocalizedRollDebug(debug);
-    if (effect.type === "TURRET") {
-      const slot = pickWeaponSlotToDisable(target.unitClass.combatProfile as CombatProfile | null, target.disabledWeaponSlots);
-      if (slot) localizedEffect = { type: "WEAPON_DISABLED", slot };
-    } else if (effect.type === "ENGINE") {
-      localizedEffect = { type: "ENGINE", speedReductionRatio: effect.speedReductionRatio };
-    } else if (effect.type === "RUDDER" && !target.rudderJammed) {
-      localizedEffect = { type: "RUDDER" };
-    } else if (effect.type === "FIRE_CONTROL" && !target.fireControlDamaged) {
-      localizedEffect = { type: "FIRE_CONTROL" };
-    } else if (effect.type === "MAGAZINE") {
-      localizedEffect = { type: "MAGAZINE" };
-    }
+    localizedEffect = deriveStoredLocalizedEffect(effect, target);
   }
 
   // Un coup dans un magasin est catastrophique et quasi instantané (cas
@@ -1072,10 +1117,17 @@ async function loadAirEncounterContext(detectionEventId: string, teamId: string)
  * règle des ~50%, niveau d'équipage, mitraillage, bombe/torpille vs
  * sous-marin en surface — voir combat.ts) plutôt qu'une version appauvrie :
  * rien n'est perdu en abandonnant le tactique, juste condensé en un seul
- * résultat. Seule simplification assumée : pas de dégâts localisés
- * (tourelle/gouvernail/incendie de magasin) — CombatEvent n'a pas la
- * colonne dédiée qu'a TacticalAction, migrer le schéma pour ça serait
- * disproportionné ici.
+ * résultat. Un bombardement (BOMB) applique désormais aussi les dégâts
+ * localisés (retour utilisateur 2026-08-15, chantier moteur — correctif :
+ * la table dédiée existait déjà dans combat.ts mais n'était jamais appelée
+ * ici) — précédemment jugé disproportionné faute de colonne dédiée sur
+ * `CombatEvent`, ce qui s'avère inutile : l'effet s'applique directement
+ * aux champs d'avarie de `Unit` (les mêmes que `TacticalAction` cumule en
+ * fin de manche), sans rien ajouter au schéma. TORPEDO/GUN(mitraillage)
+ * restent volontairement sans dégâts localisés sur ce chemin (torpille
+ * aérienne hors périmètre de ce correctif ; le mitraillage n'a pas de table
+ * dédiée dans combat.ts — il retomberait sur celle du canon naval, magasin
+ * compris, pas souhaitable pour une passe de mitraillage).
  *
  * L'avion de la paire est TOUJOURS traité comme l'attaquant qui fait sa
  * passe, qu'il soit l'observateur ou la cible de cette détection — un
@@ -1372,30 +1424,76 @@ async function resolveAutoAirToSurface(
 
   const targetHealthMax = surfaceUnit.healthMax ?? 1;
   const targetHealthBefore = surfaceUnit.healthCurrent ?? targetHealthMax;
-  const finalDamagePoints = outcome.hit ? outcome.damagePoints : 0;
+
+  // Dégâts localisés (retour utilisateur 2026-08-15, chantier moteur —
+  // correctif) : la table BOMB de `rollLocalizedDamage` (combat.ts) existait
+  // déjà mais n'était jamais appelée sur ce chemin de résolution automatique
+  // — un bombardement ne pouvait donc jamais désactiver une tourelle,
+  // bloquer un gouvernail, etc., contrairement à un tir de canon en combat
+  // tactique. Volontairement limité à BOMB pour l'instant : le mitraillage
+  // (`weaponType === "GUN"` ici, mais c'est un strafing, pas une vraie
+  // canonnade navale) n'a pas de table dédiée dans combat.ts (retomberait
+  // sur celle du canon, y compris son risque de magasin — pas souhaitable
+  // pour une passe de mitraillage, à traiter séparément si besoin un jour) ;
+  // TORPEDO aérienne non plus, pour rester scopé à ce correctif précis.
+  let localizedEffect: LocalizedEffectStored | null = null;
+  if (weaponType === "BOMB" && outcome.hit) {
+    const damageRatio = targetHealthMax > 0 ? outcome.damagePoints / targetHealthMax : 0;
+    const { effect } = rollLocalizedDamage({ weaponType: "BOMB", damageRatio });
+    localizedEffect = deriveStoredLocalizedEffect(effect, surfaceUnit);
+  }
+
+  const finalDamagePoints = localizedEffect?.type === "MAGAZINE" ? targetHealthBefore : outcome.hit ? outcome.damagePoints : 0;
   const newHealth = Math.max(0, targetHealthBefore - finalDamagePoints);
   const targetSunk = newHealth <= 0;
 
+  const merged = localizedEffect
+    ? mergeLocalizedEffect(
+        {
+          disabledWeaponSlots: surfaceUnit.disabledWeaponSlots,
+          speedCapKnots: surfaceUnit.speedCapKnots,
+          rudderJammed: surfaceUnit.rudderJammed,
+          fireControlDamaged: surfaceUnit.fireControlDamaged,
+        },
+        localizedEffect,
+        surfaceUnit.unitClass.maxSpeedKnots
+      )
+    : null;
+
   await prisma.unit.update({
     where: { id: surfaceUnit.id },
-    data: { healthCurrent: newHealth, status: targetSunk ? "SUNK" : newHealth < targetHealthMax * 0.6 ? "DAMAGED" : surfaceUnit.status },
+    data: {
+      healthCurrent: newHealth,
+      status: targetSunk ? "SUNK" : newHealth < targetHealthMax * 0.6 ? "DAMAGED" : surfaceUnit.status,
+      ...(merged
+        ? {
+            disabledWeaponSlots: merged.disabledWeaponSlots,
+            speedCapKnots: merged.speedCapKnots,
+            rudderJammed: merged.rudderJammed,
+            fireControlDamaged: merged.fireControlDamaged,
+          }
+        : {}),
+    },
   });
   if (weaponType === "TORPEDO" && !dcaAbortsAttack && aircraft.torpedoesRemaining != null) {
     await prisma.unit.update({ where: { id: aircraft.id }, data: { torpedoesRemaining: Math.max(0, aircraft.torpedoesRemaining - 1) } });
   }
 
-  const shotNarrative = describeShot({
-    attackerName: aircraft.name,
-    targetName: surfaceUnit.name,
-    weaponType,
-    hit: outcome.hit,
-    hits: outcome.hits,
-    damagePoints: finalDamagePoints,
-    damageRatio: targetHealthMax > 0 ? finalDamagePoints / targetHealthMax : 0,
-    targetSunk,
-    rangeNm,
-    targetIsAircraft: false,
-  });
+  const shotNarrative =
+    localizedEffect?.type === "MAGAZINE"
+      ? describeMagazineHit(aircraft.name, surfaceUnit.name)
+      : describeShot({
+          attackerName: aircraft.name,
+          targetName: surfaceUnit.name,
+          weaponType,
+          hit: outcome.hit,
+          hits: outcome.hits,
+          damagePoints: finalDamagePoints,
+          damageRatio: targetHealthMax > 0 ? finalDamagePoints / targetHealthMax : 0,
+          targetSunk,
+          rangeNm,
+          targetIsAircraft: false,
+        }) + (localizedEffect ? " " + describeLocalizedEffect(localizedEffect, surfaceUnit.name) : "");
   // Un avion abattu avant d'avoir largué/tiré n'a jamais atteint sa cible :
   // le récit habituel n'a alors plus de sens, entièrement remplacé par
   // celui de la DCA (même logique que submitTacticalFireShot).
@@ -2072,18 +2170,7 @@ async function advanceTorpedoSalvos(params: {
     let localizedEffect: LocalizedEffectStored | null = null;
     if (intercept.hit && targetUnit.unitClass.category === "SURFACE_SHIP") {
       const { effect } = rollLocalizedDamage({ weaponType: "TORPEDO", damageRatio });
-      if (effect.type === "TURRET") {
-        const slot = pickWeaponSlotToDisable(targetUnit.unitClass.combatProfile as CombatProfile | null, targetUnit.disabledWeaponSlots);
-        if (slot) localizedEffect = { type: "WEAPON_DISABLED", slot };
-      } else if (effect.type === "ENGINE") {
-        localizedEffect = { type: "ENGINE", speedReductionRatio: effect.speedReductionRatio };
-      } else if (effect.type === "RUDDER" && !targetUnit.rudderJammed) {
-        localizedEffect = { type: "RUDDER" };
-      } else if (effect.type === "FIRE_CONTROL" && !targetUnit.fireControlDamaged) {
-        localizedEffect = { type: "FIRE_CONTROL" };
-      } else if (effect.type === "MAGAZINE") {
-        localizedEffect = { type: "MAGAZINE" };
-      }
+      localizedEffect = deriveStoredLocalizedEffect(effect, targetUnit);
     }
 
     const finalDamagePoints = localizedEffect?.type === "MAGAZINE" ? targetHealthBeforePhase : intercept.damagePoints;
@@ -2230,30 +2317,24 @@ export async function resolveFirePhase(engagementId: string) {
       // autres (aucun ne sait encore, au moment du tir, ce que les tirs
       // simultanés ont déjà décidé) — on les cumule ici, dédupliqués par pièce.
       const effects = localizedByTarget.get(target.id) ?? [];
-      const disabledSlots = new Set(target.disabledWeaponSlots);
-      let speedCap = target.speedCapKnots;
-      let rudderJammed = target.rudderJammed;
-      let fireControlDamaged = target.fireControlDamaged;
-      for (const eff of effects) {
-        if (eff.type === "WEAPON_DISABLED") disabledSlots.add(eff.slot);
-        else if (eff.type === "ENGINE") {
-          const currentEffectiveMax = speedCap ?? target.unitClass.maxSpeedKnots;
-          const reduced = Math.max(MIN_SPEED_CAP_KNOTS, currentEffectiveMax * (1 - eff.speedReductionRatio));
-          speedCap = speedCap == null ? reduced : Math.min(speedCap, reduced);
-        } else if (eff.type === "RUDDER") rudderJammed = true;
-        else if (eff.type === "FIRE_CONTROL") fireControlDamaged = true;
-        // MAGAZINE : déjà reflété dans damagePoints (voir submitTacticalFireShot), rien de plus à appliquer ici.
-      }
+      let merged = {
+        disabledWeaponSlots: target.disabledWeaponSlots,
+        speedCapKnots: target.speedCapKnots,
+        rudderJammed: target.rudderJammed,
+        fireControlDamaged: target.fireControlDamaged,
+      };
+      for (const eff of effects) merged = mergeLocalizedEffect(merged, eff, target.unitClass.maxSpeedKnots);
+      // MAGAZINE : déjà reflété dans damagePoints (voir submitTacticalFireShot), rien de plus à appliquer ici.
 
       await prisma.unit.update({
         where: { id: target.id },
         data: {
           healthCurrent: next,
           status: next <= 0 ? "SUNK" : next < max * 0.6 ? "DAMAGED" : "ACTIVE",
-          disabledWeaponSlots: Array.from(disabledSlots),
-          speedCapKnots: speedCap,
-          rudderJammed,
-          fireControlDamaged,
+          disabledWeaponSlots: merged.disabledWeaponSlots,
+          speedCapKnots: merged.speedCapKnots,
+          rudderJammed: merged.rudderJammed,
+          fireControlDamaged: merged.fireControlDamaged,
         },
       });
     }
