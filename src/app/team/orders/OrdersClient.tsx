@@ -68,7 +68,7 @@ type UnitDto = {
   passive: boolean;
   // Bloc 3 — ordres permanents.
   standingOrderActive: boolean;
-  standingOrderKind: "TRANSIT" | "AIR_PATROL" | "ROUTE" | null;
+  standingOrderKind: "TRANSIT" | "AIR_PATROL" | "ROUTE" | "RETURN_TO_PORT" | null;
   airMissionState: "OUTBOUND" | "SEARCHING" | "RETURNING" | null;
   airPatrolLat: number | null;
   airPatrolLng: number | null;

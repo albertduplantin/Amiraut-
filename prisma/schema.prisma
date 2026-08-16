@@ -143,6 +143,14 @@ model UnitClass {
   // ne bouge jamais — voir Signal/HF_DF et prisma/scenarios/north-cape.ts.
   passive               Boolean      @default(false)
   enduranceMinutes      Int? // réservé phase 2 (autonomie/carburant), inutilisé en V1
+  // Autonomie des navires de SURFACE (retour utilisateur 2026-08-15, chantier
+  // moteur) : portée en nm à vitesse de croisière (~75% de maxSpeedKnots,
+  // convention du livret) — voir Unit.shipFuelPercent. Nullable : une classe
+  // sans cette valeur n'est simplement pas contrainte par le carburant
+  // (comportement inchangé, rétrocompatible avec toutes les classes
+  // existantes). Distinct de submergedRangeNmAt4kt (sous-marins, immersion)
+  // et d'enduranceMinutes (avions, temps de vol).
+  rangeNmAtCruiseSpeed  Float?
   weaponSystems         Json? // fiche d'armement historique affichée aux joueurs (texte libre)
   combatProfile         Json? // armement structuré utilisé par le moteur de combat, voir CombatProfile dans combat.ts
   depthChargeStock      Int? // stock initial de grenades ASM (escorteurs uniquement), voir Unit.depthChargesRemaining
@@ -229,6 +237,7 @@ model LibraryUnitClass {
   historicalNote          String?
   passive                 Boolean      @default(false)
   enduranceMinutes        Int?
+  rangeNmAtCruiseSpeed    Float? // voir le commentaire équivalent sur UnitClass
   weaponSystems           Json?
   combatProfile           Json?
   depthChargeStock        Int?
@@ -294,6 +303,21 @@ model Unit {
   batteryChargePercent    Float?
   oxygenHoursRemaining    Float?
   torpedoesRemaining      Int? // torpilles restantes (sous-marins), tous types confondus
+  // Carburant des navires de SURFACE (retour utilisateur 2026-08-15,
+  // chantier moteur), en % du plein — voir UnitClass.rangeNmAtCruiseSpeed
+  // pour la portée de référence. Champ VOLONTAIREMENT séparé de
+  // fuelMinutesRemaining (avions) : ce dernier a une sémantique différente
+  // (minutes avant vide, consommation linéaire au temps) profondément
+  // câblée dans la machine à états de patrouille aérienne — le détourner
+  // pour les navires risquerait une régression aviation, exactement
+  // pourquoi les sous-marins ont déjà leurs propres champs plutôt que de
+  // réutiliser ceux des avions. Null = navire non contraint par le
+  // carburant (classe sans rangeNmAtCruiseSpeed renseigné).
+  shipFuelPercent         Float?
+  // Port d'attache d'un navire de surface (retour utilisateur 2026-08-15) :
+  // réutilise directement baseLat/baseLng/baseName ci-dessous (déjà
+  // génériques, jamais contraints au niveau schéma aux avions malgré leur
+  // commentaire d'origine) — aucun nouveau champ nécessaire pour ça.
 
   // ── Dégâts localisés (mode tactique, bâtiments de surface) ──────────
   // Au-delà de la simple perte de PV, un coup au but "solide" peut
@@ -407,6 +431,11 @@ enum StandingOrderKind {
   // par segment — voir StandingRoute/RouteWaypoint et applyRouteTransitLeg
   // dans turnEngine.ts. Recherche 2026-08-14 (refonte ordres permanents).
   ROUTE
+  // Déroutement automatique vers le port d'attache (retour utilisateur
+  // 2026-08-15, chantier moteur) : déclenché par le moteur lui-même quand
+  // le carburant restant ne couvrirait plus le tour suivant, jamais choisi
+  // directement par le joueur — voir applyReturnToPortLeg dans turnEngine.ts.
+  RETURN_TO_PORT
 }
 
 enum AirMissionState {
