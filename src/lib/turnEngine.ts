@@ -44,6 +44,44 @@ const BATTERY_SPEED_EXPONENT = 4;
 const BATTERY_REFERENCE_SPEED_KNOTS = 4;
 
 /**
+ * Autonomie des navires de surface (et sous-marins en surface) : consommation
+ * continue en fonction de la distance parcourue, PAS la table à paliers du
+ * livret d'origine (on reste cohérent avec le modèle déjà en place pour les
+ * sous-marins ci-dessus plutôt que de mélanger deux logiques différentes).
+ * `rangeNmAtCruiseSpeed` (nouveau champ de classe) donne la distance
+ * franchissable à pleine jauge à vitesse de croisière — conventionnellement
+ * SHIP_FUEL_CRUISE_RATIO de la vitesse max (~75%, un régime économique
+ * typique). Naviguer plus vite que ça coûte disproportionnellement plus de
+ * carburant par mille (SHIP_FUEL_SPEED_EXPONENT, calibrage), naviguer plus
+ * lentement en coûte un peu moins — même intuition que l'exposant batterie
+ * des sous-marins ci-dessus, mais nettement moins pénalisant (une machine à
+ * vapeur/diesel de surface ne s'écroule pas en régime comme une batterie).
+ */
+const SHIP_FUEL_CRUISE_RATIO = 0.75;
+const SHIP_FUEL_SPEED_EXPONENT = 1.5;
+
+/**
+ * Calcule le pourcentage de jauge de carburant consommé par un trajet de
+ * `usedNm` milles (giration déjà comprise si applicable) à `speedKnots`,
+ * pour une classe dont l'autonomie de croisière est `rangeNmAtCruiseSpeed`.
+ * Fonction pure partagée entre le contrôle à la soumission d'ordre
+ * (saveUnitOrder) et le décompte réel appliqué à la publication du tour
+ * (publishTurn) — les deux doivent rester rigoureusement le même calcul.
+ */
+function shipFuelPercentUsed(params: {
+  usedNm: number;
+  speedKnots: number;
+  maxSpeedKnots: number;
+  rangeNmAtCruiseSpeed: number;
+}): number {
+  const { usedNm, speedKnots, maxSpeedKnots, rangeNmAtCruiseSpeed } = params;
+  if (rangeNmAtCruiseSpeed <= 0) return 0;
+  const cruiseSpeedKnots = Math.max(maxSpeedKnots * SHIP_FUEL_CRUISE_RATIO, 0.1);
+  const consumptionRatio = Math.pow(Math.max(speedKnots, 0.1) / cruiseSpeedKnots, SHIP_FUEL_SPEED_EXPONENT);
+  return ((usedNm * consumptionRatio) / rangeNmAtCruiseSpeed) * 100;
+}
+
+/**
  * Un Kurzsignal (~20s d'antenne) réduit la portée effective de goniométrie
  * par rapport à un message long en Morse (conçu précisément pour passer
  * sous le temps nécessaire à un relèvement précis — voir la recherche
@@ -212,7 +250,7 @@ export async function saveUnitOrder(params: {
     throw new OrderValidationError("La météo du tour n'a pas encore été définie par l'arbitre.");
   }
 
-  validateOrderPath({
+  const { usedNm } = validateOrderPath({
     currentPosition: { lat: unit.currentLat, lng: unit.currentLng },
     waypoints,
     speedKnots,
@@ -249,6 +287,24 @@ export async function saveUnitOrder(params: {
     if (batteryRemaining < batteryNeededPercent) {
       throw new OrderValidationError(
         `Batterie insuffisante pour tenir ce tour immergé à ${speedKnots}nds (${batteryRemaining.toFixed(0)}% restants) : il faut faire surface ou ralentir.`
+      );
+    }
+  }
+
+  // Carburant des navires de surface (et sous-marins en surface) — seules les
+  // classes dont l'autonomie de croisière est renseignée sont concernées ;
+  // rétrocompatible avec toute classe existante qui ne l'a pas encore.
+  if (unit.unitClass.rangeNmAtCruiseSpeed) {
+    const fuelNeededPercent = shipFuelPercentUsed({
+      usedNm,
+      speedKnots,
+      maxSpeedKnots: unit.unitClass.maxSpeedKnots,
+      rangeNmAtCruiseSpeed: unit.unitClass.rangeNmAtCruiseSpeed,
+    });
+    const fuelRemaining = unit.shipFuelPercent ?? 100;
+    if (fuelRemaining < fuelNeededPercent) {
+      throw new OrderValidationError(
+        `Carburant insuffisant pour ce trajet à ${speedKnots}nds (${fuelRemaining.toFixed(0)}% restants) : il faut raccourcir la route, ralentir, ou rentrer au port.`
       );
     }
   }
