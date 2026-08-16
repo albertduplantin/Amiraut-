@@ -59,6 +59,15 @@ const BATTERY_REFERENCE_SPEED_KNOTS = 4;
  */
 const SHIP_FUEL_CRUISE_RATIO = 0.75;
 const SHIP_FUEL_SPEED_EXPONENT = 1.5;
+/**
+ * Marge de sécurité (points de %) avant de dérouter automatiquement vers le
+ * port — même esprit qu'AIR_PATROL_FUEL_MARGIN_MINUTES pour les avions : on
+ * rentre dès que la jauge tomberait sous ce seuil à l'issue du tour en
+ * poursuivant l'ordre en cours, plutôt que d'attendre la panne sèche.
+ */
+const SHIP_FUEL_MARGIN_PERCENT = 15;
+/** Distance (nm) en-deçà de laquelle un navire est considéré à quai — ravitaillement instantané. */
+const SHIP_PORT_ARRIVAL_RADIUS_NM = 1;
 
 /**
  * Calcule le pourcentage de jauge de carburant consommé par un trajet de
@@ -762,14 +771,109 @@ async function applyStandingOrders(turnId: string) {
   });
 
   for (const candidate of candidates) {
-    if (candidate.standingOrderKind === "AIR_PATROL") {
+    let kind = candidate.standingOrderKind;
+
+    // Carburant des navires (retour utilisateur 2026-08-15, chantier moteur) :
+    // avant de reconduire un cap tenu ou une route longue durée, vérifier si
+    // la jauge tomberait sous la marge de sécurité en poursuivant tel quel —
+    // si oui, dérouter vers le port dès ce tour plutôt qu'attendre la panne.
+    // La patrouille aérienne n'est jamais concernée (gère déjà son propre
+    // retour, voir applyAirPatrolLeg) ; RETURN_TO_PORT une fois enclenché
+    // reste RETURN_TO_PORT jusqu'à l'arrivée, pas de nouvelle vérification.
+    if (kind === "TRANSIT" || kind === "ROUTE") {
+      if (await shouldDivertToPort(candidate.id, turn.durationMinutes)) {
+        await prisma.standingRoute.updateMany({
+          where: { unitId: candidate.id, kind: "ROUTE", status: "ACTIVE" },
+          data: { status: "CANCELLED" },
+        });
+        await prisma.unit.update({
+          where: { id: candidate.id },
+          data: { standingOrderKind: "RETURN_TO_PORT", standingSpeedKnots: null },
+        });
+        kind = "RETURN_TO_PORT";
+      }
+    }
+
+    if (kind === "AIR_PATROL") {
       await applyAirPatrolLeg(turnId, turn.durationMinutes, candidate.id);
-    } else if (candidate.standingOrderKind === "ROUTE") {
+    } else if (kind === "ROUTE") {
       await applyRouteTransitLeg(turnId, turn.durationMinutes, candidate.id);
+    } else if (kind === "RETURN_TO_PORT") {
+      await applyReturnToPortLeg(turnId, turn.durationMinutes, candidate.id);
     } else {
       await applyTransitLeg(turnId, turn.durationMinutes, candidate.id);
     }
   }
+}
+
+/**
+ * Vrai si un navire dont l'autonomie est suivie (classe avec
+ * rangeNmAtCruiseSpeed renseigné) passerait sous la marge de sécurité
+ * (SHIP_FUEL_MARGIN_PERCENT) en poursuivant son ordre permanent actuel
+ * (même vitesse, pendant turnDurationMinutes) — approximation par le budget
+ * de vitesse plutôt que le trajet exact, dans le même esprit que la
+ * vérification d'autonomie des avions (AIR_PATROL_FUEL_MARGIN_MINUTES) :
+ * mieux vaut dérouter un peu tôt qu'un peu tard.
+ */
+async function shouldDivertToPort(unitId: string, turnDurationMinutes: number): Promise<boolean> {
+  const unit = await prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } });
+  if (!unit.unitClass.rangeNmAtCruiseSpeed) return false;
+
+  const maxSpeed = unit.speedCapKnots ?? unit.unitClass.maxSpeedKnots;
+  const speedKnots = Math.min(unit.standingSpeedKnots && unit.standingSpeedKnots > 0 ? unit.standingSpeedKnots : maxSpeed, maxSpeed);
+  const budgetNm = speedBudgetNm(speedKnots, turnDurationMinutes);
+  const fuelNeededPercent = shipFuelPercentUsed({
+    usedNm: budgetNm,
+    speedKnots,
+    maxSpeedKnots: unit.unitClass.maxSpeedKnots,
+    rangeNmAtCruiseSpeed: unit.unitClass.rangeNmAtCruiseSpeed,
+  });
+  const fuelRemaining = unit.shipFuelPercent ?? 100;
+  return fuelRemaining - fuelNeededPercent < SHIP_FUEL_MARGIN_PERCENT;
+}
+
+/**
+ * Reconduit un ordre RETURN_TO_PORT : cap direct vers le port d'attache
+ * (baseLat/baseLng) à vitesse de croisière économique. Contrairement à une
+ * patrouille aérienne, le navire NE relance PAS automatiquement d'ordre à
+ * l'arrivée — "repartir" redevient une décision tactique que le joueur doit
+ * reprendre lui-même (voir le plan, retour utilisateur 2026-08-15). Le
+ * ravitaillement effectif à 100% est appliqué dans publishTurn (même
+ * transaction que le reste des mises à jour de fin de tour), pas ici.
+ */
+async function applyReturnToPortLeg(turnId: string, turnDurationMinutes: number, unitId: string) {
+  const unit = await prisma.unit.findUniqueOrThrow({ where: { id: unitId }, include: { unitClass: true } });
+  const home: LatLng = { lat: unit.baseLat ?? unit.currentLat, lng: unit.baseLng ?? unit.currentLng };
+  const current: LatLng = { lat: unit.currentLat, lng: unit.currentLng };
+  const maxSpeed = unit.speedCapKnots ?? unit.unitClass.maxSpeedKnots;
+  const cruiseSpeedKnots = maxSpeed * SHIP_FUEL_CRUISE_RATIO;
+  const budgetNm = speedBudgetNm(cruiseSpeedKnots, turnDurationMinutes);
+
+  const distanceHome = distanceNm(current, home);
+  const arrived = distanceHome <= budgetNm;
+  const destination = arrived ? home : destinationPoint(current, bearingDeg(current, home), budgetNm);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.unitOrder.create({
+      data: {
+        turnId,
+        unitId,
+        speedKnots: cruiseSpeedKnots,
+        isStanding: true,
+        waypoints: { create: [{ sequence: 0, lat: destination.lat, lng: destination.lng }] },
+      },
+    });
+    if (arrived) {
+      // Le navire s'arrête au port — pas de relance automatique, voir la
+      // doc de la fonction. Le ravitaillement lui-même a lieu dans
+      // publishTurn dès que la position mise à jour tombe dans le rayon
+      // SHIP_PORT_ARRIVAL_RADIUS_NM du port.
+      await tx.unit.update({
+        where: { id: unitId },
+        data: { standingOrderActive: false, standingOrderKind: null },
+      });
+    }
+  });
 }
 
 /**
@@ -1525,6 +1629,60 @@ export async function publishTurn(turnId: string, nextTurn?: { weather: WeatherI
           where: { id: sub.id },
           data: { batteryChargePercent: newBattery, oxygenHoursRemaining: newOxygen },
         });
+      }
+
+      // Carburant des navires de surface (retour utilisateur 2026-08-15,
+      // chantier moteur) : décrémenté à partir de la distance RÉELLEMENT
+      // parcourue ce tour (même trajet que celui validé à la soumission,
+      // giration comprise), pas d'une simple estimation vitesse×temps — pour
+      // rester exact même si le trajet soumis est plus court que le budget
+      // disponible. Ravitaillement instantané à quai, même esprit que
+      // l'atterrissage des avions (voir applyAirPatrolLeg ci-dessus).
+      const fuelShips = await tx.unit.findMany({
+        where: {
+          scenarioId: turn.scenarioId,
+          status: { in: ["ACTIVE", "DAMAGED"] },
+          unitClass: { rangeNmAtCruiseSpeed: { not: null } },
+        },
+        select: {
+          id: true,
+          shipFuelPercent: true,
+          currentLat: true,
+          currentLng: true,
+          baseLat: true,
+          baseLng: true,
+          unitClass: { select: { rangeNmAtCruiseSpeed: true, maxSpeedKnots: true, category: true, name: true, turningRadiusM: true } },
+        },
+      });
+
+      for (const ship of fuelShips) {
+        const order = orderByUnitId.get(ship.id);
+        let fuelRemaining = ship.shipFuelPercent ?? 100;
+
+        if (order && order.waypoints.length > 0) {
+          const priorPos = currentPositions.get(ship.id) ?? { currentLat: ship.currentLat, currentLng: ship.currentLng };
+          const fullPath = [
+            { lat: priorPos.currentLat, lng: priorPos.currentLng },
+            ...order.waypoints.map((wp) => ({ lat: wp.lat, lng: wp.lng })),
+          ];
+          const turningRadiusNm = turningRadiusNmFor(ship.unitClass);
+          const usedNm = pathLengthNm(fullPath) + turnPenaltyNm(fullPath, turningRadiusNm);
+          const fuelUsedPercent = shipFuelPercentUsed({
+            usedNm,
+            speedKnots: order.speedKnots,
+            maxSpeedKnots: ship.unitClass.maxSpeedKnots,
+            rangeNmAtCruiseSpeed: ship.unitClass.rangeNmAtCruiseSpeed!,
+          });
+          fuelRemaining = Math.max(0, fuelRemaining - fuelUsedPercent);
+        }
+
+        const atPort =
+          ship.baseLat != null &&
+          ship.baseLng != null &&
+          distanceNm({ lat: ship.currentLat, lng: ship.currentLng }, { lat: ship.baseLat, lng: ship.baseLng }) < SHIP_PORT_ARRIVAL_RADIUS_NM;
+        if (atPort) fuelRemaining = 100;
+
+        await tx.unit.update({ where: { id: ship.id }, data: { shipFuelPercent: fuelRemaining } });
       }
 
       const pendingTransfers = await tx.unit.findMany({
