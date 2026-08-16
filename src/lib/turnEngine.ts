@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { buildTimedTrack, distanceNm, pathLengthNm, speedBudgetNm, bearingDeg, destinationPoint, type LatLng } from "@/lib/geo";
+import { buildTimedTrack, distanceNm, pathLengthNm, speedBudgetNm, turnPenaltyNm, bearingDeg, destinationPoint, type LatLng } from "@/lib/geo";
 import { effectiveSensorRangeNm, jitterWeather } from "@/lib/weather";
 import {
   resolveGunEngagement,
@@ -10,9 +10,25 @@ import {
   type CombatProfile,
   type DepthBand as CombatDepthBand,
 } from "@/lib/combat";
+import { classifySilhouette, DEFAULT_TURNING_RADIUS_M } from "@/lib/shipSilhouettes";
 import type { ArbiterStatus, SensorType, DepthBand, SignalChannel } from "@/generated/prisma/client";
 
 const NM_TO_M = 1852;
+
+/**
+ * Rayon de giration d'une classe, en nm (retour utilisateur 2026-08-15 —
+ * "giration qui pénalise réellement la vitesse", chantier moteur) : même
+ * résolution que `defaultTurningRadiusM` (tacticalEngine.ts), dupliquée ici
+ * en une ligne plutôt qu'importée — `tacticalEngine.ts` importe déjà
+ * `turnEngine.ts`, un import dans l'autre sens créerait une dépendance
+ * circulaire. `DEFAULT_TURNING_RADIUS_M`/`classifySilhouette` restent la
+ * source unique de vérité (shipSilhouettes.ts), seule la ligne de repli est
+ * dupliquée.
+ */
+function turningRadiusNmFor(unitClass: { category: string; name: string; turningRadiusM: number | null }): number {
+  const meters = unitClass.turningRadiusM ?? DEFAULT_TURNING_RADIUS_M[classifySilhouette(unitClass.category, unitClass.name)];
+  return meters / NM_TO_M;
+}
 /** Portée effective d'une passe d'attaque aux grenades ASM (livret : ASDIC ~2000m). */
 const ASDIC_ATTACK_RANGE_M = 2000;
 
@@ -118,6 +134,14 @@ export type OrderValidationResult = {
 /**
  * Valide qu'un trajet (position actuelle + waypoints) tient dans le budget de
  * distance de l'unité pour la durée du tour. Lève `OrderValidationError` sinon.
+ *
+ * `turningRadiusNm` (retour utilisateur 2026-08-15, chantier moteur —
+ * "giration qui pénalise réellement la vitesse") : la pénalité de virage
+ * (`turnPenaltyNm`, geo.ts) existait déjà côté combat TACTIQUE
+ * (tacticalEngine.ts) mais n'était jamais appliquée ici, à l'échelle
+ * STRATÉGIQUE — un pur oubli de branchement, pas une nouvelle mécanique.
+ * Optionnel (0 par défaut) pour ne rien casser des appelants qui ne la
+ * connaissent pas encore.
  */
 export function validateOrderPath(params: {
   currentPosition: LatLng;
@@ -125,8 +149,9 @@ export function validateOrderPath(params: {
   speedKnots: number;
   maxSpeedKnots: number;
   turnDurationMinutes: number;
+  turningRadiusNm?: number;
 }): OrderValidationResult {
-  const { currentPosition, waypoints, speedKnots, maxSpeedKnots, turnDurationMinutes } = params;
+  const { currentPosition, waypoints, speedKnots, maxSpeedKnots, turnDurationMinutes, turningRadiusNm = 0 } = params;
 
   if (speedKnots <= 0) throw new OrderValidationError("La vitesse doit être positive.");
   if (speedKnots > maxSpeedKnots) {
@@ -136,11 +161,12 @@ export function validateOrderPath(params: {
   }
 
   const budgetNm = speedBudgetNm(speedKnots, turnDurationMinutes);
-  const usedNm = pathLengthNm([currentPosition, ...waypoints]);
+  const fullPath = [currentPosition, ...waypoints];
+  const usedNm = pathLengthNm(fullPath) + turnPenaltyNm(fullPath, turningRadiusNm);
 
   if (usedNm > budgetNm * BUDGET_TOLERANCE) {
     throw new OrderValidationError(
-      `Trajet de ${usedNm.toFixed(1)}nm, budget disponible ${budgetNm.toFixed(1)}nm à ${speedKnots}nds.`
+      `Trajet de ${usedNm.toFixed(1)}nm (giration comprise), budget disponible ${budgetNm.toFixed(1)}nm à ${speedKnots}nds.`
     );
   }
 
@@ -192,6 +218,7 @@ export async function saveUnitOrder(params: {
     speedKnots,
     maxSpeedKnots: unit.unitClass.maxSpeedKnots,
     turnDurationMinutes: turn.durationMinutes,
+    turningRadiusNm: turningRadiusNmFor(unit.unitClass),
   });
 
   if (depthBand) {
@@ -714,7 +741,17 @@ async function applyRouteTransitLeg(turnId: string, turnDurationMinutes: number,
   }
 
   const maxSpeed = unit.speedCapKnots ?? unit.unitClass.maxSpeedKnots;
+  const turningRadiusNm = turningRadiusNmFor(unit.unitClass);
   let pos: LatLng = { lat: unit.currentLat, lng: unit.currentLng };
+  // Position avant `pos`, pour chiffrer le virage AU point `pos` quand une
+  // manche enchaîne plusieurs étapes de la route (retour utilisateur
+  // 2026-08-15 — giration réaliste, chantier moteur). `null` au premier
+  // passage : le changement de cap depuis le cap ACTUEL de l'unité vers la
+  // première étape n'est volontairement pas pénalisé ici (pas de point de
+  // référence propre avant le début de la route) — simplification assumée,
+  // seuls les virages ENTRE deux étapes consommées dans la même manche le
+  // sont.
+  let prevPos: LatLng | null = null;
   let cursor = route.cursorSequence;
   let remainingMinutes = turnDurationMinutes;
   let legSpeedKnots: number | null = null;
@@ -732,15 +769,24 @@ async function applyRouteTransitLeg(turnId: string, turnDurationMinutes: number,
       break;
     }
 
+    let turnMinutes = 0;
+    if (prevPos && speedKnots > 0) {
+      turnMinutes = (turnPenaltyNm([prevPos, pos, target], turningRadiusNm) / speedKnots) * 60;
+      if (turnMinutes > remainingMinutes) break; // pas même le temps d'amorcer le virage vers l'étape suivante cette manche-ci
+    }
+
     const distanceToTargetNm = distanceNm(pos, target);
     const timeNeededMinutes = speedKnots > 0 ? (distanceToTargetNm / speedKnots) * 60 : Infinity;
 
-    if (timeNeededMinutes <= remainingMinutes) {
+    if (timeNeededMinutes <= remainingMinutes - turnMinutes) {
+      remainingMinutes -= turnMinutes;
+      prevPos = pos;
       pos = { lat: target.lat, lng: target.lng };
       legPoints.push(pos);
       remainingMinutes -= timeNeededMinutes;
       cursor += 1;
     } else {
+      remainingMinutes -= turnMinutes;
       const partialBudgetNm = speedKnots * (remainingMinutes / 60);
       pos = destinationPoint(pos, bearingDeg(pos, target), partialBudgetNm);
       legPoints.push(pos);

@@ -12,7 +12,7 @@ import {
   multiLineFeatureCollectionColored,
   pointsFeatureCollection,
 } from "@/lib/mapData";
-import { clampPathToBudget, pathLengthNm, speedBudgetNm, distanceNm, filletPath, type LatLng } from "@/lib/geo";
+import { clampPathToBudget, pathLengthNm, speedBudgetNm, turnPenaltyNm, distanceNm, filletPath, type LatLng } from "@/lib/geo";
 import { classifySilhouette, DEFAULT_LENGTH_METERS } from "@/lib/shipSilhouettes";
 import {
   submitOrderAction,
@@ -308,7 +308,12 @@ export function OrdersClient(props: {
       const start = { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
       const previous = selectedUnitDraft.waypoints[selectedUnitDraft.waypoints.length - 1] ?? start;
       const budget = speedBudgetNm(selectedUnitDraft.speedKnots, turnDurationMinutes);
-      const clamped = clampPathToBudget([start, ...selectedUnitDraft.waypoints, pos], budget);
+      // Réduit le budget affiché de la pénalité de giration déjà engagée (retour
+      // utilisateur 2026-08-15) — juste une estimation client, le serveur reste
+      // la référence exacte (validateOrderPath, turnEngine.ts) ; sans ça un
+      // joueur pourrait tracer un trajet accepté ici et refusé à l'enregistrement.
+      const turnNm = turnPenaltyNm([start, ...selectedUnitDraft.waypoints], selectedUnit.turningRadiusM / NM_TO_M);
+      const clamped = clampPathToBudget([start, ...selectedUnitDraft.waypoints, pos], Math.max(0, budget - turnNm));
       const newPoint = clamped[clamped.length - 1];
       if (gameMapRef.current && !gameMapRef.current.isWaterSegment(previous, newPoint)) {
         setError("Trajet impossible : il traverserait la terre.");
@@ -325,7 +330,10 @@ export function OrdersClient(props: {
     if (!selectedFleet || !selectedFleetDraft) return;
     const previous = selectedFleetDraft.waypoints[selectedFleetDraft.waypoints.length - 1] ?? selectedFleet.centroid;
     const budget = speedBudgetNm(selectedFleetDraft.speedKnots, turnDurationMinutes);
-    const clamped = clampPathToBudget([selectedFleet.centroid, ...selectedFleetDraft.waypoints, pos], budget);
+    // Le rayon de giration le plus large de la flotte (cohérent avec la ligne 743 : la flotte entière est bridée par son navire le moins maniable).
+    const fleetTurnRadiusNm = Math.max(...selectedFleet.units.map((u) => u.turningRadiusM)) / NM_TO_M;
+    const turnNm = turnPenaltyNm([selectedFleet.centroid, ...selectedFleetDraft.waypoints], fleetTurnRadiusNm);
+    const clamped = clampPathToBudget([selectedFleet.centroid, ...selectedFleetDraft.waypoints, pos], Math.max(0, budget - turnNm));
     const newPoint = clamped[clamped.length - 1];
     if (gameMapRef.current && !gameMapRef.current.isWaterSegment(previous, newPoint)) {
       setError("Trajet impossible : il traverserait la terre.");
@@ -340,7 +348,8 @@ export function OrdersClient(props: {
     setUnitDrafts((prev) => {
       const budget = speedBudgetNm(speedKnots, turnDurationMinutes);
       const start = { lat: selectedUnit.currentLat, lng: selectedUnit.currentLng };
-      const clamped = clampPathToBudget([start, ...prev[selectedUnit.id].waypoints], budget);
+      const turnNm = turnPenaltyNm([start, ...prev[selectedUnit.id].waypoints], selectedUnit.turningRadiusM / NM_TO_M);
+      const clamped = clampPathToBudget([start, ...prev[selectedUnit.id].waypoints], Math.max(0, budget - turnNm));
       return { ...prev, [selectedUnit.id]: { ...prev[selectedUnit.id], speedKnots, waypoints: clamped.slice(1), saved: false } };
     });
   }
@@ -349,7 +358,9 @@ export function OrdersClient(props: {
     if (!selectedFleet) return;
     setFleetDrafts((prev) => {
       const budget = speedBudgetNm(speedKnots, turnDurationMinutes);
-      const clamped = clampPathToBudget([selectedFleet.centroid, ...prev[selectedFleet.fleetId].waypoints], budget);
+      const fleetTurnRadiusNm = Math.max(...selectedFleet.units.map((u) => u.turningRadiusM)) / NM_TO_M;
+      const turnNm = turnPenaltyNm([selectedFleet.centroid, ...prev[selectedFleet.fleetId].waypoints], fleetTurnRadiusNm);
+      const clamped = clampPathToBudget([selectedFleet.centroid, ...prev[selectedFleet.fleetId].waypoints], Math.max(0, budget - turnNm));
       return { ...prev, [selectedFleet.fleetId]: { ...prev[selectedFleet.fleetId], speedKnots, waypoints: clamped.slice(1) } };
     });
   }
